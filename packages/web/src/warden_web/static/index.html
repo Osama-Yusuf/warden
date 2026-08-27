@@ -174,19 +174,20 @@ input[type="password"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe 
 /* ── Layout ── */
 .main { display: flex; flex: 1; overflow: hidden; }
 .sidebar {
-  width: 236px; min-width: 236px;
+  width: 240px; min-width: 240px;
   border-right: 1px solid var(--border);
   overflow-y: auto;
-  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  background: color-mix(in srgb, var(--surface) 45%, transparent);
   display: flex; flex-direction: column;
 }
-.qf-wrap { padding: 12px 12px 4px; position: relative; }
+.qf-wrap { padding: 12px 12px 6px; position: relative; }
 .qf {
-  display: flex; align-items: center; gap: 7px;
-  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 0 9px; height: 30px; transition: border-color 0.15s;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+  padding: 0 11px; height: 34px;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.qf:focus-within { border-color: var(--accent); }
+.qf:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .qf svg { width: 13px; height: 13px; color: var(--text-muted); flex-shrink: 0; }
 .qf input {
   flex: 1; min-width: 0; background: none; border: none; outline: none;
@@ -209,37 +210,61 @@ input[type="password"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe 
 .qf-hit:hover, .qf-hit.sel { background: var(--accent-soft); }
 .qf-hit svg { width: 12px; height: 12px; color: var(--text-muted); flex-shrink: 0; }
 .qf-hit .tag { margin-left: auto; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
-.nav-sections { flex: 1; padding: 6px 0 12px; }
+.nav-sections { flex: 1; padding: 8px 10px 14px; }
 .group-label {
-  display: flex; align-items: center; gap: 6px; width: 100%;
-  font-family: var(--mono-font); font-size: 9.5px; font-weight: 500;
-  text-transform: uppercase; letter-spacing: 0.14em; color: var(--text-muted);
-  padding: 13px 16px 5px; background: none; border: none; cursor: pointer;
-  text-align: left; transition: color 0.12s;
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  font-size: 10.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted);
+  margin-top: 4px; padding: 8px 10px; border-radius: 7px;
+  background: none; border: none; cursor: pointer; text-align: left;
+  transition: color 0.15s, background 0.15s;
 }
-.group-label:hover { color: var(--text); }
-.group-label .chev { width: 11px; height: 11px; transition: transform 0.15s; transform: rotate(90deg); }
+.group-label:first-child { margin-top: 0; }
+.group-label:hover { color: var(--text); background: color-mix(in srgb, var(--surface-hover) 60%, transparent); }
+.group-label .chev {
+  width: 12px; height: 12px; color: var(--text-muted);
+  transition: transform 0.22s cubic-bezier(.4,0,.2,1);
+  transform: rotate(90deg);
+}
+.group-label:hover .chev { color: var(--text); }
 .group-label.collapsed .chev { transform: rotate(0deg); }
+.group-label .g-count {
+  margin-left: auto; font-size: 9.5px; font-weight: 600; letter-spacing: 0;
+  color: var(--text-muted); opacity: 0; transition: opacity 0.15s;
+}
+.group-label.collapsed .g-count { opacity: 0.7; }
+/* Smooth height collapse using animatable grid rows */
+.nav-group {
+  display: grid; grid-template-rows: 1fr;
+  transition: grid-template-rows 0.26s cubic-bezier(.4,0,.2,1);
+}
+.nav-group.collapsed { grid-template-rows: 0fr; }
+.nav-group-inner { overflow: hidden; min-height: 0; padding: 2px 0; }
+.nav-group.collapsed .nav-group-inner { padding: 0; }
 .nav-item {
-  display: flex; align-items: center; gap: 9px;
-  width: calc(100% - 12px); margin: 1px 6px; padding: 6px 10px;
-  border: none; border-radius: 6px; background: transparent;
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; margin: 1px 0; padding: 7px 10px;
+  border: none; border-radius: 8px; background: transparent;
   color: var(--text); font-size: 13px; cursor: pointer;
   font-family: inherit; text-align: left; position: relative;
-  transition: background 0.12s, color 0.12s;
+  transition: background 0.14s ease, color 0.14s ease, transform 0.14s ease;
 }
-.nav-item .ni { width: 15px; height: 15px; color: var(--text-muted); flex-shrink: 0; transition: color 0.12s; }
+.nav-item .ni { width: 16px; height: 16px; color: var(--text-muted); flex-shrink: 0; transition: color 0.14s, transform 0.14s; }
+.nav-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-item:hover:not(:disabled) { background: var(--surface-hover); }
-.nav-item:hover:not(:disabled) .ni { color: var(--text); }
-.nav-item.active { background: var(--accent-soft); color: var(--text-strong); }
+.nav-item:hover:not(:disabled) .ni { color: var(--accent); transform: scale(1.08); }
+.nav-item.active {
+  background: linear-gradient(90deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 40%, transparent));
+  color: var(--text-strong); font-weight: 500;
+}
 .nav-item.active::before {
-  content: ''; position: absolute; left: -6px; top: 5px; bottom: 5px;
-  width: 2.5px; border-radius: 2px; background: var(--accent);
+  content: ''; position: absolute; left: 0; top: 6px; bottom: 6px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--accent);
 }
 .nav-item.active .ni { color: var(--accent); }
 .nav-item.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
 .nav-item.danger:hover:not(:disabled) .ni { color: var(--danger); }
-.nav-item:disabled { opacity: 0.32; cursor: not-allowed; }
+.nav-item:disabled { opacity: 0.3; cursor: not-allowed; }
 .nav-badge {
   margin-left: auto; font-family: var(--mono-font); font-size: 10px;
   background: var(--surface-hover); border: 1px solid var(--border);
@@ -247,9 +272,9 @@ input[type="password"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe 
 }
 .nav-item.active .nav-badge { border-color: transparent; background: var(--accent-soft); color: var(--accent); }
 .sidebar-foot {
-  padding: 10px 14px; border-top: 1px solid var(--border);
+  padding: 11px 16px; border-top: 1px solid var(--border);
   font-family: var(--mono-font); font-size: 10.5px; color: var(--text-muted);
-  display: flex; align-items: center; gap: 7px; line-height: 1.5;
+  display: flex; align-items: center; gap: 8px; line-height: 1.5;
 }
 .sidebar-foot svg { width: 12px; height: 12px; flex-shrink: 0; }
 .content { flex: 1; overflow-y: auto; padding: 22px 26px; }
@@ -844,11 +869,16 @@ function groupCollapsed(label) {
   if (label in st) return st[label];
   return true;
 }
-function toggleGroup(label) {
+function toggleGroup(gi) {
+  const header = document.querySelector(`.group-label[data-gi="${gi}"]`);
+  const group = document.querySelector(`.nav-group[data-gi="${gi}"]`);
+  if (!header || !group) return;
+  const willCollapse = !group.classList.contains('collapsed');
+  header.classList.toggle('collapsed', willCollapse);
+  group.classList.toggle('collapsed', willCollapse);
   const st = { ...(prefs.navCollapsed || {}) };
-  st[label] = !groupCollapsed(label);
+  st[header.dataset.g] = willCollapse;
   savePrefs({ navCollapsed: st });
-  renderNav();
 }
 
 const VIEWS = {
@@ -872,22 +902,24 @@ const VIEWS = {
 function renderNav() {
   const box = document.getElementById('navSections');
   let html = '';
-  for (const group of navModel()) {
+  navModel().forEach((group, gi) => {
     const hasActive = group.items.some(i => i.id === currentView);
     const collapsed = groupCollapsed(group.label) && !hasActive;
-    html += `<button class="group-label${collapsed ? ' collapsed' : ''}" data-g="${esc(group.label)}" onclick="toggleGroup(this.dataset.g)">
-      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
-      <span>${esc(group.label)}</span></button>`;
-    if (collapsed) continue;
+    html += `<button class="group-label${collapsed ? ' collapsed' : ''}" data-gi="${gi}" data-g="${esc(group.label)}" onclick="toggleGroup(${gi})">
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      <span>${esc(group.label)}</span><span class="g-count">${group.items.length}</span></button>`;
+    html += `<div class="nav-group${collapsed ? ' collapsed' : ''}" data-gi="${gi}"><div class="nav-group-inner">`;
     for (const item of group.items) {
       const roLocked = prefs.readOnly && item.mutating;
       const dis = ((connected || item.always) && !roLocked) ? '' : 'disabled';
       const badge = item.badge ? `<span class="nav-badge" id="badge-${item.badge}" style="display:none"></span>` : '';
-      const title = roLocked ? 'title="Disabled while read-only mode is on"' : '';
-      html += `<button id="nav-${item.id}" class="nav-item${item.danger ? ' danger' : ''}" ${dis} ${title}
+      const tip = roLocked ? 'Disabled while read-only mode is on'
+        : dis ? 'Connect to use this' : esc(item.label);
+      html += `<button id="nav-${item.id}" class="nav-item${item.danger ? ' danger' : ''}" ${dis} title="${tip}"
         onclick="navigate('${item.id}')">${item.icon}<span>${esc(item.label)}</span>${roLocked ? '<span class="nav-badge">🛡</span>' : badge}</button>`;
     }
-  }
+    html += `</div></div>`;
+  });
   box.innerHTML = html;
   markActive(currentView);
   renderBadges();
