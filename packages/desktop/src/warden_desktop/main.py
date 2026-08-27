@@ -69,9 +69,9 @@ def _run():
     webview.create_window(
         "warden",
         f"http://127.0.0.1:{port}",
-        width=1320,
-        height=860,
-        min_size=(940, 620),
+        width=1440,
+        height=940,
+        min_size=(920, 600),
     )
     # pywebview defaults to private mode, which wipes localStorage (saved
     # credentials, envs, audit results) on every launch. Persist it instead.
