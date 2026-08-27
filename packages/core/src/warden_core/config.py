@@ -7,6 +7,8 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+from .util import engine_family
+
 # ---------------------------------------------------------------------------
 # .env loading. Searched in cwd, then upward to the git root, then ~/.warden.env.
 # Existing environment variables are never overwritten.
@@ -124,13 +126,17 @@ def load_profile_environments():
         return {}
     envs = {}
     for r in rows:
-        cfg = {"host": r["host"], "port": r["port"], "tls": bool(r["tls"])}
-        if r["auth_db"]:
-            cfg["auth_db"] = r["auth_db"]
-        if r["default_db"]:
-            cfg["default_db"] = r["default_db"]
-        if r["master_user"]:
-            cfg["master_user"] = r["master_user"]
+        if engine_family(r["engine"]) == "sqlite":
+            # sqlite profiles keep the file path in the host column
+            cfg = {"path": r["host"]}
+        else:
+            cfg = {"host": r["host"], "port": r["port"], "tls": bool(r["tls"])}
+            if r["auth_db"]:
+                cfg["auth_db"] = r["auth_db"]
+            if r["default_db"]:
+                cfg["default_db"] = r["default_db"]
+            if r["master_user"]:
+                cfg["master_user"] = r["master_user"]
         envs.setdefault(r["name"], {})[r["engine"]] = cfg
     return envs
 
@@ -144,7 +150,7 @@ def save_profile(name, engine, cfg):
              host=excluded.host, port=excluded.port, auth_db=excluded.auth_db,
              default_db=excluded.default_db, master_user=excluded.master_user,
              tls=excluded.tls, updated_at=excluded.updated_at""",
-        (name, engine, cfg["host"], int(cfg["port"]), cfg.get("auth_db"),
+        (name, engine, cfg.get("host") or cfg.get("path"), int(cfg.get("port") or 0), cfg.get("auth_db"),
          cfg.get("default_db"), cfg.get("master_user"), int(bool(cfg.get("tls"))),
          datetime.now().isoformat(timespec="seconds")))
     con.commit()
@@ -209,6 +215,7 @@ def _augment_path():
         "/opt/homebrew/bin", "/opt/homebrew/sbin",
         "/usr/local/bin", "/usr/local/sbin",
         "/opt/homebrew/opt/libpq/bin", "/usr/local/opt/libpq/bin",
+        "/opt/homebrew/opt/mysql-client/bin", "/usr/local/opt/mysql-client/bin",
         str(Path.home() / ".local" / "bin"),
     ]
     parts = os.environ.get("PATH", "").split(os.pathsep)

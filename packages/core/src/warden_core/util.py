@@ -80,3 +80,16 @@ def run_cmd(args, timeout=30):
 
 def check_tool(name):
     return shutil.which(name) is not None
+
+
+def engine_family(engine):
+    """Which client family an engine key belongs to. Engine keys are free-form
+    (mysql, mariadb, aurora-mysql, sqlite, aurora, citus...), so match loosely."""
+    e = (engine or "").lower()
+    if e.startswith("document") or "mongo" in e:
+        return "documentdb"
+    if "mysql" in e or "maria" in e:
+        return "mysql"
+    if "sqlite" in e:
+        return "sqlite"
+    return "postgresql"

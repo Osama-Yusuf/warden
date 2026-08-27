@@ -13,10 +13,13 @@ from .config import (
     save_profile,
 )
 from .docdb import docdb_args, docdb_eval, docdb_exec
+from .mysql import my_csv, my_exec, my_query
+from .sqlitedb import sq_csv, sq_exec, sq_query
 from .pg import pg_csv, pg_exec, pg_query
 from .util import (
     SAFE_IDENT_RE,
     check_tool,
+    engine_family,
     format_size,
     generate_password,
     js_string,

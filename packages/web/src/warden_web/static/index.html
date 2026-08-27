@@ -533,6 +533,14 @@ function plural(n, word, pluralForm) {
   return `${n} ${n === 1 ? word : (pluralForm || word + 's')}`;
 }
 
+function engineFamily(e) {
+  e = (e || '').toLowerCase();
+  if (e.startsWith('document') || e.includes('mongo')) return 'documentdb';
+  if (e.includes('mysql') || e.includes('maria')) return 'mysql';
+  if (e.includes('sqlite')) return 'sqlite';
+  return 'postgresql';
+}
+
 function fmtSize(bytes) {
   if (bytes == null || isNaN(bytes)) return '—';
   let v = Number(bytes);
@@ -612,6 +620,13 @@ async function loadCredsForTarget() {
   const userInput = document.getElementById('adminUser');
   const passInput = document.getElementById('adminPass');
   if (!userInput || !passInput) return;
+  const sqliteFam = engineFamily(currentEngine) === 'sqlite';
+  userInput.disabled = sqliteFam;
+  passInput.disabled = sqliteFam;
+  document.getElementById('rememberChk').disabled = sqliteFam;
+  const kb = document.getElementById('keychainBtn');
+  if (kb) kb.style.display = (config.tools?.keychain && !sqliteFam) ? '' : 'none';
+  if (sqliteFam) { userInput.value = ''; passInput.value = ''; return; }
   const saved = targetCreds();
   userInput.value = saved?.user || prefs.adminUser || config.defaults?.admin_user || '';
   document.getElementById('rememberChk').checked = saved ? !!saved.remember : !!prefs.remember;
@@ -755,7 +770,21 @@ function updateEngines(restoring = false) {
 
 // ── Sidebar: data-driven nav ──
 function navModel() {
-  const isDocdb = currentEngine.startsWith('document');
+  const fam = engineFamily(currentEngine);
+  const isDocdb = fam === 'documentdb';
+  if (fam === 'sqlite') {
+    // SQLite has no accounts, so no user/permission/audit sections
+    return [
+      { label: 'Query', items: [{ id: 'query', icon: ICONS.term, label: 'Run query' }] },
+      { label: 'Explore', items: [
+        { id: 'databases', icon: ICONS.db, label: 'Database', badge: 'databases' },
+        { id: 'collections', icon: ICONS.grid, label: 'Tables' },
+        { id: 'health', icon: ICONS.pulse, label: 'Health' },
+      ]},
+      { label: 'Logs', items: [{ id: 'audit', icon: ICONS.scroll, label: 'Audit log', always: true }] },
+      { label: 'Settings', items: [{ id: 'envs', icon: ICONS.sliders, label: 'Environments', always: true }] },
+    ];
+  }
   return [
     { label: 'Users', items: [
       { id: 'users', icon: ICONS.users, label: 'List users', badge: 'users' },
@@ -766,7 +795,7 @@ function navModel() {
     { label: 'Permissions', items: [
       { id: 'grant', icon: ICONS.shield, label: isDocdb ? 'Grant roles' : 'Grant privileges', mutating: true },
       { id: 'revoke', icon: ICONS.ban, label: isDocdb ? 'Revoke roles' : 'Revoke privileges', mutating: true },
-      ...(!isDocdb ? [{ id: 'toggle', icon: ICONS.lock, label: 'Enable / disable', mutating: true }] : []),
+      ...(!isDocdb ? [{ id: 'toggle', icon: ICONS.lock, label: fam === 'mysql' ? 'Lock / unlock' : 'Enable / disable', mutating: true }] : []),
     ]},
     { label: 'Query', items: [
       { id: 'query', icon: ICONS.term, label: 'Run query' },
@@ -1056,7 +1085,8 @@ function doDisconnect() {
 async function testConnection() {
   const u = document.getElementById('adminUser').value.trim();
   const p = document.getElementById('adminPass').value.trim();
-  if (!u || !p) { toast('Enter admin username and password', 'error'); return; }
+  const sqliteFam = engineFamily(currentEngine) === 'sqlite';
+  if (!sqliteFam && (!u || !p)) { toast('Enter admin username and password', 'error'); return; }
   const dot = document.getElementById('connDot');
   const txt = document.getElementById('connText');
   dot.className = 'conn-dot'; txt.textContent = 'connecting…';
@@ -1112,8 +1142,7 @@ function renderWelcome() {
     <div class="chips">
       <div class="chip"><span class="k">environment</span><span class="v">${esc(env)}</span></div>
       <div class="chip"><span class="k">engine</span><span class="v">${esc(currentEngine.replace(/_/g, ' ') || '—')}</span></div>
-      ${toolChip('mongosh', tools.mongosh)}
-      ${toolChip('psql', tools.psql)}
+      ${Object.entries(tools).filter(([k]) => k !== 'keychain').map(([k, ok]) => toolChip(k, ok)).join('')}
     </div>
   </div>`);
 }
@@ -1160,7 +1189,7 @@ async function viewListUsers() {
         <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-user="${esc(u.user)}" onclick="markActive('userinfo');viewUserInfoFor(this.dataset.user)">Manage</button></td>
       </tr>`;
     }
-    setContent(`<div class="card"><h2>${ICONS.users} PostgreSQL Users</h2>
+    setContent(`<div class="card"><h2>${ICONS.users} ${engineFamily(currentEngine) === 'mysql' ? 'MySQL Accounts' : 'PostgreSQL Users'}</h2>
       <p class="card-meta">${res.users.length} roles · click Manage to grant, revoke, reset or drop</p>
       <div class="table-wrap"><table>
         <thead><tr><th>Username</th><th>Status</th><th>Flags</th><th>Expires</th><th></th></tr></thead>
@@ -1185,6 +1214,30 @@ async function viewUserInfoFor(username) {
   const isDocdb = currentEngine.startsWith('document');
   const uAttr = esc(res.user);
   let html = `<div class="card"><h2>${ICONS.users} User: <span class="mono" style="font-size:14px">${uAttr}</span></h2>`;
+  if (res.engine_family === 'mysql') {
+    const status = res.can_login ? '<span class="pill pill-ok">active</span>' : '<span class="pill pill-danger">locked</span>';
+    html += `<p style="margin-bottom:12px">${status}</p>`;
+    html += `<div class="table-wrap"><table><thead><tr><th>Grant</th></tr></thead><tbody>${
+      (res.grant_statements || []).map(g => `<tr><td class="mono" style="font-size:11.5px">${esc(g)}</td></tr>`).join('')
+      || '<tr><td style="color:var(--text-muted)">No grants</td></tr>'}</tbody></table></div>`;
+    const privOpts = (config.mysql_privileges || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    html += `<h2 style="margin-top:20px">${ICONS.shield} Grant a Privilege</h2>
+      <div class="form-row" style="margin-bottom:0">
+        <div class="form-field"><label>Privilege</label><select id="uiGrantPriv">${privOpts}</select></div>
+        <div class="form-field"><label>Database (* = all)</label><input id="uiGrantDb" list="dbList" placeholder="type to search, or *"></div>
+        <button class="btn btn-success" data-user="${uAttr}" onclick="grantPgPrivDirect(this.dataset.user)">Grant</button>
+      </div>`;
+    const lockBtn = res.can_login
+      ? `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, false)">Lock account</button>`
+      : `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, true)">Unlock account</button>`;
+    html += `<div class="user-toolbar">
+      <button class="btn btn-primary" data-user="${uAttr}" onclick="markActive('reset');viewResetPassword(this.dataset.user)">Reset password</button>
+      ${lockBtn}
+      <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">Drop user</button>
+    </div></div>`;
+    setContent(html);
+    return;
+  }
   if (isDocdb) {
     html += `<p class="card-meta"><strong>Auth DB:</strong> ${esc(res.db)} &nbsp;·&nbsp; <strong>ID:</strong> <span class="mono">${esc(res.userId)}</span></p>`;
     let rRows = '';
@@ -1281,7 +1334,7 @@ function grantRoleDirect(username) {
 function grantPgPrivDirect(username) {
   const privilege = document.getElementById('uiGrantPriv').value;
   const database = document.getElementById('uiGrantDb').value.trim();
-  const schema = document.getElementById('uiGrantSchema').value.trim() || 'public';
+  const schema = document.getElementById('uiGrantSchema')?.value.trim() || 'public';
   if (!database) { toast('Database required', 'error'); return; }
   showModal('Confirm Grant', `<p>Grant <strong>${esc(privilege)} on ${esc(database)}</strong> to <strong>${esc(username)}</strong>?</p>`, [
     { label: 'Cancel', cls: 'btn-ghost' },
@@ -1339,9 +1392,13 @@ function confirmDropUser(username) {
 
 function viewCreateUser() {
   if (!requireConnection()) return;
-  const isDocdb = currentEngine.startsWith('document');
+  const fam = engineFamily(currentEngine);
+  const isDocdb = fam === 'documentdb';
+  const userPh = fam === 'mysql' ? 'name@host (host defaults to %)' : 'username';
   let extra = '';
-  if (isDocdb) {
+  if (fam === 'mysql') {
+    extra = '';
+  } else if (isDocdb) {
     const roleOpts = (config.docdb_roles || []).map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
     extra = `
       <div class="form-field"><label>Initial role</label><select id="createRole">${roleOpts}</select></div>
@@ -1351,7 +1408,7 @@ function viewCreateUser() {
   }
   setContent(`<div class="card"><h2>${ICONS.plus} Create User</h2>
     <div class="form-row">
-      <div class="form-field"><label>Username</label><input id="createUser" placeholder="username"></div>
+      <div class="form-field"><label>Username</label><input id="createUser" placeholder="${esc(userPh)}"></div>
       <div class="form-field"><label>Password (blank = generate)</label><input id="createPass" type="password" placeholder="auto-generate"></div>
       ${extra}
     </div>
@@ -1364,9 +1421,12 @@ async function doCreateUser() {
   const username = document.getElementById('createUser').value;
   if (!username) { toast('Username required', 'error'); return; }
   const password = document.getElementById('createPass')?.value || '';
-  const isDocdb = currentEngine.startsWith('document');
+  const fam = engineFamily(currentEngine);
+  const isDocdb = fam === 'documentdb';
   const extra = {};
-  if (isDocdb) {
+  if (fam === 'mysql') {
+    // nothing extra: grants come afterwards
+  } else if (isDocdb) {
     const role = document.getElementById('createRole').value;
     const db = document.getElementById('createRoleDb').value.trim();
     if (!db) { toast('Database required for the initial role', 'error'); return; }
@@ -1428,9 +1488,16 @@ async function doResetPassword() {
 
 function viewGrant(prefill = '') {
   if (!requireConnection()) return;
-  const isDocdb = currentEngine.startsWith('document');
+  const fam = engineFamily(currentEngine);
+  const isDocdb = fam === 'documentdb';
   let fields = '';
-  if (isDocdb) {
+  if (fam === 'mysql') {
+    const opts = (config.mysql_privileges || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    fields = `
+      <div class="form-field"><label>Privilege</label><select id="grantPriv">${opts}</select></div>
+      <div class="form-field"><label>Database (* = all)</label><input id="grantDb" list="dbList" placeholder="type to search, or *"></div>
+    `;
+  } else if (isDocdb) {
     const opts = (config.docdb_roles || []).map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
     fields = `
       <div class="form-field"><label>Role</label><select id="grantRole">${opts}</select></div>
@@ -1457,9 +1524,13 @@ function viewGrant(prefill = '') {
 async function doGrant() {
   const username = document.getElementById('grantUser').value;
   if (!username) { toast('Username required', 'error'); return; }
-  const isDocdb = currentEngine.startsWith('document');
+  const fam = engineFamily(currentEngine);
+  const isDocdb = fam === 'documentdb';
   const extra = {};
-  if (isDocdb) {
+  if (fam === 'mysql') {
+    extra.privilege = document.getElementById('grantPriv').value;
+    extra.database = document.getElementById('grantDb').value.trim() || '*';
+  } else if (isDocdb) {
     extra.roles = [{ role: document.getElementById('grantRole').value, db: document.getElementById('grantDb').value }];
   } else {
     extra.privilege = document.getElementById('grantPriv').value;
@@ -1479,9 +1550,16 @@ async function doGrant() {
 
 function viewRevoke(prefill = '') {
   if (!requireConnection()) return;
-  const isDocdb = currentEngine.startsWith('document');
+  const fam = engineFamily(currentEngine);
+  const isDocdb = fam === 'documentdb';
   let fields = '';
-  if (isDocdb) {
+  if (fam === 'mysql') {
+    const opts = (config.mysql_privileges || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    fields = `
+      <div class="form-field"><label>Privilege</label><select id="revokePriv">${opts}</select></div>
+      <div class="form-field"><label>Database (* = all)</label><input id="revokeDb" list="dbList" placeholder="type to search, or *"></div>
+    `;
+  } else if (isDocdb) {
     const opts = (config.docdb_roles || []).map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
     fields = `
       <div class="form-field"><label>Role</label><select id="revokeRole">${opts}</select></div>
@@ -1508,9 +1586,13 @@ function viewRevoke(prefill = '') {
 async function doRevoke() {
   const username = document.getElementById('revokeUser').value;
   if (!username) { toast('Username required', 'error'); return; }
-  const isDocdb = currentEngine.startsWith('document');
+  const fam = engineFamily(currentEngine);
+  const isDocdb = fam === 'documentdb';
   const extra = {};
-  if (isDocdb) {
+  if (fam === 'mysql') {
+    extra.privilege = document.getElementById('revokePriv').value;
+    extra.database = document.getElementById('revokeDb').value.trim() || '*';
+  } else if (isDocdb) {
     extra.roles = [{ role: document.getElementById('revokeRole').value, db: document.getElementById('revokeDb').value }];
   } else {
     extra.privilege = document.getElementById('revokePriv').value;
@@ -1530,13 +1612,14 @@ async function doRevoke() {
 
 function viewToggleLogin() {
   if (!requireConnection()) return;
-  setContent(`<div class="card"><h2>${ICONS.lock} Enable / Disable User Login</h2>
+  const my = engineFamily(currentEngine) === 'mysql';
+  setContent(`<div class="card"><h2>${ICONS.lock} ${my ? 'Lock / Unlock Account' : 'Enable / Disable User Login'}</h2>
     <div class="form-row">
       <div class="form-field"><label>Username</label><input id="toggleUser" list="userList" placeholder="type to search users…"></div>
     </div>
     <div style="display:flex; gap:8px; margin-top:4px">
-      <button class="btn btn-success" onclick="doToggleLogin(true)">Enable Login</button>
-      <button class="btn btn-danger" onclick="doToggleLogin(false)">Disable Login</button>
+      <button class="btn btn-success" onclick="doToggleLogin(true)">${my ? 'Unlock' : 'Enable Login'}</button>
+      <button class="btn btn-danger" onclick="doToggleLogin(false)">${my ? 'Lock' : 'Disable Login'}</button>
     </div>
   </div>`);
 }
@@ -1745,7 +1828,8 @@ const DANGER_BADGE = {
 
 function viewQuery() {
   if (!requireConnection()) return;
-  const isDocdb = currentEngine.startsWith('document');
+  const fam = engineFamily(currentEngine);
+  const isDocdb = fam === 'documentdb';
   const ph = isDocdb
     ? 'db.<collection>.find({ <field>: <value> }).limit(5)'
     : 'SELECT <columns> FROM <table> WHERE <condition> LIMIT 10;';
@@ -1753,7 +1837,7 @@ function viewQuery() {
     <p class="card-meta">Runs as your admin user on <strong>${esc(creds().env)} / ${esc(currentEngine.replace(/_/g, ' '))}</strong>.
       The plain-english preview updates as you type. Read it before running. ⌘⏎ to run.</p>
     <div class="form-row" style="margin-bottom:10px">
-      <div class="form-field"><label>Database</label><input id="qDb" list="dbList" placeholder="${isDocdb ? 'admin (default)' : 'default database'}"></div>
+      <div class="form-field"${fam === 'sqlite' ? ' style="display:none"' : ''}><label>Database</label><input id="qDb" list="dbList" placeholder="${isDocdb ? 'admin (default)' : 'default database'}"></div>
       <div class="form-field"><label>Snippets</label><select id="qSnippets" onchange="applySnippet()">
         <option value="">insert a ready-made query…</option>
         ${querySnippets().map((s, i) => `<option value="${i}">${esc(s.label)}</option>`).join('')}
@@ -1784,7 +1868,26 @@ function viewQuery() {
 }
 
 function querySnippets() {
-  if (currentEngine.startsWith('document')) {
+  const fam = engineFamily(currentEngine);
+  if (fam === 'mysql') {
+    return [
+      { label: 'Latest 10 rows', q: 'SELECT * FROM <table> ORDER BY <id_column> DESC LIMIT 10;' },
+      { label: 'Row count (fast estimate)', q: "SELECT table_rows FROM information_schema.tables WHERE table_name = '<table>';" },
+      { label: 'Running queries (longest first)', q: "SELECT id, user, time, state, LEFT(info, 100) AS query FROM information_schema.processlist WHERE command <> 'Sleep' ORDER BY time DESC;" },
+      { label: 'Biggest tables', q: "SELECT table_schema, table_name, ROUND((data_length + index_length) / 1048576, 1) AS size_mb FROM information_schema.tables WHERE table_schema NOT IN ('information_schema','performance_schema','sys') ORDER BY (data_length + index_length) DESC LIMIT 20;" },
+      { label: 'Kill a query by id', q: 'KILL <id>;' },
+    ];
+  }
+  if (fam === 'sqlite') {
+    return [
+      { label: 'Latest 10 rows', q: 'SELECT * FROM <table> ORDER BY rowid DESC LIMIT 10;' },
+      { label: 'Row count', q: 'SELECT COUNT(*) FROM <table>;' },
+      { label: 'Table columns', q: "PRAGMA table_info(<table>);" },
+      { label: 'All indexes', q: "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index';" },
+      { label: 'Integrity check', q: 'PRAGMA integrity_check;' },
+    ];
+  }
+  if (fam === 'documentdb') {
     return [
       { label: 'Find by _id', q: 'db.<collection>.find({ _id: ObjectId("<id>") })' },
       { label: 'Latest 10 documents', q: 'db.<collection>.find({}).sort({ _id: -1 }).limit(10)' },
@@ -1921,6 +2024,7 @@ function qContextCheck() {
     if (!effDb) effDb = 'admin';
   } else {
     target.coll = extractSqlTable(txt);
+    if (engineFamily(currentEngine) === 'sqlite' && !effDb) effDb = cachedDbs[0] || '';
   }
 
   // does the database exist on this cluster?
@@ -2508,10 +2612,12 @@ function viewEnvs() {
     <div class="form-row">
       <div class="form-field"><label>Name</label><input id="ceName" placeholder="name"></div>
       <div class="form-field"><label>Engine</label><select id="ceEngine" onchange="ceEngineChanged()">
-        <option value="documentdb">documentdb</option><option value="postgresql">postgresql</option></select></div>
-      <div class="form-field"><label>Host</label><input id="ceHost" placeholder="hostname or IP" style="min-width:300px"></div>
-      <div class="form-field"><label>Port</label><input id="cePort" type="number" placeholder="27017" style="min-width:90px"></div>
-      <div class="form-field"><label id="ceDbLabel">Auth DB</label><input id="ceDb" placeholder="admin"></div>
+        <option value="documentdb">documentdb</option><option value="postgresql">postgresql</option><option value="mysql">mysql</option><option value="sqlite">sqlite</option></select></div>
+      <div class="form-field"><label id="ceHostLabel">Host</label><input id="ceHost" placeholder="hostname or IP" style="min-width:300px"></div>
+      <div class="form-field" id="cePortWrap"><label>Port</label><input id="cePort" type="number" placeholder="27017" style="min-width:90px"></div>
+      <div class="form-field" id="ceDbWrap"><label id="ceDbLabel">Auth DB</label><input id="ceDb" placeholder="admin"></div>
+      <button class="btn btn-ghost" id="ceUploadBtn" style="display:none; align-self:flex-end" onclick="document.getElementById('ceFile').click()">Upload .db file</button>
+      <input type="file" id="ceFile" accept=".db,.sqlite,.sqlite3" style="display:none" onchange="uploadSqlite(this)">
       <label class="chk" id="ceTlsWrap" style="height:32px"><input type="checkbox" id="ceTls"> TLS</label>
       <label class="chk" style="height:32px" title="Store on the server (SQLite at ~/.warden/profiles.sqlite) so it works in every browser and the CLI. Passwords are never stored there."><input type="checkbox" id="ceServer"> save on server</label>
       <button class="btn btn-success" onclick="addCustomEnv()">Save</button>
@@ -2585,25 +2691,61 @@ function afterEnvChange(env) {
 }
 
 function ceEngineChanged() {
-  const docdb = document.getElementById('ceEngine').value === 'documentdb';
-  document.getElementById('ceDbLabel').textContent = docdb ? 'Auth DB' : 'Default DB';
-  document.getElementById('ceDb').placeholder = docdb ? 'admin' : 'postgres';
-  document.getElementById('cePort').placeholder = docdb ? '27017' : '5432';
-  document.getElementById('ceTlsWrap').style.display = docdb ? '' : 'none';
+  const fam = engineFamily(document.getElementById('ceEngine').value);
+  const sqlite = fam === 'sqlite';
+  document.getElementById('ceHostLabel').textContent = sqlite ? 'File path' : 'Host';
+  document.getElementById('ceHost').placeholder = sqlite ? '/path/to/data.db (or upload)' : 'hostname or IP';
+  document.getElementById('cePortWrap').style.display = sqlite ? 'none' : '';
+  document.getElementById('ceDbWrap').style.display = sqlite ? 'none' : '';
+  document.getElementById('ceDbLabel').textContent = fam === 'documentdb' ? 'Auth DB' : 'Default DB';
+  document.getElementById('ceDb').placeholder = fam === 'documentdb' ? 'admin' : fam === 'mysql' ? '(optional)' : 'postgres';
+  document.getElementById('cePort').placeholder = fam === 'documentdb' ? '27017' : fam === 'mysql' ? '3306' : '5432';
+  document.getElementById('ceTlsWrap').style.display = fam === 'documentdb' ? '' : 'none';
+  const up = document.getElementById('ceUploadBtn');
+  if (up) up.style.display = sqlite ? '' : 'none';
+}
+
+async function uploadSqlite(input) {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  toast(`Uploading ${file.name}…`, 'info');
+  try {
+    const resp = await fetch(API + '/api/sqlite-upload', {
+      method: 'POST', headers: { 'X-Filename': file.name }, body: file,
+    });
+    const res = await resp.json();
+    if (res.error) { toast(res.error, 'error'); return; }
+    document.getElementById('ceHost').value = res.path;
+    const nameInput = document.getElementById('ceName');
+    if (nameInput && !nameInput.value.trim()) nameInput.value = res.name.replace(/\.(db|sqlite3?)$/i, '');
+    toast(`Uploaded. Now hit Save to register it as an environment.`, 'success');
+  } catch (e) {
+    toast('Upload failed: ' + e.message, 'error');
+  }
 }
 
 function addCustomEnv() {
   const name = document.getElementById('ceName').value.trim();
   const eng = document.getElementById('ceEngine').value;
+  const fam = engineFamily(eng);
   const host = document.getElementById('ceHost').value.trim();
-  const port = parseInt(document.getElementById('cePort').value || (eng === 'documentdb' ? '27017' : '5432'), 10);
   const dbv = document.getElementById('ceDb').value.trim();
   if (!name || !/^[a-zA-Z0-9_.\-]+$/.test(name)) { toast('Name: letters, digits, _ . - only', 'error'); return; }
-  if (!host || !/^[a-zA-Z0-9_.\-]+$/.test(host)) { toast('Valid host required', 'error'); return; }
-  if (!(port >= 1 && port <= 65535)) { toast('Valid port required', 'error'); return; }
-  const cfg = { host, port, tls: document.getElementById('ceTls').checked };
-  if (eng === 'documentdb') cfg.auth_db = dbv || 'admin';
-  else cfg.default_db = dbv || 'postgres';
+  let cfg;
+  if (fam === 'sqlite') {
+    if (!host) { toast('File path required (or upload a file)', 'error'); return; }
+    cfg = { path: host };
+  } else {
+    const defPort = fam === 'documentdb' ? '27017' : fam === 'mysql' ? '3306' : '5432';
+    const port = parseInt(document.getElementById('cePort').value || defPort, 10);
+    if (!host || !/^[a-zA-Z0-9_.\-]+$/.test(host)) { toast('Valid host required', 'error'); return; }
+    if (!(port >= 1 && port <= 65535)) { toast('Valid port required', 'error'); return; }
+    cfg = { host, port, tls: document.getElementById('ceTls').checked };
+    if (fam === 'documentdb') cfg.auth_db = dbv || 'admin';
+    else if (fam === 'mysql') { if (dbv) cfg.default_db = dbv; }
+    else cfg.default_db = dbv || 'postgres';
+  }
   if (document.getElementById('ceServer')?.checked) {
     apiPost('/api/profile-save', { name, profile_engine: eng, profile: cfg }).then(async res => {
       if (res.error) { toast(res.error, 'error'); return; }
@@ -2705,6 +2847,30 @@ async function refreshHealth() {
         <tbody>${slow.map(o => `<tr><td class="mono">${esc(o.opid)}</td><td>${esc(o.secs)}s</td><td class="mono">${esc(o.ns || '')}</td><td>${esc(o.op || '')}</td></tr>`).join('')}</tbody>
       </table></div>`;
     }
+  } else if (res.engine === 'mysql') {
+    const h = res.health || {};
+    html += chip('version', esc(h.version || '—'));
+    html += chip('uptime', h.uptime ? fmtUptime(Number(h.uptime)) : '—');
+    html += chip('connections', h.threads ? `${esc(h.threads)} / ${esc(h.max_connections || '?')}` : '—');
+    if (h.total_size) html += chip('total size', fmtSize(Number(h.total_size)));
+    const slow = h.slow_queries || [];
+    html += chip('slow queries (>=5s)', slow.length, slow.length > 0);
+    if (slow.length) {
+      ops = `<h2>Slow queries</h2><div class="table-wrap"><table>
+        <thead><tr><th>Id</th><th>User</th><th>Runtime</th><th>Query</th></tr></thead>
+        <tbody>${slow.map(q => `<tr><td class="mono">${esc(q.pid)}</td><td>${esc(q.user)}</td><td>${esc(q.runtime)}</td><td class="mono" style="font-size:11px">${esc(q.query)}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+    }
+  } else if (res.engine === 'sqlite') {
+    const h = res.health || {};
+    html += chip('file', esc((h.file || '').split('/').pop() || '—'));
+    html += chip('size', fmtSize(Number(h.size_bytes) || 0));
+    html += chip('version', esc(h.version || '—'));
+    if (h.page_count && h.page_size) html += chip('pages', `${esc(h.page_count)} x ${esc(h.page_size)}B`);
+    html += chip('journal', esc(h.journal_mode || '—'));
+    html += chip('tables', esc(h.tables ?? '—'));
+    const ok = (h.integrity || '').trim() === 'ok';
+    html += chip('integrity', ok ? 'ok' : esc(h.integrity || '—'), !ok);
   } else {
     const h = res.health || {};
     const conns = h.connections || [];
@@ -2731,7 +2897,7 @@ async function refreshHealth() {
 
 // ── Security audits ────────────────────────────────────────────────────────
 
-function auditKind() { return currentEngine.startsWith('document') ? 'documentdb' : 'postgresql'; }
+function auditKind() { return engineFamily(currentEngine); }
 function auditCatalog() { return (config.audits || []).filter(a => a.engine === auditKind()); }
 function auditRunKey(id) { return `${document.getElementById('envSelect').value}:${auditKind()}:${id}`; }
 function auditExclKey(id) { return `${document.getElementById('envSelect').value}:${id}`; }

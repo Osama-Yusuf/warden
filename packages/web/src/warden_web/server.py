@@ -27,6 +27,13 @@ from warden_core import (
     ENVIRONMENTS,
     PG_PRIVILEGES,
     audit,
+    engine_family,
+    my_csv,
+    my_exec,
+    my_query,
+    sq_csv,
+    sq_exec,
+    sq_query,
     delete_profile,
     load_profile_environments,
     refresh_environments,
@@ -67,6 +74,13 @@ def require_fields(body, *fields):
         raise ValueError(f"Missing required fields: {', '.join(missing)}")
 
 
+def require_creds(body):
+    """Admin credentials, except for SQLite where there are none."""
+    if engine_family(body.get("engine", "")) == "sqlite":
+        return
+    require_creds(body)
+
+
 def validate_docdb_roles(roles):
     if not isinstance(roles, list):
         raise ValueError("roles must be a list")
@@ -76,6 +90,39 @@ def validate_docdb_roles(roles):
         if r["role"] not in DOCDB_ROLES:
             raise ValueError(f"Unknown DocumentDB role: {r['role']}")
         validate_ident(r["db"], "role database")
+
+
+MYSQL_PRIVILEGES = [
+    "SELECT", "INSERT", "UPDATE", "DELETE",
+    "ALL PRIVILEGES", "CREATE", "DROP", "ALTER", "INDEX", "EXECUTE",
+]
+
+MYSQL_HOST_RE = re.compile(r'^[A-Za-z0-9_.\-%]+$')
+
+
+def mysql_account(target):
+    """'name' or 'name@host' quoted as 'name'@'host'. Host defaults to %."""
+    name, _, host = str(target).strip().partition("@")
+    name = validate_ident(name, "username")
+    host = host or "%"
+    if len(host) > 128 or not MYSQL_HOST_RE.match(host):
+        raise ValueError("Invalid MySQL host part (letters, digits, _ . - %)")
+    return f"'{name}'@'{host}'"
+
+
+def validate_mysql_privilege(priv):
+    upper = str(priv).strip().upper()
+    if upper not in {p.upper() for p in MYSQL_PRIVILEGES}:
+        raise ValueError(f"Unknown privilege: {priv}")
+    return upper
+
+
+def validate_target(engine, username):
+    """Validate a username for the engine. MySQL accounts may carry @host."""
+    if engine_family(engine) == "mysql":
+        mysql_account(username)  # raises when malformed
+        return str(username).strip()
+    return validate_ident(username, "username")
 
 
 def validate_pg_privilege(priv):
@@ -102,8 +149,11 @@ def api_config(body):
         "tools": {
             "mongosh": shutil.which("mongosh") is not None,
             "psql": shutil.which("psql") is not None,
+            "mysql": shutil.which("mysql") is not None,
+            "sqlite3": shutil.which("sqlite3") is not None,
             "keychain": _keychain_available(),
         },
+        "mysql_privileges": MYSQL_PRIVILEGES,
         "profile_envs": {name: sorted(engines.keys())
                          for name, engines in load_profile_environments().items()},
         "audits": AUDIT_DEFS,
@@ -122,6 +172,11 @@ def sanitize_custom_config(raw):
     the client's localStorage, so the server sees them per-request)."""
     if not isinstance(raw, dict):
         raise ValueError("custom_config must be an object")
+    if raw.get("path"):
+        p = str(raw["path"]).strip()
+        if not p or len(p) > 500 or "\n" in p or "\x00" in p:
+            raise ValueError("Invalid sqlite path")
+        return {"path": str(Path(p).expanduser())}
     host = str(raw.get("host", "")).strip()
     if not host or len(host) > 255 or not HOST_RE.match(host):
         raise ValueError("Invalid custom host")
@@ -161,30 +216,63 @@ def api_connect(body):
     pwd = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
 
-    if engine.startswith("document"):
+    fam = engine_family(engine)
+    if fam == "documentdb":
         data, err = docdb_eval(cfg, user, pwd, "db.runCommand({connectionStatus:1})")
         if err:
             return {"ok": False, "error": err}
         authed = ((data or {}).get("authInfo") or {}).get("authenticatedUsers") or []
         whoami = authed[0].get("user") if authed else user
         return {"ok": True, "host": cfg["host"], "user": whoami}
-    else:
-        code, out, err = pg_query(cfg, user, pwd, "SELECT current_user")
+    if fam == "mysql":
+        code, out, err = my_query(cfg, user, pwd, "SELECT CURRENT_USER()")
         if code != 0:
             return {"ok": False, "error": err or "Connection failed"}
         return {"ok": True, "host": cfg["host"], "user": out.strip() or user}
+    if fam == "sqlite":
+        db_path = Path(cfg["path"])
+        if not db_path.is_file():
+            return {"ok": False, "error": f"No such file: {db_path}"}
+        code, out, err = sq_query(db_path, "SELECT sqlite_version()")
+        if code != 0:
+            return {"ok": False, "error": err or "Could not open the database file"}
+        return {"ok": True, "host": str(db_path), "user": ""}
+    code, out, err = pg_query(cfg, user, pwd, "SELECT current_user")
+    if code != 0:
+        return {"ok": False, "error": err or "Connection failed"}
+    return {"ok": True, "host": cfg["host"], "user": out.strip() or user}
 
 
 def api_list_users(body):
     cfg, err = get_config(body)
     if err:
         return {"error": err}
-    require_fields(body, "admin_user", "admin_pass")
-    user = body["admin_user"]
-    pwd = body["admin_pass"]
+    require_creds(body)
+    user = body.get("admin_user", "")
+    pwd = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
+    fam = engine_family(engine)
 
-    if engine.startswith("document"):
+    if fam == "mysql":
+        sql = ("SELECT user, host, account_locked FROM mysql.user "
+               "WHERE user NOT IN ('mysql.sys','mysql.session','mysql.infoschema',"
+               "'rdsadmin','rdsrepladmin') ORDER BY user, host")
+        code, out, err = my_query(cfg, user, pwd, sql)
+        if code != 0:
+            return {"error": err}
+        users = []
+        for line in out.strip().split("\n"):
+            parts = line.split("\t")
+            if len(parts) >= 3:
+                users.append({"user": f"{parts[0]}@{parts[1]}",
+                              "can_login": parts[2] != "Y",
+                              "superuser": False, "createdb": False,
+                              "createrole": False, "valid_until": "never"})
+        return {"users": users}
+    if fam == "sqlite":
+        return {"users": [], "note": "SQLite has no user accounts"}
+
+    if fam == "documentdb":
         data, err = docdb_eval(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users")
         if err:
             return {"error": err}
@@ -232,12 +320,30 @@ def api_user_info(body):
     if err:
         return {"error": err}
     require_fields(body, "admin_user", "admin_pass", "username")
-    user = body["admin_user"]
-    pwd = body["admin_pass"]
+    user = body.get("admin_user", "")
+    pwd = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
-    target = validate_ident(body["username"], "username")
+    fam = engine_family(engine)
+    target = validate_target(engine, body["username"])
 
-    if engine.startswith("document"):
+    if fam == "mysql":
+        acct = mysql_account(target)
+        code, out, err = my_query(cfg, user, pwd, f"SHOW GRANTS FOR {acct}")
+        if code != 0:
+            return {"error": err.strip() or "User not found"}
+        grants = [l for l in out.strip().split("\n") if l.strip()]
+        name, _, host = target.partition("@")
+        code2, out2, _ = my_query(
+            cfg, user, pwd,
+            "SELECT account_locked FROM mysql.user WHERE user = '%s' AND host = '%s'"
+            % (name.replace("'", "''"), (host or '%').replace("'", "''")))
+        locked = out2.strip() == "Y"
+        return {"user": target, "engine_family": "mysql", "locked": locked,
+                "can_login": not locked, "grant_statements": grants}
+    if fam == "sqlite":
+        return {"error": "SQLite has no user accounts"}
+
+    if fam == "documentdb":
         data, err = docdb_eval(cfg, user, pwd, f'db.adminCommand({{usersInfo: {js_string(target)}}}).users')
         if err:
             return {"error": err}
@@ -312,14 +418,26 @@ def api_create_user(body):
     if err:
         return {"error": err}
     require_fields(body, "admin_user", "admin_pass", "username")
-    adm_user = body["admin_user"]
-    adm_pass = body["admin_pass"]
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
-    target = validate_ident(body["username"], "username")
+    fam = engine_family(engine)
+    target = validate_target(engine, body["username"])
     password = body.get("password") or generate_password()
 
-    if engine.startswith("document"):
+    if fam == "sqlite":
+        return {"error": "SQLite has no user accounts"}
+    if fam == "mysql":
+        acct = mysql_account(target)
+        pwd_lit = password.replace("\\", "\\\\").replace("'", "\\'")
+        ok, out, err = my_exec(cfg, adm_user, adm_pass,
+                               f"CREATE USER {acct} IDENTIFIED BY '{pwd_lit}'")
+        if ok:
+            audit(env, "mysql", "CREATE USER", target)
+            return {"ok": True, "password": password}
+        return {"error": err or out}
+    if fam == "documentdb":
         roles = body.get("roles", [])
         validate_docdb_roles(roles)
         role_docs = json.dumps(roles)
@@ -344,14 +462,26 @@ def api_reset_password(body):
     if err:
         return {"error": err}
     require_fields(body, "admin_user", "admin_pass", "username")
-    adm_user = body["admin_user"]
-    adm_pass = body["admin_pass"]
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
-    target = validate_ident(body["username"], "username")
+    fam = engine_family(engine)
+    target = validate_target(engine, body["username"])
     password = body.get("password") or generate_password()
 
-    if engine.startswith("document"):
+    if fam == "sqlite":
+        return {"error": "SQLite has no user accounts"}
+    if fam == "mysql":
+        acct = mysql_account(target)
+        pwd_lit = password.replace("\\", "\\\\").replace("'", "\\'")
+        ok, out, err = my_exec(cfg, adm_user, adm_pass,
+                               f"ALTER USER {acct} IDENTIFIED BY '{pwd_lit}'")
+        if ok:
+            audit(env, "mysql", "RESET PASSWORD", target)
+            return {"ok": True, "password": password}
+        return {"error": err or out}
+    if fam == "documentdb":
         js = f'db.updateUser({js_string(target)}, {{pwd: {js_string(password)}}})'
         ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
         if ok:
@@ -372,13 +502,26 @@ def api_grant(body):
     if err:
         return {"error": err}
     require_fields(body, "admin_user", "admin_pass", "username")
-    adm_user = body["admin_user"]
-    adm_pass = body["admin_pass"]
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
-    target = validate_ident(body["username"], "username")
+    fam = engine_family(engine)
+    target = validate_target(engine, body["username"])
 
-    if engine.startswith("document"):
+    if fam == "sqlite":
+        return {"error": "SQLite has no user accounts"}
+    if fam == "mysql":
+        acct = mysql_account(target)
+        priv = validate_mysql_privilege(body.get("privilege", "SELECT"))
+        db_raw = str(body.get("database", "*")).strip() or "*"
+        obj = "*.*" if db_raw == "*" else f"`{validate_ident(db_raw, 'database')}`.*"
+        ok, out, err = my_exec(cfg, adm_user, adm_pass, f"GRANT {priv} ON {obj} TO {acct}")
+        if ok:
+            audit(env, "mysql", "GRANT", f"{target} += {priv} on {obj}")
+            return {"ok": True}
+        return {"error": err or out}
+    if fam == "documentdb":
         roles = body.get("roles", [])
         validate_docdb_roles(roles)
         role_docs = json.dumps(roles)
@@ -410,13 +553,26 @@ def api_revoke(body):
     if err:
         return {"error": err}
     require_fields(body, "admin_user", "admin_pass", "username")
-    adm_user = body["admin_user"]
-    adm_pass = body["admin_pass"]
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
-    target = validate_ident(body["username"], "username")
+    fam = engine_family(engine)
+    target = validate_target(engine, body["username"])
 
-    if engine.startswith("document"):
+    if fam == "sqlite":
+        return {"error": "SQLite has no user accounts"}
+    if fam == "mysql":
+        acct = mysql_account(target)
+        priv = validate_mysql_privilege(body.get("privilege", "SELECT"))
+        db_raw = str(body.get("database", "*")).strip() or "*"
+        obj = "*.*" if db_raw == "*" else f"`{validate_ident(db_raw, 'database')}`.*"
+        ok, out, err = my_exec(cfg, adm_user, adm_pass, f"REVOKE {priv} ON {obj} FROM {acct}")
+        if ok:
+            audit(env, "mysql", "REVOKE", f"{target} -= {priv} on {obj}")
+            return {"ok": True}
+        return {"error": err or out}
+    if fam == "documentdb":
         roles = body.get("roles", [])
         validate_docdb_roles(roles)
         role_docs = json.dumps(roles)
@@ -448,13 +604,23 @@ def api_drop_user(body):
     if err:
         return {"error": err}
     require_fields(body, "admin_user", "admin_pass", "username")
-    adm_user = body["admin_user"]
-    adm_pass = body["admin_pass"]
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
-    target = validate_ident(body["username"], "username")
+    fam = engine_family(engine)
+    target = validate_target(engine, body["username"])
 
-    if engine.startswith("document"):
+    if fam == "sqlite":
+        return {"error": "SQLite has no user accounts"}
+    if fam == "mysql":
+        acct = mysql_account(target)
+        ok, out, err = my_exec(cfg, adm_user, adm_pass, f"DROP USER {acct}")
+        if ok:
+            audit(env, "mysql", "DROP USER", target)
+            return {"ok": True}
+        return {"error": err or out}
+    if fam == "documentdb":
         ok, out, err = docdb_exec(cfg, adm_user, adm_pass, f'db.dropUser({js_string(target)})')
         if ok:
             audit(env, "documentdb", "DROP USER", target)
@@ -473,14 +639,26 @@ def api_toggle_login(body):
     if err:
         return {"error": err}
     engine = body.get("engine", "")
-    if engine.startswith("document"):
+    fam = engine_family(engine)
+    if fam == "documentdb":
         return {"error": "Not applicable to DocumentDB"}
+    if fam == "sqlite":
+        return {"error": "SQLite has no user accounts"}
     require_fields(body, "admin_user", "admin_pass", "username")
-    adm_user = body["admin_user"]
-    adm_pass = body["admin_pass"]
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
     env = body.get("env", "production")
-    target = validate_ident(body["username"], "username")
+    target = validate_target(engine, body["username"])
     enable = body.get("enable", True)
+    if fam == "mysql":
+        acct = mysql_account(target)
+        kw = "UNLOCK" if enable else "LOCK"
+        ok, out, err = my_exec(cfg, adm_user, adm_pass, f"ALTER USER {acct} ACCOUNT {kw}")
+        if ok:
+            action = "ENABLE" if enable else "DISABLE"
+            audit(env, "mysql", f"{action} USER", target)
+            return {"ok": True}
+        return {"error": err or out}
     kw = "LOGIN" if enable else "NOLOGIN"
     ok, out, err = pg_exec(cfg, adm_user, adm_pass, f"ALTER USER {pg_ident(target)} WITH {kw}")
     if ok:
@@ -494,12 +672,35 @@ def api_list_databases(body):
     cfg, err = get_config(body)
     if err:
         return {"error": err}
-    require_fields(body, "admin_user", "admin_pass")
-    adm_user = body["admin_user"]
-    adm_pass = body["admin_pass"]
+    require_creds(body)
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
+    fam = engine_family(engine)
 
-    if engine.startswith("document"):
+    if fam == "mysql":
+        sql = ("SELECT s.schema_name, COALESCE(SUM(t.data_length + t.index_length), 0) "
+               "FROM information_schema.schemata s "
+               "LEFT JOIN information_schema.tables t ON t.table_schema = s.schema_name "
+               "WHERE s.schema_name NOT IN ('information_schema','performance_schema','sys') "
+               "GROUP BY s.schema_name ORDER BY s.schema_name")
+        code, out, err = my_query(cfg, adm_user, adm_pass, sql)
+        if code != 0:
+            return {"error": err}
+        dbs = []
+        for line in out.strip().split("\n"):
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                dbs.append({"name": parts[0], "size_bytes": int(float(parts[1])),
+                            "size_mb": round(float(parts[1]) / 1048576, 1)})
+        return {"databases": dbs}
+    if fam == "sqlite":
+        db_path = Path(cfg["path"])
+        size = db_path.stat().st_size if db_path.is_file() else 0
+        return {"databases": [{"name": db_path.name, "size_bytes": size,
+                               "size_mb": round(size / 1048576, 1)}]}
+
+    if fam == "documentdb":
         data, err = docdb_eval(cfg, adm_user, adm_pass, "db.adminCommand({listDatabases:1}).databases")
         if err:
             return {"error": err}
@@ -541,13 +742,44 @@ def api_list_collections(body):
     cfg, err = get_config(body)
     if err:
         return {"error": err}
-    require_fields(body, "admin_user", "admin_pass")
-    adm_user = body["admin_user"]
-    adm_pass = body["admin_pass"]
+    require_creds(body)
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
+    fam = engine_family(engine)
+    if fam == "sqlite":
+        db_path = Path(cfg["path"])
+        code, out, err = sq_query(db_path,
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        if code != 0:
+            return {"error": err}
+        names = [l.strip() for l in out.strip().split("\n") if l.strip()]
+        sizes = {}
+        code2, out2, _ = sq_query(db_path, "SELECT name, SUM(pgsize) FROM dbstat GROUP BY name")
+        if code2 == 0:
+            for line in out2.strip().split("\n"):
+                parts = line.split("\t")
+                if len(parts) >= 2 and parts[1].isdigit():
+                    sizes[parts[0]] = int(parts[1])
+        return {"tables": [{"schema": "main", "table": n,
+                            **({"size_bytes": sizes[n]} if n in sizes else {})} for n in names]}
     database = validate_ident(body.get("database", ""), "database")
+    if fam == "mysql":
+        sql = ("SELECT table_name, COALESCE(data_length + index_length, 0) "
+               "FROM information_schema.tables WHERE table_schema = '%s' "
+               "ORDER BY table_name" % database.replace("'", "''"))
+        code, out, err = my_query(cfg, adm_user, adm_pass, sql)
+        if code != 0:
+            return {"error": err}
+        tables = []
+        for line in out.strip().split("\n"):
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                tables.append({"schema": database, "table": parts[0],
+                               "size_bytes": int(float(parts[1]))})
+        return {"tables": tables}
 
-    if engine.startswith("document"):
+    if fam == "documentdb":
         data, err = docdb_eval(cfg, adm_user, adm_pass, "db.getCollectionNames()", db=database)
         if err:
             return {"error": err}
@@ -862,9 +1094,10 @@ def api_query(body):
     cfg, err = get_config(body)
     if err:
         return {"error": err}
-    require_fields(body, "admin_user", "admin_pass", "query")
-    adm_user = body["admin_user"]
-    adm_pass = body["admin_pass"]
+    require_creds(body)
+    require_fields(body, "query")
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     env = body.get("env", "custom")
     query = body["query"]
@@ -958,6 +1191,25 @@ def api_query(body):
             "mode": "cold",
         }
     else:
+        fam = engine_family(engine)
+        if fam == "mysql":
+            db = database or cfg.get("default_db") or ""
+            code, out, err_out = my_csv(cfg, adm_user, adm_pass, query, db=db or None, timeout=60)
+            audit(env, "mysql", "QUERY", f"db={db or '*'} :: {query[:300]}")
+            truncated = len(out) > MAX_OUTPUT_LEN
+            return {"ok": code == 0, "database": db or "*", "csv": out[:MAX_OUTPUT_LEN],
+                    "output": out[:MAX_OUTPUT_LEN],
+                    "error": err_out if code != 0 else "",
+                    "notices": err_out if code == 0 else "", "truncated": truncated}
+        if fam == "sqlite":
+            db_path = Path(cfg["path"])
+            code, out, err_out = sq_csv(db_path, query, timeout=60)
+            audit(env, "sqlite", "QUERY", f"db={db_path.name} :: {query[:300]}")
+            truncated = len(out) > MAX_OUTPUT_LEN
+            return {"ok": code == 0, "database": db_path.name, "csv": out[:MAX_OUTPUT_LEN],
+                    "output": out[:MAX_OUTPUT_LEN],
+                    "error": err_out if code != 0 else "",
+                    "notices": err_out if code == 0 else "", "truncated": truncated}
         db = database or cfg.get("default_db", "postgres")
         code, out, err_out = pg_csv(cfg, adm_user, adm_pass, query, db=db, timeout=60)
         audit(env, "postgresql", "QUERY", f"db={db} :: {query[:300]}")
@@ -993,6 +1245,18 @@ AUDIT_DEFS = [
     {"id": "no-roles", "engine": "documentdb", "severity": "info",
      "title": "Accounts with no access",
      "description": "Accounts that can't do anything. Usually leftovers worth removing."},
+    {"id": "mysql-global-admin", "engine": "mysql", "severity": "critical",
+     "title": "Full admin access",
+     "description": "Accounts holding SUPER, GRANT OPTION or CREATE USER globally. They control the whole server."},
+    {"id": "mysql-global-write", "engine": "mysql", "severity": "critical",
+     "title": "Can change every database",
+     "description": "Accounts with global insert, update, delete or drop rights across all databases."},
+    {"id": "mysql-write-access", "engine": "mysql", "severity": "info",
+     "title": "Who can change data",
+     "description": "Which accounts can add, edit or delete data, and in which databases."},
+    {"id": "mysql-locked-privileged", "engine": "mysql", "severity": "info",
+     "title": "Locked accounts that still have access",
+     "description": "Accounts that are locked but still hold permissions. Worth cleaning up."},
     {"id": "superusers", "engine": "postgresql", "severity": "critical",
      "title": "Superusers",
      "description": "Accounts with total control. Every permission check is skipped for them."},
@@ -1058,18 +1322,83 @@ def api_audit_run(body):
     cfg, err = get_config(body)
     if err:
         return {"error": err}
-    require_fields(body, "admin_user", "admin_pass", "audit")
-    adm_user = body["admin_user"]
-    adm_pass = body["admin_pass"]
+    require_creds(body)
+    require_fields(body, "audit")
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     audit_id = body["audit"]
     definition = next((a for a in AUDIT_DEFS if a["id"] == audit_id), None)
     if not definition:
         return {"error": f"Unknown audit: {audit_id}"}
+    if engine_family(engine) == "sqlite":
+        return {"error": "SQLite has no user accounts, so there is nothing to audit"}
     findings = []
     scanned = 0
 
-    if engine.startswith("document"):
+    fam = engine_family(engine)
+    if fam == "mysql":
+        sql = ("SELECT user, host, account_locked, Super_priv, Grant_priv, Create_user_priv, "
+               "Insert_priv, Update_priv, Delete_priv, Drop_priv FROM mysql.user "
+               "WHERE user NOT IN ('mysql.sys','mysql.session','mysql.infoschema','rdsadmin','rdsrepladmin')")
+        code, out, err = my_query(cfg, adm_user, adm_pass, sql)
+        if code != 0:
+            return {"error": err}
+        accounts = []
+        for line in out.strip().split("\n"):
+            p = line.split("\t")
+            if len(p) >= 10:
+                accounts.append({"acct": f"{p[0]}@{p[1]}", "locked": p[2] == "Y",
+                                 "super": p[3] == "Y", "grant": p[4] == "Y", "createuser": p[5] == "Y",
+                                 "gwrite": any(v == "Y" for v in p[6:10])})
+        scanned = len(accounts)
+        if audit_id == "mysql-global-admin":
+            for a in accounts:
+                whats = [w for w, on in (("SUPER", a["super"]), ("GRANT OPTION", a["grant"]),
+                                         ("CREATE USER", a["createuser"])) if on]
+                if whats:
+                    findings.append({"user": a["acct"], "severity": "critical",
+                                     "summary": "has server-wide admin power",
+                                     "detail": "via " + ", ".join(whats)})
+        elif audit_id == "mysql-global-write":
+            for a in accounts:
+                if a["gwrite"]:
+                    findings.append({"user": a["acct"], "severity": "critical",
+                                     "summary": "can change data in every database",
+                                     "detail": "global insert/update/delete/drop privileges"})
+        elif audit_id in ("mysql-write-access", "mysql-locked-privileged"):
+            sql = ("SELECT grantee, table_schema, privilege_type FROM information_schema.schema_privileges "
+                   "WHERE privilege_type IN ('INSERT','UPDATE','DELETE','DROP') "
+                   "UNION ALL "
+                   "SELECT grantee, table_schema, privilege_type FROM information_schema.table_privileges "
+                   "WHERE privilege_type IN ('INSERT','UPDATE','DELETE','DROP')")
+            code, out, err = my_query(cfg, adm_user, adm_pass, sql)
+            if code != 0:
+                return {"error": err}
+            grants = {}
+            for line in out.strip().split("\n"):
+                p = line.split("\t")
+                if len(p) >= 3:
+                    acct = p[0].replace("'", "").replace("`", "")
+                    g = grants.setdefault(acct, {"dbs": set(), "privs": set()})
+                    g["dbs"].add(p[1])
+                    g["privs"].add(p[2])
+            locked_map = {a["acct"]: a["locked"] for a in accounts}
+            verb_map = {"INSERT": "add", "UPDATE": "edit", "DELETE": "delete", "DROP": "drop"}
+            for acct, g in sorted(grants.items()):
+                verbs = [verb_map[p] for p in ("INSERT", "UPDATE", "DELETE", "DROP") if p in g["privs"]]
+                doing = ", ".join(verbs[:-1]) + " and " + verbs[-1] if len(verbs) > 1 else verbs[0]
+                where = _plural(len(g["dbs"]), "database")
+                detail = ", ".join(sorted(g["privs"])) + " on " + ", ".join(sorted(g["dbs"]))
+                if audit_id == "mysql-write-access":
+                    sev = "warning" if len(g["dbs"]) > 2 else "info"
+                    findings.append({"user": acct, "severity": sev,
+                                     "summary": f"can {doing} data in {where}", "detail": detail})
+                elif audit_id == "mysql-locked-privileged" and locked_map.get(acct):
+                    findings.append({"user": acct, "severity": "info",
+                                     "summary": f"locked, but still holds access to {where}",
+                                     "detail": detail})
+    elif fam == "documentdb":
         users, err = _docdb_users(cfg, adm_user, adm_pass)
         if err:
             return {"error": err}
@@ -1180,12 +1509,52 @@ def api_health(body):
     cfg, err = get_config(body)
     if err:
         return {"error": err}
-    require_fields(body, "admin_user", "admin_pass")
-    adm_user = body["admin_user"]
-    adm_pass = body["admin_pass"]
+    require_creds(body)
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
 
-    if engine.startswith("document"):
+    fam = engine_family(engine)
+    if fam == "mysql":
+        health = {}
+        checks = {
+            "version": "SELECT VERSION()",
+            "uptime": "SELECT variable_value FROM performance_schema.global_status WHERE variable_name = 'Uptime'",
+            "threads": "SELECT variable_value FROM performance_schema.global_status WHERE variable_name = 'Threads_connected'",
+            "max_connections": "SELECT @@max_connections",
+            "total_size": ("SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables "
+                           "WHERE table_schema NOT IN ('information_schema','performance_schema','sys')"),
+        }
+        for key, sql in checks.items():
+            code, out, _ = my_query(cfg, adm_user, adm_pass, sql)
+            health[key] = out.strip() if code == 0 and out.strip() else None
+        code, out, _ = my_query(cfg, adm_user, adm_pass,
+            "SELECT id, user, time, LEFT(COALESCE(info, ''), 90) FROM information_schema.processlist "
+            "WHERE command <> 'Sleep' AND time >= 5 AND info IS NOT NULL ORDER BY time DESC LIMIT 10")
+        slow = []
+        if code == 0 and out.strip():
+            for line in out.strip().split("\n"):
+                p = line.split("\t")
+                if len(p) >= 4:
+                    slow.append({"pid": p[0], "user": p[1], "runtime": p[2] + "s", "query": p[3]})
+        health["slow_queries"] = slow
+        return {"engine": "mysql", "health": health}
+    if fam == "sqlite":
+        db_path = Path(cfg["path"])
+        health = {"file": str(db_path),
+                  "size_bytes": db_path.stat().st_size if db_path.is_file() else 0}
+        for key, sql in {
+            "version": "SELECT sqlite_version()",
+            "page_count": "PRAGMA page_count",
+            "page_size": "PRAGMA page_size",
+            "journal_mode": "PRAGMA journal_mode",
+            "tables": "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
+            "integrity": "PRAGMA quick_check",
+        }.items():
+            code, out, _ = sq_query(db_path, sql)
+            health[key] = out.strip() if code == 0 else None
+        return {"engine": "sqlite", "health": health}
+    if fam == "documentdb":
         # DocumentDB returns these counters as BSON Longs. Coerce to plain
         # numbers or JSON.stringify turns them into {low, high, unsigned} blobs.
         js = ("(() => { const n = v => (v && typeof v.toNumber === 'function') ? v.toNumber()"
@@ -1250,7 +1619,7 @@ def api_profile_save(body):
         cfg["master_user"] = validate_ident(str(body["profile"]["master_user"]), "master_user")
     save_profile(name, engine, cfg)
     refresh_environments()
-    audit("profiles", engine, "PROFILE SAVE", f"{name} -> {cfg['host']}:{cfg['port']}")
+    audit("profiles", engine, "PROFILE SAVE", f"{name} -> {cfg.get('host') or cfg.get('path')}")
     return {"ok": True}
 
 
@@ -1396,6 +1765,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/sqlite-upload":
+            try:
+                self._sqlite_upload()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         handler = ROUTES.get(path)
         if not handler and path != "/api/query-stream":
             self.send_error(404)
@@ -1410,7 +1785,7 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, ValueError):
             self._json_response({"error": "Invalid JSON"}, 400)
             return
-        if path in REQUIRES_CREDS:
+        if path in REQUIRES_CREDS and engine_family(body.get("engine", "")) != "sqlite":
             if not body.get("admin_user") or not body.get("admin_pass"):
                 self._json_response({"error": "Admin credentials required"}, 401)
                 return
@@ -1432,6 +1807,48 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response({"error": f"Missing field: {e}"}, 400)
         except Exception as e:
             self._json_response({"error": "Internal server error"}, 500)
+
+    MAX_UPLOAD = 512 * 1024 * 1024
+
+    def _sqlite_upload(self):
+        """Raw-body upload of a .sqlite/.db file into ~/.warden/sqlite/."""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            length = 0
+        if length <= 0:
+            self._json_response({"error": "Empty upload"}, 400)
+            return
+        if length > self.MAX_UPLOAD:
+            self._json_response({"error": "File too large (max 512 MB)"}, 413)
+            return
+        raw_name = os.path.basename(self.headers.get("X-Filename", "database.db"))
+        stem, ext = os.path.splitext(raw_name)
+        stem = re.sub(r"[^A-Za-z0-9_.\-]", "_", stem)[:80] or "database"
+        if ext.lower() not in (".db", ".sqlite", ".sqlite3"):
+            ext = ".db"
+        dest_dir = Path.home() / ".warden" / "sqlite"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{stem}{ext}"
+        n = 1
+        while dest.exists():
+            dest = dest_dir / f"{stem}-{n}{ext}"
+            n += 1
+        remaining = length
+        with open(dest, "wb") as f:
+            while remaining > 0:
+                chunk = self.rfile.read(min(65536, remaining))
+                if not chunk:
+                    break
+                f.write(chunk)
+                remaining -= len(chunk)
+        code, out, err = sq_query(dest, "SELECT COUNT(*) FROM sqlite_master")
+        if code != 0:
+            dest.unlink(missing_ok=True)
+            self._json_response({"error": "That file is not a readable SQLite database"}, 400)
+            return
+        audit("local", "sqlite", "UPLOAD", str(dest))
+        self._json_response({"ok": True, "path": str(dest), "name": dest.name})
 
     def _query_stream(self, body):
         """Live mode: raw engine output streamed to the browser as it arrives."""
@@ -1460,10 +1877,22 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
         proc_env = None
-        if engine.startswith("document"):
+        fam = engine_family(engine)
+        if fam == "documentdb":
             db = database or "admin"
             args = docdb_args(cfg, body["admin_user"], body["admin_pass"], db) + ["--eval", query]
             engine_name = "documentdb"
+        elif fam == "mysql":
+            db = database or cfg.get("default_db") or ""
+            args = ["mysql", "-h", cfg["host"], "-P", str(cfg["port"]), "-u", body["admin_user"],
+                    "--protocol=TCP", "-t", "-e", query] + (["-D", db] if db else [])
+            proc_env = os.environ.copy()
+            proc_env["MYSQL_PWD"] = body["admin_pass"]
+            engine_name = "mysql"
+        elif fam == "sqlite":
+            db = Path(cfg["path"]).name
+            args = ["sqlite3", "-batch", "-column", "-header", str(cfg["path"]), query]
+            engine_name = "sqlite"
         else:
             db = database or cfg.get("default_db", "postgres")
             args = ["psql", "-h", cfg["host"], "-p", str(cfg["port"]),
