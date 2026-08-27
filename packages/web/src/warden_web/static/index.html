@@ -1619,11 +1619,15 @@ async function viewListUsers() {
 
 function renderUsersShell(fromCache) {
   const fam = engineFamily(currentEngine);
-  const title = fam === 'mysql' ? 'MySQL Accounts' : fam === 'documentdb' ? 'MongoDB Users' : 'PostgreSQL Users';
+  const titles = { mysql: 'MySQL Accounts', documentdb: 'MongoDB Users', elasticsearch: 'Elasticsearch Users', redis: 'Redis ACL Users' };
+  const title = titles[fam] || 'PostgreSQL Users';
   const isDocdb = fam === 'documentdb';
-  const cols = isDocdb
-    ? '<th>Username</th><th>Auth DB</th><th>Roles</th><th></th>'
-    : '<th>Username</th><th>Status</th><th>Flags</th><th>Expires</th><th></th>';
+  const colsByFam = {
+    documentdb: '<th>Username</th><th>Auth DB</th><th>Roles</th><th></th>',
+    elasticsearch: '<th>Username</th><th>Status</th><th>Roles</th><th></th>',
+    redis: '<th>Username</th><th>Status</th><th>Commands</th><th>Keys</th><th></th>',
+  };
+  const cols = colsByFam[fam] || '<th>Username</th><th>Status</th><th>Flags</th><th>Expires</th><th></th>';
   setContent(`<div class="card"><h2>${ICONS.users} ${title}</h2>
     <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap">
       <div class="qf" style="width:260px; height:34px">
@@ -1653,7 +1657,19 @@ function renderUserRows() {
   const manage = u => `<div class="row-acts"><button class="ibtn accent" data-tip="Manage user" data-user="${esc(u.user)}" onclick="viewUserInfoFor(this.dataset.user)">${ICONS.sliders}</button></div>`;
   let rows = '';
   for (const u of list) {
-    if (isDocdb) {
+    if (fam === 'elasticsearch') {
+      const status = u.enabled ? '<span class="pill pill-ok">enabled</span>' : '<span class="pill pill-danger">disabled</span>';
+      const roles = (u.roles || []).map(r => `<span class="pill pill-ok">${esc(r)}</span>`).join(' ');
+      rows += `<tr><td class="mono">${esc(u.user)}${u.reserved ? ' <span class="pill pill-muted">built-in</span>' : ''}</td><td>${status}</td>
+        <td>${roles || '<span class="pill pill-muted">none</span>'}</td>
+        <td style="text-align:right">${manage(u)}</td></tr>`;
+    } else if (fam === 'redis') {
+      const status = u.enabled ? '<span class="pill pill-ok">on</span>' : '<span class="pill pill-danger">off</span>';
+      rows += `<tr><td class="mono">${esc(u.user)}${u.reserved ? ' <span class="pill pill-muted">default</span>' : ''}</td><td>${status}</td>
+        <td class="mono" style="font-size:11px">${esc(u.commands || '—')}</td>
+        <td class="mono" style="font-size:11px">${esc(u.keys || '—')}</td>
+        <td style="text-align:right">${manage(u)}</td></tr>`;
+    } else if (isDocdb) {
       const roles = u.roles.map(r => `<span class="pill pill-ok">${esc(r)}</span>`).join(' ');
       rows += `<tr><td class="mono">${esc(u.user)}</td><td>${esc(u.db)}</td>
         <td>${roles || '<span class="pill pill-muted">none</span>'}</td>
@@ -1691,6 +1707,43 @@ async function viewUserInfoFor(username) {
   const isDocdb = currentEngine.startsWith('document');
   const uAttr = esc(res.user);
   let html = `<div class="card"><h2>${ICONS.users} User: <span class="mono" style="font-size:14px">${uAttr}</span></h2>`;
+  if (res.engine_family === 'elasticsearch') {
+    const status = res.enabled ? '<span class="pill pill-ok">enabled</span>' : '<span class="pill pill-danger">disabled</span>';
+    html += `<p style="margin-bottom:12px">${status}${res.reserved ? ' &nbsp;<span class="pill pill-muted">built-in</span>' : ''}</p>`;
+    const rRows = (res.roles || []).map(r => `<tr><td class="mono">${esc(r)}</td>
+      <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-user="${uAttr}" data-role="${esc(r)}" onclick="esRevokeRole(this.dataset.user, this.dataset.role)">Revoke</button></td></tr>`).join('');
+    html += `<h2 style="margin-top:4px">Roles</h2><div class="table-wrap"><table><thead><tr><th>Role</th><th></th></tr></thead><tbody>${rRows || '<tr><td colspan="2" style="color:var(--text-muted)">No roles</td></tr>'}</tbody></table></div>
+      <h2 style="margin-top:18px">${ICONS.shield} Grant a role</h2>
+      <div class="form-row" style="margin-bottom:0">
+        <div class="form-field"><label>Role name</label><input id="uiEsRole" placeholder="e.g. monitoring_user"></div>
+        <button class="btn btn-success" data-user="${uAttr}" onclick="esGrantRole(this.dataset.user)">Grant</button>
+      </div>`;
+    if (!res.reserved) html += `<div class="user-toolbar">
+      <button class="btn btn-primary" data-user="${uAttr}" onclick="openResetModal(this.dataset.user)">Reset password</button>
+      <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">Delete user</button></div>`;
+    showPanel(html + '</div>');
+    return;
+  }
+  if (res.engine_family === 'redis') {
+    const status = res.enabled ? '<span class="pill pill-ok">on</span>' : '<span class="pill pill-danger">off</span>';
+    html += `<p style="margin-bottom:12px">${status}${res.user === 'default' ? ' &nbsp;<span class="pill pill-muted">default</span>' : ''}</p>
+      <div class="table-wrap"><table><tbody>
+        <tr><td style="width:110px;color:var(--text-muted)">Commands</td><td class="mono" style="font-size:12px">${esc(res.commands || '—')}</td></tr>
+        <tr><td style="color:var(--text-muted)">Keys</td><td class="mono" style="font-size:12px">${esc(res.keys || '—')}</td></tr>
+        <tr><td style="color:var(--text-muted)">Channels</td><td class="mono" style="font-size:12px">${esc(res.channels || '—')}</td></tr>
+      </tbody></table></div>
+      <h2 style="margin-top:18px">${ICONS.shield} Change permissions</h2>
+      <p class="card-meta">Add an ACL rule: a category (<code>+@write</code>, <code>-@dangerous</code>), a command (<code>+get</code>), or a key pattern (<code>~cache:*</code>).</p>
+      <div class="form-row" style="margin-bottom:0">
+        <div class="form-field"><label>ACL rule</label><input id="uiRedisRule" placeholder="+@write"></div>
+        <button class="btn btn-success" data-user="${uAttr}" onclick="redisApplyRule(this.dataset.user)">Apply</button>
+      </div>`;
+    if (res.user !== 'default') html += `<div class="user-toolbar">
+      <button class="btn btn-primary" data-user="${uAttr}" onclick="openResetModal(this.dataset.user)">Reset password</button>
+      <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">Delete user</button></div>`;
+    showPanel(html + '</div>');
+    return;
+  }
   if (res.engine_family === 'mysql') {
     const status = res.can_login ? '<span class="pill pill-ok">active</span>' : '<span class="pill pill-danger">locked</span>';
     html += `<p style="margin-bottom:12px">${status}</p>`;
@@ -1870,6 +1923,11 @@ function openCreateUserModal() {
     const roleOpts = (config.docdb_roles || []).map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
     extra = `<div class="form-field"><label>Initial role</label><select id="cmRole">${roleOpts}</select></div>
       <div class="form-field"><label>On database</label><input id="cmRoleDb" list="dbList" placeholder="type to search databases…"></div>`;
+  } else if (fam === 'elasticsearch') {
+    extra = `<div class="form-field"><label>Roles (comma-separated)</label><input id="cmEsRoles" placeholder="e.g. kibana_admin, monitoring_user"></div>`;
+  } else if (fam === 'redis') {
+    extra = `<div class="form-field"><label>Key pattern</label><input id="cmRdKeys" value="*" placeholder="* = all keys, or cache:*"></div>
+      <div class="form-field"><label>Permissions</label><select id="cmRdLevel"><option value="read">read-only</option><option value="write">read + write</option><option value="all">all commands</option></select></div>`;
   } else if (fam !== 'mysql') {
     extra = `<div class="form-field"><label>Allow login</label><select id="cmLogin"><option value="true">Yes</option><option value="false">No</option></select></div>`;
   }
@@ -1901,6 +1959,11 @@ async function doCreateFromModal() {
     const db = document.getElementById('cmRoleDb').value.trim();
     if (!db) { toast('Database required for the initial role', 'error'); return; }
     extra.roles = [{ role, db }];
+  } else if (fam === 'elasticsearch') {
+    extra.roles = document.getElementById('cmEsRoles').value.split(',').map(s => s.trim()).filter(Boolean);
+  } else if (fam === 'redis') {
+    extra.key_pattern = document.getElementById('cmRdKeys').value.trim() || '*';
+    extra.acl_level = document.getElementById('cmRdLevel').value;
   } else if (fam !== 'mysql') {
     extra.can_login = document.getElementById('cmLogin').value === 'true';
   }
@@ -1944,6 +2007,38 @@ function grantRoleDirect(username) {
       else toast(res.error || 'Failed', 'error');
     }},
   ]);
+}
+
+async function esGrantRole(username) {
+  const role = document.getElementById('uiEsRole').value.trim();
+  if (!role) { toast('Enter a role name', 'error'); return; }
+  const res = await apiPost('/api/grant', { username, roles: [role] });
+  if (res.ok) { toast(`Granted ${role}`, 'success'); invalidateCache('users'); viewUserInfoFor(username); }
+  else toast(res.error || 'Failed', 'error');
+}
+function esRevokeRole(username, role) {
+  showModal('Confirm Revoke', `<p style="color:var(--danger)">Revoke role <strong>${esc(role)}</strong> from <strong>${esc(username)}</strong>?</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Revoke', cls: 'btn-danger', fn: async () => {
+      const res = await apiPost('/api/revoke', { username, roles: [role] });
+      if (res.ok) { toast(`Revoked ${role}`, 'success'); invalidateCache('users'); viewUserInfoFor(username); }
+      else toast(res.error || 'Failed', 'error');
+    }},
+  ]);
+}
+async function redisApplyRule(username) {
+  const rule = document.getElementById('uiRedisRule').value.trim();
+  if (!rule) { toast('Enter an ACL rule', 'error'); return; }
+  const dangerous = /^-|dangerous|\ballkeys\b/i.test(rule) || rule === '~*';
+  const run = async () => {
+    const res = await apiPost('/api/grant', { username, rule });
+    if (res.ok) { toast('ACL updated', 'success'); invalidateCache('users'); viewUserInfoFor(username); }
+    else toast(res.error || 'Failed', 'error');
+  };
+  if (dangerous) {
+    showModal('Confirm ACL change', `<p>Apply <strong class="mono">${esc(rule)}</strong> to <strong>${esc(username)}</strong>?</p>`, [
+      { label: 'Cancel', cls: 'btn-ghost' }, { label: 'Apply', cls: 'btn-primary', fn: run }]);
+  } else { run(); }
 }
 
 function grantPgPrivDirect(username) {
@@ -1999,7 +2094,7 @@ function confirmDropUser(username) {
       const typed = document.getElementById('confirmDrop')?.value;
       if (typed !== username) { toast('Username does not match', 'error'); return; }
       const res = await apiPost('/api/drop-user', { username });
-      if (res.ok) { toast(`User ${username} dropped`, 'success'); invalidateCache('users'); refreshCache(); navigate('users'); }
+      if (res.ok) { toast(`User ${username} dropped`, 'success'); closePanel(); invalidateCache('users'); refreshCache(); navigate('users'); }
       else { toast(res.error || 'Failed', 'error'); }
     }},
   ]);
