@@ -373,9 +373,20 @@ def api_list_users(body):
     engine = body.get("engine", "documentdb")
     fam = engine_family(engine)
 
-    if fam in ("elasticsearch", "redis"):
-        label = "Elasticsearch" if fam == "elasticsearch" else "Redis"
-        return {"users": [], "note": f"User & role management for {label} is coming in the next pass."}
+    if fam == "elasticsearch":
+        data, err = esn.list_users(cfg, user, pwd)
+        if err:
+            return {"error": err}
+        return {"users": [{"user": u["user"], "roles": u.get("roles", []),
+                           "enabled": u.get("enabled", True), "reserved": u.get("reserved", False)}
+                          for u in (data or [])]}
+    if fam == "redis":
+        data, err = rdn.list_acl_users(cfg, user, pwd)
+        if err:
+            return {"error": err}
+        return {"users": [{"user": u["name"], "enabled": u.get("enabled", True),
+                           "commands": u.get("commands", ""), "keys": u.get("keys", ""),
+                           "reserved": u["name"] == "default"} for u in (data or [])]}
 
     if fam == "mysql":
         sql = ("SELECT user, host, account_locked FROM mysql.user "
@@ -444,13 +455,25 @@ def api_user_info(body):
     cfg, err = get_config(body)
     if err:
         return {"error": err}
-    require_fields(body, "admin_user", "admin_pass", "username")
+    require_fields(body, "username")
     user = body.get("admin_user", "")
     pwd = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     fam = engine_family(engine)
-    if fam in ("elasticsearch", "redis"):
-        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
+    if fam == "elasticsearch":
+        name = str(body.get("username", "")).strip()
+        u, err = esn.user_info(cfg, user, pwd, name)
+        if err:
+            return {"error": err}
+        return {"user": u["user"], "roles": u.get("roles", []), "enabled": u.get("enabled", True),
+                "reserved": u.get("reserved", False), "engine_family": "elasticsearch"}
+    if fam == "redis":
+        name = str(body.get("username", "")).strip()
+        u, err = rdn.acl_getuser(cfg, user, pwd, name)
+        if err:
+            return {"error": err}
+        return {"user": u["name"], "enabled": u.get("enabled", True), "commands": u.get("commands", ""),
+                "keys": u.get("keys", ""), "channels": u.get("channels", ""), "engine_family": "redis"}
     target = validate_target(engine, body["username"])
 
     if fam == "mysql":
@@ -549,14 +572,40 @@ def api_create_user(body):
     cfg, err = get_config(body)
     if err:
         return {"error": err}
-    require_fields(body, "admin_user", "admin_pass", "username")
     adm_user = body.get("admin_user", "")
     adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
     fam = engine_family(engine)
     if fam in ("elasticsearch", "redis"):
-        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
+        require_fields(body, "username")
+    else:
+        require_fields(body, "admin_user", "admin_pass", "username")
+
+    if fam == "elasticsearch":
+        name = validate_ident(str(body["username"]), "username")
+        password = body.get("password") or generate_password()
+        roles = body.get("roles") or []
+        ok, err = esn.create_user(cfg, adm_user, adm_pass, name, password, roles)
+        if not ok:
+            return {"error": err}
+        audit(env, "elasticsearch", "CREATE USER", f"{name} roles={roles}")
+        return {"ok": True, "password": password}
+
+    if fam == "redis":
+        name = validate_ident(str(body["username"]), "username")
+        password = body.get("password") or generate_password()
+        keypat = str(body.get("key_pattern") or "*")
+        keypat = keypat if keypat.startswith("~") else "~" + keypat
+        level = body.get("acl_level", "read")
+        cmds = {"read": "+@read", "write": "+@read +@write", "all": "+@all"}.get(level, "+@read")
+        rules = ["on", f">{password}", keypat] + cmds.split()
+        ok, err = rdn.acl_setuser(cfg, adm_user, adm_pass, name, rules)
+        if err:
+            return {"error": err}
+        audit(env, "redis", "CREATE ACL USER", f"{name} {level} {keypat}")
+        return {"ok": True, "password": password}
+
     target = validate_target(engine, body["username"])
     password = body.get("password") or generate_password()
 
@@ -598,14 +647,28 @@ def api_reset_password(body):
     cfg, err = get_config(body)
     if err:
         return {"error": err}
-    require_fields(body, "admin_user", "admin_pass", "username")
+    require_fields(body, "username")
     adm_user = body.get("admin_user", "")
     adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
     fam = engine_family(engine)
-    if fam in ("elasticsearch", "redis"):
-        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
+    if fam == "elasticsearch":
+        name = validate_ident(str(body["username"]), "username")
+        password = body.get("password") or generate_password()
+        ok, err = esn.set_password(cfg, adm_user, adm_pass, name, password)
+        if not ok:
+            return {"error": err}
+        audit(env, "elasticsearch", "RESET PASSWORD", name)
+        return {"ok": True, "password": password}
+    if fam == "redis":
+        name = validate_ident(str(body["username"]), "username")
+        password = body.get("password") or generate_password()
+        res, err = rdn.acl_setuser(cfg, adm_user, adm_pass, name, ["resetpass", f">{password}"])
+        if err:
+            return {"error": err}
+        audit(env, "redis", "RESET PASSWORD", name)
+        return {"ok": True, "password": password}
     target = validate_target(engine, body["username"])
     password = body.get("password") or generate_password()
 
@@ -639,18 +702,43 @@ def api_reset_password(body):
         return {"error": err or out}
 
 
+def _acl_rule_ok(rule):
+    r = str(rule or "").strip()
+    return bool(r) and len(r) <= 256 and " " not in r and "\x00" not in r
+
+
 def api_grant(body):
     cfg, err = get_config(body)
     if err:
         return {"error": err}
-    require_fields(body, "admin_user", "admin_pass", "username")
+    require_fields(body, "username")
     adm_user = body.get("admin_user", "")
     adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
     fam = engine_family(engine)
-    if fam in ("elasticsearch", "redis"):
-        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
+    if fam == "elasticsearch":
+        name = validate_ident(str(body["username"]), "username")
+        add = [str(x) for x in (body.get("roles") or [])]
+        cur, err = esn.user_info(cfg, adm_user, adm_pass, name)
+        if err:
+            return {"error": err}
+        new_roles = sorted(set(cur.get("roles", [])) | set(add))
+        ok, err = esn.set_roles(cfg, adm_user, adm_pass, name, new_roles)
+        if not ok:
+            return {"error": err}
+        audit(env, "elasticsearch", "GRANT", f"{name} += {add}")
+        return {"ok": True}
+    if fam == "redis":
+        name = validate_ident(str(body["username"]), "username")
+        rule = str(body.get("rule", "")).strip()
+        if not _acl_rule_ok(rule):
+            return {"error": "Invalid ACL rule"}
+        res, err = rdn.acl_setuser(cfg, adm_user, adm_pass, name, [rule])
+        if err:
+            return {"error": err}
+        audit(env, "redis", "GRANT", f"{name} {rule}")
+        return {"ok": True}
     target = validate_target(engine, body["username"])
 
     if fam == "sqlite":
@@ -699,14 +787,34 @@ def api_revoke(body):
     cfg, err = get_config(body)
     if err:
         return {"error": err}
-    require_fields(body, "admin_user", "admin_pass", "username")
+    require_fields(body, "username")
     adm_user = body.get("admin_user", "")
     adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
     fam = engine_family(engine)
-    if fam in ("elasticsearch", "redis"):
-        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
+    if fam == "elasticsearch":
+        name = validate_ident(str(body["username"]), "username")
+        rem = {str(x) for x in (body.get("roles") or [])}
+        cur, err = esn.user_info(cfg, adm_user, adm_pass, name)
+        if err:
+            return {"error": err}
+        new_roles = sorted(set(cur.get("roles", [])) - rem)
+        ok, err = esn.set_roles(cfg, adm_user, adm_pass, name, new_roles)
+        if not ok:
+            return {"error": err}
+        audit(env, "elasticsearch", "REVOKE", f"{name} -= {sorted(rem)}")
+        return {"ok": True}
+    if fam == "redis":
+        name = validate_ident(str(body["username"]), "username")
+        rule = str(body.get("rule", "")).strip()
+        if not _acl_rule_ok(rule):
+            return {"error": "Invalid ACL rule"}
+        res, err = rdn.acl_setuser(cfg, adm_user, adm_pass, name, [rule])
+        if err:
+            return {"error": err}
+        audit(env, "redis", "REVOKE", f"{name} {rule}")
+        return {"ok": True}
     target = validate_target(engine, body["username"])
 
     if fam == "sqlite":
@@ -755,14 +863,26 @@ def api_drop_user(body):
     cfg, err = get_config(body)
     if err:
         return {"error": err}
-    require_fields(body, "admin_user", "admin_pass", "username")
+    require_fields(body, "username")
     adm_user = body.get("admin_user", "")
     adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
     fam = engine_family(engine)
-    if fam in ("elasticsearch", "redis"):
-        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
+    if fam == "elasticsearch":
+        name = validate_ident(str(body["username"]), "username")
+        ok, err = esn.delete_user(cfg, adm_user, adm_pass, name)
+        if not ok:
+            return {"error": err}
+        audit(env, "elasticsearch", "DELETE USER", name)
+        return {"ok": True}
+    if fam == "redis":
+        name = validate_ident(str(body["username"]), "username")
+        res, err = rdn.acl_deluser(cfg, adm_user, adm_pass, name)
+        if err:
+            return {"error": err}
+        audit(env, "redis", "DELETE ACL USER", name)
+        return {"ok": True, "deleted": res.get("deleted", 0)}
     target = validate_target(engine, body["username"])
 
     if fam == "sqlite":
