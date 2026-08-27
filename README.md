@@ -17,7 +17,7 @@ Works with DocumentDB/MongoDB, PostgreSQL (Aurora and friends), MySQL/MariaDB, a
 
 ## Running it
 
-You need [uv](https://docs.astral.sh/uv/), plus the clients for whatever you connect to: mongosh, psql, mysql, sqlite3.
+You need [uv](https://docs.astral.sh/uv/). DocumentDB and PostgreSQL talk to the server through bundled native drivers (pymongo, psycopg), so mongosh and psql are only needed for the free-form query console. MySQL/MariaDB and SQLite still use their `mysql` / `sqlite3` clients.
 
 ```sh
 make setup
@@ -57,6 +57,8 @@ Credentials are saved per env + engine, with optional macOS Keychain storage. En
 ## Notes for hacking on it
 
 - the web server reads index.html from disk on every request, so UI edits are just a browser refresh. `make dev` restarts on py changes too
-- queries go through a warm mongosh session (PTY based). The first one pays the connection cost, the rest take milliseconds
+- DocumentDB and PostgreSQL structured operations go through pooled native drivers (`warden_core/mongo_native.py` via pymongo, `warden_core/pg_native.py` via psycopg). Pooling means repeated ops (navigation, background refresh) skip the per-call connection cost, and a real pool makes concurrent requests safe. The mongosh/psql subprocesses are only used for the free-form query console (arbitrary JS/SQL a structured driver shouldn't run). If a driver isn't importable, that engine transparently falls back to its subprocess
+- the pg pool pre-flights one direct connect so a wrong password fails in milliseconds instead of the pool retrying for its whole timeout window
+- the query console uses a warm mongosh session (PTY based). The first one pays the connection cost, the rest take milliseconds
 - mongosh has no `--db` flag and silently ignores it. The target db goes in the connection URI path. Don't "fix" that
 - the desktop app needs private_mode off and a fixed port, otherwise localStorage resets every launch

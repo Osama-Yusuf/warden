@@ -59,6 +59,9 @@ build-desktop: $(PY)
 	$(VENV)/bin/pyinstaller --noconfirm --clean --windowed --name warden \
 		--icon packages/desktop/assets/warden.icns \
 		--add-data "packages/web/src/warden_web/static:warden_web/static" \
+		--collect-submodules pymongo --collect-submodules bson \
+		--collect-submodules psycopg --collect-submodules psycopg_pool \
+		--collect-all psycopg_binary \
 		packages/desktop/src/warden_desktop/main.py
 	@rm -f warden.spec
 	@echo "\nBundle: dist/warden.app (macOS) / dist/warden/ (other OS)"
