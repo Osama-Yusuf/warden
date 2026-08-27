@@ -19,7 +19,8 @@ Credentials:
   --admin-user / --admin-pass flags, or you'll be prompted.
 
 Requirements:
-  mongosh (DocumentDB)  |  psql (PostgreSQL)
+  Structured commands use bundled native drivers (pymongo / psycopg). mongosh
+  and psql are only needed for the free-form query console.
 """
 
 import argparse
@@ -46,6 +47,7 @@ from warden_core import (
     pg_query,
     run_cmd,
 )
+from warden_core import mongo_native as mn
 
 # ---------------------------------------------------------------------------
 # Rich (optional). Nice output when installed, plain text fallback otherwise
@@ -206,17 +208,40 @@ class DocumentDB:
         except json.JSONDecodeError as e:
             return None, f"JSON parse error: {e}\nRaw: {out[:300]}"
 
+    # Native pymongo path: same warden_core module the web/desktop app uses.
+    # Skips the ~2s mongosh (node) cold start per command. Falls back to the
+    # mongosh subprocess if pymongo isn't importable.
+    def _native(self):
+        return mn.available()
+
+    def _write(self, native_call, js):
+        """Run a write natively (returns (ok, err)) or via mongosh, normalized
+        to the (code, out, err) shape the callers already handle."""
+        if self._native():
+            ok, err = native_call()
+            return (0 if ok else 1), "", (err or "")
+        return self._eval(js, "admin")
+
     def test_connection(self):
         with console.status("Testing DocumentDB connection..."):
-            code, out, err = self._eval("db.runCommand({ping:1})")
-        if code == 0 and "ok" in out.lower():
+            if self._native():
+                whoami, err = mn.ping(self.config, self.admin_user, self.admin_pass)
+                ok = err is None
+            else:
+                code, out, err2 = self._eval("db.runCommand({ping:1})")
+                ok = code == 0 and "ok" in out.lower()
+                err = err2 or out
+        if ok:
             console.print("[success]  Connected successfully[/]")
             return True
-        console.print(f"[danger]  Connection failed:[/] {err or out}")
+        console.print(f"[danger]  Connection failed:[/] {err}")
         return False
 
     def list_users(self):
-        data, err = self._eval_json("db.adminCommand({usersInfo:1}).users", "admin")
+        if self._native():
+            data, err = mn.users_info(self.config, self.admin_user, self.admin_pass)
+        else:
+            data, err = self._eval_json("db.adminCommand({usersInfo:1}).users", "admin")
         if err:
             console.print(f"[danger]Error:[/] {err}")
             return []
@@ -248,17 +273,25 @@ class DocumentDB:
         )
 
     def user_info(self, username):
-        data, err = self._eval_json(
-            f'db.adminCommand({{usersInfo: {js_string(username)}}}).users', "admin"
-        )
-        if err:
-            console.print(f"[danger]Error:[/] {err}")
-            return None
-        if not data:
-            console.print(f"[warning]  User '{username}' not found[/]")
-            return None
-
-        user = data[0]
+        if self._native():
+            user, err = mn.user_info(self.config, self.admin_user, self.admin_pass, username)
+            if err == "User not found":
+                console.print(f"[warning]  User '{username}' not found[/]")
+                return None
+            if err:
+                console.print(f"[danger]Error:[/] {err}")
+                return None
+        else:
+            data, err = self._eval_json(
+                f'db.adminCommand({{usersInfo: {js_string(username)}}}).users', "admin"
+            )
+            if err:
+                console.print(f"[danger]Error:[/] {err}")
+                return None
+            if not data:
+                console.print(f"[warning]  User '{username}' not found[/]")
+                return None
+            user = data[0]
         roles = user.get("roles", [])
         role_lines = "\n".join(
             f"  {r['role']:20s} on {r.get('db', '*')}" for r in roles
@@ -293,7 +326,8 @@ class DocumentDB:
             console.print("[muted]  Cancelled[/]")
             return False
 
-        code, out, err = self._eval(js, "admin")
+        code, out, err = self._write(
+            lambda: mn.create_user(self.config, self.admin_user, self.admin_pass, username, password, roles), js)
         if code == 0:
             console.print(f"[success]  User '{username}' created[/]")
             audit(self.env, self.engine, "CREATE USER", f"{username} roles={roles}")
@@ -311,7 +345,8 @@ class DocumentDB:
             console.print("[muted]  Cancelled[/]")
             return False
 
-        code, out, err = self._eval(js, "admin")
+        code, out, err = self._write(
+            lambda: mn.update_password(self.config, self.admin_user, self.admin_pass, username, new_password), js)
         if code == 0:
             console.print(f"[success]  Password updated for '{username}'[/]")
             audit(self.env, self.engine, "RESET PASSWORD", username)
@@ -334,7 +369,8 @@ class DocumentDB:
             console.print("[muted]  Cancelled[/]")
             return False
 
-        code, out, err = self._eval(js, "admin")
+        code, out, err = self._write(
+            lambda: mn.grant_roles(self.config, self.admin_user, self.admin_pass, username, roles), js)
         if code == 0:
             console.print(f"[success]  Roles granted[/]")
             audit(self.env, self.engine, "GRANT", f"{username} += {roles}")
@@ -357,7 +393,8 @@ class DocumentDB:
             console.print("[muted]  Cancelled[/]")
             return False
 
-        code, out, err = self._eval(js, "admin")
+        code, out, err = self._write(
+            lambda: mn.revoke_roles(self.config, self.admin_user, self.admin_pass, username, roles), js)
         if code == 0:
             console.print(f"[success]  Roles revoked[/]")
             audit(self.env, self.engine, "REVOKE", f"{username} -= {roles}")
@@ -375,7 +412,9 @@ class DocumentDB:
             console.print("[muted]  Cancelled[/]")
             return False
 
-        code, out, err = self._eval(f'db.dropUser({js_string(username)})', "admin")
+        code, out, err = self._write(
+            lambda: mn.drop_user(self.config, self.admin_user, self.admin_pass, username),
+            f'db.dropUser({js_string(username)})')
         if code == 0:
             console.print(f"[success]  User '{username}' dropped[/]")
             audit(self.env, self.engine, "DROP USER", username)
@@ -384,7 +423,10 @@ class DocumentDB:
         return False
 
     def list_databases(self):
-        data, err = self._eval_json("db.adminCommand({listDatabases:1}).databases", "admin")
+        if self._native():
+            data, err = mn.list_databases(self.config, self.admin_user, self.admin_pass)
+        else:
+            data, err = self._eval_json("db.adminCommand({listDatabases:1}).databases", "admin")
         if err:
             console.print(f"[danger]Error:[/] {err}")
             return
@@ -398,7 +440,10 @@ class DocumentDB:
         )
 
     def list_collections(self, database):
-        data, err = self._eval_json("db.getCollectionNames()", database)
+        if self._native():
+            data, err = mn.collection_names(self.config, self.admin_user, self.admin_pass, database)
+        else:
+            data, err = self._eval_json("db.getCollectionNames()", database)
         if err:
             console.print(f"[danger]Error:[/] {err}")
             return
