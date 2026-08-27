@@ -9,6 +9,7 @@ Works with DocumentDB/MongoDB, PostgreSQL (Aurora and friends), MySQL/MariaDB, p
 ## What it does
 
 - manage users: create, drop, reset passwords, grant and revoke with confirmation
+- smart filters on the users, databases, and collection lists: type `field:value` (`role:kibana_admin`, `size:>100mb`, `status:disabled`) with autocomplete, one-click preset chips per engine, and a live result count
 - data browser: rows & columns for any table/collection/index (or a key browser for Redis), with server-side search, sortable size, and safe in-grid CRUD that's locked by default and confirms exactly what it'll run
 - query console with a plain-english preview ("Updates ONE document in orders where _id = ...") and a danger badge before anything runs
 - security audits: who's admin, who can write where, dead accounts. Exclude the known ones so only real issues show up
