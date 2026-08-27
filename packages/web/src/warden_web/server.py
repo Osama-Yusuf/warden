@@ -56,9 +56,13 @@ from warden_core import (
 )
 from warden_core import mongo_native as mn
 from warden_core import pg_native as pn
+from warden_core import es_native as esn
+from warden_core import redis_native as rdn
 
 USE_NATIVE_MONGO = mn.available()
 USE_NATIVE_PG = pn.available()
+USE_NATIVE_ES = esn.available()
+USE_NATIVE_REDIS = rdn.available()
 
 DEFAULT_HOST = os.environ.get("WARDEN_WEB_HOST", "127.0.0.1")
 DEFAULT_PORT = int(os.environ.get("WARDEN_WEB_PORT", "8642"))
@@ -83,8 +87,10 @@ def require_fields(body, *fields):
 
 
 def require_creds(body):
-    """Admin credentials, except for SQLite where there are none."""
-    if engine_family(body.get("engine", "")) == "sqlite":
+    """Admin credentials, except where auth is absent or optional: SQLite has no
+    accounts, and Elasticsearch/Redis may be unauthenticated or password-only, so
+    whatever creds are supplied are passed straight to the driver."""
+    if engine_family(body.get("engine", "")) in ("sqlite", "elasticsearch", "redis"):
         return
     require_fields(body, "admin_user", "admin_pass")
 
@@ -254,6 +260,20 @@ def api_connect(body):
         if code != 0:
             return {"ok": False, "error": err or "Could not open the database file"}
         return {"ok": True, "host": str(db_path), "user": ""}
+    if fam == "elasticsearch":
+        if not USE_NATIVE_ES:
+            return {"ok": False, "error": "Elasticsearch needs the native driver (urllib3)"}
+        whoami, err = esn.ping(cfg, user, pwd)
+        if err:
+            return {"ok": False, "error": err}
+        return {"ok": True, "host": cfg["host"], "user": whoami}
+    if fam == "redis":
+        if not USE_NATIVE_REDIS:
+            return {"ok": False, "error": "Redis needs the native driver (redis-py)"}
+        whoami, err = rdn.ping(cfg, user, pwd)
+        if err:
+            return {"ok": False, "error": err}
+        return {"ok": True, "host": cfg["host"], "user": whoami}
     code, out, err = pg_query(cfg, user, pwd, "SELECT current_user")
     if code != 0:
         return {"ok": False, "error": err or "Connection failed"}
@@ -270,6 +290,8 @@ def api_test_login(body):
     fam = engine_family(engine)
     if fam == "sqlite":
         return {"error": "SQLite has no user accounts to test"}
+    if fam in ("elasticsearch", "redis"):
+        return {"error": "Login testing for this engine is coming in the next pass."}
     require_fields(body, "test_user", "test_pass")
     tu = body["test_user"]
     tp = body["test_pass"]
@@ -351,6 +373,10 @@ def api_list_users(body):
     engine = body.get("engine", "documentdb")
     fam = engine_family(engine)
 
+    if fam in ("elasticsearch", "redis"):
+        label = "Elasticsearch" if fam == "elasticsearch" else "Redis"
+        return {"users": [], "note": f"User & role management for {label} is coming in the next pass."}
+
     if fam == "mysql":
         sql = ("SELECT user, host, account_locked FROM mysql.user "
                "WHERE user NOT IN ('mysql.sys','mysql.session','mysql.infoschema',"
@@ -423,6 +449,8 @@ def api_user_info(body):
     pwd = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     fam = engine_family(engine)
+    if fam in ("elasticsearch", "redis"):
+        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
     target = validate_target(engine, body["username"])
 
     if fam == "mysql":
@@ -527,6 +555,8 @@ def api_create_user(body):
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
     fam = engine_family(engine)
+    if fam in ("elasticsearch", "redis"):
+        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
     target = validate_target(engine, body["username"])
     password = body.get("password") or generate_password()
 
@@ -574,6 +604,8 @@ def api_reset_password(body):
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
     fam = engine_family(engine)
+    if fam in ("elasticsearch", "redis"):
+        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
     target = validate_target(engine, body["username"])
     password = body.get("password") or generate_password()
 
@@ -617,6 +649,8 @@ def api_grant(body):
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
     fam = engine_family(engine)
+    if fam in ("elasticsearch", "redis"):
+        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
     target = validate_target(engine, body["username"])
 
     if fam == "sqlite":
@@ -671,6 +705,8 @@ def api_revoke(body):
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
     fam = engine_family(engine)
+    if fam in ("elasticsearch", "redis"):
+        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
     target = validate_target(engine, body["username"])
 
     if fam == "sqlite":
@@ -725,6 +761,8 @@ def api_drop_user(body):
     engine = body.get("engine", "documentdb")
     env = body.get("env", "production")
     fam = engine_family(engine)
+    if fam in ("elasticsearch", "redis"):
+        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
     target = validate_target(engine, body["username"])
 
     if fam == "sqlite":
@@ -759,6 +797,8 @@ def api_toggle_login(body):
         return {"error": err}
     engine = body.get("engine", "")
     fam = engine_family(engine)
+    if fam in ("elasticsearch", "redis"):
+        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
     if fam == "documentdb":
         return {"error": "Not applicable to DocumentDB"}
     if fam == "sqlite":
@@ -819,6 +859,24 @@ def api_list_databases(body):
         return {"databases": [{"name": db_path.name, "size_bytes": size,
                                "size_mb": round(size / 1048576, 1)}]}
 
+    if fam == "elasticsearch":
+        # ES has no databases; the cluster is one logical "database" whose
+        # "collections" are the indices.
+        name, err = esn.cluster_name(cfg, adm_user, adm_pass)
+        if err:
+            return {"error": err}
+        health, _herr = esn.cluster_health(cfg, adm_user, adm_pass)
+        size = (health or {}).get("size_bytes") or 0
+        return {"databases": [{"name": name, "size_bytes": int(size),
+                               "size_mb": round(int(size) / 1048576, 1)}]}
+
+    if fam == "redis":
+        data, err = rdn.list_databases(cfg, adm_user, adm_pass)
+        if err:
+            return {"error": err}
+        return {"databases": [{"name": d["name"], "size_bytes": d.get("size_bytes"),
+                               "keys": d.get("keys")} for d in (data or [])]}
+
     if fam == "documentdb":
         data, err = (mn.list_databases(cfg, adm_user, adm_pass) if USE_NATIVE_MONGO
                      else docdb_eval(cfg, adm_user, adm_pass, "db.adminCommand({listDatabases:1}).databases"))
@@ -867,6 +925,22 @@ def api_list_collections(body):
     adm_pass = body.get("admin_pass", "")
     engine = body.get("engine", "documentdb")
     fam = engine_family(engine)
+
+    if fam == "elasticsearch":
+        data, err = esn.list_indices(cfg, adm_user, adm_pass)
+        if err:
+            return {"error": err}
+        return {"collections": [{"name": d["name"], "size_bytes": d.get("size_bytes"),
+                                 "docs": d.get("docs")} for d in (data or [])]}
+
+    if fam == "redis":
+        database = validate_ident(body.get("database", "db0"), "database")
+        data, err = rdn.list_namespaces(cfg, adm_user, adm_pass, database)
+        if err:
+            return {"error": err}
+        return {"collections": [{"name": d["name"], "size_bytes": d.get("size_bytes"),
+                                 "keys": d.get("keys")} for d in (data or [])]}
+
     if fam == "sqlite":
         db_path = Path(cfg["path"])
         code, out, err = sq_query(db_path,
@@ -991,6 +1065,25 @@ def api_browse_data(body):
         if err:
             return {"error": err}
         return shape("documentdb", res)
+
+    if fam == "elasticsearch":
+        index = str(body.get("collection", "")).strip()
+        if not index or "\x00" in index or "," in index or index.startswith("_"):
+            return {"error": "Invalid index name"}
+        res, err = esn.search_docs(cfg, adm_user, adm_pass, index, limit, offset, search=search)
+        if err:
+            return {"error": err}
+        return shape("elasticsearch", res)
+
+    if fam == "redis":
+        database = validate_ident(body.get("database", "db0"), "database")
+        namespace = str(body.get("collection", "*")).strip() or "*"
+        if len(namespace) > 256 or "\x00" in namespace:
+            return {"error": "Invalid key namespace"}
+        res, err = rdn.scan_keys(cfg, adm_user, adm_pass, database, namespace, limit, offset, search=search)
+        if err:
+            return {"error": err}
+        return shape("redis", res)
 
     if fam == "postgresql":
         database = validate_ident(body.get("database", ""), "database")
@@ -1129,6 +1222,20 @@ def api_object_stats(body):
         if err:
             return {"error": err}
         return {"engine": "documentdb", "stats": st}
+
+    if fam == "elasticsearch":
+        index = str(body.get("collection", "")).strip()
+        st, err = esn.index_stats(cfg, adm_user, adm_pass, index)
+        if err:
+            return {"error": err}
+        return {"engine": "elasticsearch", "stats": st}
+
+    if fam == "redis":
+        database = validate_ident(body.get("database", "db0"), "database")
+        st, err = rdn.db_stats(cfg, adm_user, adm_pass, database)
+        if err:
+            return {"error": err}
+        return {"engine": "redis", "stats": st}
 
     if fam == "postgresql":
         if not USE_NATIVE_PG:
@@ -1335,6 +1442,20 @@ def api_row_delete(body):
 
 MAX_QUERY_LEN = 20000
 MAX_OUTPUT_LEN = 300000
+
+# Redis commands that only read — used to gate the console in read-only mode.
+REDIS_READ_CMDS = {
+    "GET", "MGET", "STRLEN", "GETRANGE", "SUBSTR", "GETBIT", "BITCOUNT",
+    "EXISTS", "TYPE", "TTL", "PTTL", "EXPIRETIME", "PEXPIRETIME", "OBJECT",
+    "KEYS", "SCAN", "HSCAN", "SSCAN", "ZSCAN", "RANDOMKEY", "DBSIZE",
+    "HGET", "HMGET", "HGETALL", "HKEYS", "HVALS", "HLEN", "HEXISTS", "HSTRLEN",
+    "LRANGE", "LLEN", "LINDEX", "LPOS",
+    "SMEMBERS", "SCARD", "SISMEMBER", "SMISMEMBER", "SRANDMEMBER", "SINTER", "SUNION", "SDIFF",
+    "ZRANGE", "ZREVRANGE", "ZRANGEBYSCORE", "ZRANGEBYLEX", "ZCARD", "ZSCORE",
+    "ZRANK", "ZREVRANK", "ZCOUNT", "ZMSCORE",
+    "XLEN", "XRANGE", "XREVRANGE", "XINFO",
+    "INFO", "MEMORY", "PING", "ECHO", "TIME", "LOLWUT", "COMMAND",
+}
 
 CURSOR_CALL_RE = re.compile(r'\.(find|aggregate)\s*\(')
 CURSOR_CONSUMED_RE = re.compile(r'\.(toArray|forEach|itcount|explain|next|size|map)\s*\(')
@@ -1677,6 +1798,42 @@ def api_query(body):
             return {"ok": False, "database": database, "data": None, "output": "",
                     "error": violation, "truncated": False, "mode": "read-only"}
 
+    fam = engine_family(engine)
+
+    if fam == "elasticsearch":
+        # The console runs a Query DSL body via _search against the given index
+        # (the console's "database" field). _search never mutates, so it's safe.
+        index = database or "_all"
+        try:
+            dsl = json.loads(query) if query.strip().startswith("{") else {"query": {"query_string": {"query": query}}}
+        except (json.JSONDecodeError, ValueError) as e:
+            return {"ok": False, "database": index, "data": None, "output": "",
+                    "error": f"Invalid JSON query: {e}", "truncated": False, "mode": "syntax"}
+        audit(env, "elasticsearch", "SEARCH", f"{index} :: {query[:300]}")
+        data, err = esn.raw_search(cfg, adm_user, adm_pass, index, dsl)
+        if err:
+            return {"ok": False, "database": index, "data": None, "output": "",
+                    "error": err, "truncated": False, "mode": "native"}
+        out = json.dumps(data, indent=2)[:MAX_OUTPUT_LEN]
+        return {"ok": True, "database": index, "data": data, "output": out,
+                "error": "", "truncated": len(out) >= MAX_OUTPUT_LEN, "mode": "native"}
+
+    if fam == "redis":
+        db = database or "db0"
+        if body.get("read_only") and query.split()[0].upper() not in REDIS_READ_CMDS:
+            return {"ok": False, "database": db, "data": None, "output": "",
+                    "error": f"Read-only mode: '{query.split()[0]}' can modify data and is blocked.",
+                    "truncated": False, "mode": "read-only"}
+        audit(env, "redis", "COMMAND", f"{db} :: {query[:300]}")
+        data, err = rdn.run_command(cfg, adm_user, adm_pass, db, query)
+        if err:
+            return {"ok": False, "database": db, "data": None, "output": "",
+                    "error": err, "truncated": False, "mode": "native"}
+        out = data if isinstance(data, str) else json.dumps(data, indent=2, default=str)
+        out = (out or "")[:MAX_OUTPUT_LEN]
+        return {"ok": True, "database": db, "data": data, "output": out,
+                "error": "", "truncated": False, "mode": "native"}
+
     if engine.startswith("document"):
         db = database or "admin"
         if not _js_balanced(query):
@@ -1900,6 +2057,8 @@ def api_audit_run(body):
     scanned = 0
 
     fam = engine_family(engine)
+    if fam in ("elasticsearch", "redis"):
+        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
     if fam == "mysql":
         sql = ("SELECT user, host, account_locked, Super_priv, Grant_priv, Create_user_priv, "
                "Insert_priv, Update_priv, Delete_priv, Drop_priv FROM mysql.user "
@@ -2078,6 +2237,16 @@ def api_health(body):
     engine = body.get("engine", "documentdb")
 
     fam = engine_family(engine)
+    if fam == "elasticsearch":
+        data, err = esn.cluster_health(cfg, adm_user, adm_pass)
+        if err:
+            return {"error": err}
+        return {"engine": "elasticsearch", "health": data}
+    if fam == "redis":
+        data, err = rdn.info_health(cfg, adm_user, adm_pass)
+        if err:
+            return {"error": err}
+        return {"engine": "redis", "health": data}
     if fam == "mysql":
         health = {}
         checks = {
@@ -2387,7 +2556,9 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, ValueError):
             self._json_response({"error": "Invalid JSON"}, 400)
             return
-        if path in REQUIRES_CREDS and engine_family(body.get("engine", "")) != "sqlite":
+        # SQLite has no accounts; Elasticsearch/Redis may be unauthenticated or
+        # password-only, so their drivers handle whatever creds are supplied.
+        if path in REQUIRES_CREDS and engine_family(body.get("engine", "")) not in ("sqlite", "elasticsearch", "redis"):
             if not body.get("admin_user") or not body.get("admin_pass"):
                 self._json_response({"error": "Admin credentials required"}, 401)
                 return
