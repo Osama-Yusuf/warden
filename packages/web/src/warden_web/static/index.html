@@ -461,6 +461,71 @@ th.sortable .arrow { font-size: 8px; margin-left: 3px; }
   border: 1px dashed var(--border); border-radius: var(--radius);
 }
 
+/* ── Data browser (grid) ── */
+#dataModal { z-index: 130; align-items: stretch; justify-content: center; padding: 3vh 3vw; }
+#cellModal { z-index: 140; }
+.data-modal {
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 12px; box-shadow: var(--shadow);
+  width: 100%; max-width: 1680px; height: 100%;
+  display: flex; flex-direction: column; overflow: hidden; animation: pop 0.16s ease;
+}
+.dg-head {
+  display: flex; align-items: center; gap: 14px; padding: 14px 18px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.dg-title { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.dg-title .name { font-family: var(--mono-font); font-size: 13.5px; font-weight: 600; color: var(--text-strong);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dg-title .badge { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--accent); background: rgba(88,166,255,0.12); padding: 2px 7px; border-radius: 5px; flex-shrink: 0; }
+.dg-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
+.dg-tools select { height: 30px; }
+.dg-body { flex: 1; overflow: auto; position: relative; background: var(--bg); }
+table.dgrid { border-collapse: separate; border-spacing: 0; font-size: 12.5px; width: max-content; min-width: 100%; }
+table.dgrid thead th {
+  position: sticky; top: 0; z-index: 3; background: var(--surface-2);
+  color: var(--text-muted); text-align: left; font-weight: 600;
+  padding: 8px 12px; border-bottom: 1px solid var(--border-strong); border-right: 1px solid var(--border);
+  white-space: nowrap; text-transform: none; letter-spacing: 0;
+}
+table.dgrid thead th .coltype { color: var(--text-muted); opacity: 0.6; font-weight: 400; font-size: 10.5px; margin-left: 6px; }
+table.dgrid thead th.dg-corner { left: 0; z-index: 5; width: 1%; }
+table.dgrid td {
+  padding: 6px 12px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border);
+  max-width: 420px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text); font-family: var(--mono-font);
+}
+table.dgrid td.dg-cell { cursor: pointer; }
+table.dgrid tbody tr:hover > td { background: var(--surface-hover); }
+.dg-rownum {
+  position: sticky; left: 0; z-index: 2; background: var(--surface-2);
+  color: var(--text-muted); text-align: right; font-size: 11px; user-select: none; width: 1%;
+}
+table.dgrid tbody tr:hover .dg-rownum { background: var(--surface-hover); }
+.dg-null { color: var(--text-muted); font-style: italic; opacity: 0.65; }
+.dg-num { color: var(--accent); }
+.dg-bool { display: inline-block; padding: 0 7px; border-radius: 10px; font-size: 11px;
+  font-family: var(--font); line-height: 17px; }
+.dg-bool.t { background: rgba(63,185,80,0.16); color: var(--success); }
+.dg-bool.f { color: var(--text-muted); background: var(--surface-hover); }
+.dg-json { color: var(--warning); }
+.dg-empty { color: var(--text-muted); }
+.dg-foot {
+  display: flex; align-items: center; gap: 14px; padding: 9px 18px;
+  border-top: 1px solid var(--border); flex-shrink: 0; font-size: 12px; color: var(--text-muted);
+}
+.dg-foot .count { font-variant-numeric: tabular-nums; }
+.dg-pager { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.dg-pager .range { font-variant-numeric: tabular-nums; min-width: 130px; text-align: right; }
+.dg-skelrow td { padding: 7px 12px; }
+.cell-view { max-width: 720px; width: 90%; }
+.cell-view pre {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px; font-family: var(--mono-font); font-size: 12.5px; line-height: 1.55;
+  color: var(--mono); max-height: 60vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
+
 /* ── Query console ── */
 .query-input {
   width: 100%; min-height: 120px; resize: vertical;
@@ -585,6 +650,29 @@ th.sortable .arrow { font-size: 8px; margin-left: 3px; }
   </div>
 </div>
 
+<!-- Data browser (rows & columns grid) -->
+<div class="modal-overlay" id="dataModal">
+  <div class="data-modal">
+    <div class="dg-head">
+      <div class="dg-title" id="dgTitle"></div>
+      <div class="dg-tools" id="dgTools"></div>
+      <button class="btn btn-ghost btn-sm" onclick="closeDataModal()" title="Close (Esc)">&times; Close</button>
+    </div>
+    <div class="dg-body" id="dgBody"></div>
+    <div class="dg-foot" id="dgFoot"></div>
+  </div>
+</div>
+
+<!-- Single-cell detail viewer -->
+<div class="modal-overlay" id="cellModal">
+  <div class="modal cell-view">
+    <button class="modal-x" onclick="document.getElementById('cellModal').classList.remove('open')" title="Close">&times;</button>
+    <h3 id="cellTitle" style="margin-top:0; padding-right:34px; font-family:var(--mono-font); font-size:13px"></h3>
+    <pre id="cellBody"></pre>
+    <div class="actions"><button class="btn btn-ghost btn-sm" onclick="dgCopyCell()">Copy</button></div>
+  </div>
+</div>
+
 <!-- ── Toasts ── -->
 <div class="toast-container" id="toasts"></div>
 
@@ -646,6 +734,15 @@ function engineFamily(e) {
   if (e.includes('mysql') || e.includes('maria')) return 'mysql';
   if (e.includes('sqlite')) return 'sqlite';
   return 'postgresql';
+}
+
+// Pretty display name for an engine key. Only the mongo family gets renamed
+// (DocumentDB speaks the Mongo protocol); custom keys like "aurora-mysql" keep
+// their own name so the user's own labels survive.
+function engineLabel(e) {
+  const k = String(e || '');
+  if (k.toLowerCase().startsWith('document') || k.toLowerCase().includes('mongo')) return 'MongoDB';
+  return k.replace(/_/g, ' ');
 }
 
 function fmtSize(bytes) {
@@ -856,7 +953,7 @@ function updateEngines(restoring = false) {
   const engines = envEngines(env) || [];
   engSel.innerHTML = '';
   for (const e of engines) {
-    engSel.innerHTML += `<option value="${esc(e)}">${esc(e.replace(/_/g, ' '))}</option>`;
+    engSel.innerHTML += `<option value="${esc(e)}">${esc(engineLabel(e))}</option>`;
   }
   // Keep the currently selected engine when the new env also has it, since
   // switching env shouldn't silently flip postgresql back to documentdb.
@@ -930,7 +1027,7 @@ function renderNav() {
 function renderSidebarFoot() {
   const foot = document.getElementById('sidebarFoot');
   if (connected) {
-    foot.innerHTML = `${ICONS.bolt}<span>${esc(document.getElementById('envSelect').value)} · ${esc(currentEngine.replace(/_/g, ' '))}</span>`;
+    foot.innerHTML = `${ICONS.bolt}<span>${esc(document.getElementById('envSelect').value)} · ${esc(engineLabel(currentEngine))}</span>`;
   } else {
     foot.innerHTML = `${ICONS.lock}<span>connect to unlock operations</span>`;
   }
@@ -1194,7 +1291,7 @@ async function testConnection() {
       saveTargetCreds(u, document.getElementById('rememberChk').checked);
       savePassword(p);
       renderNav();
-      toast(`Connected · ${document.getElementById('envSelect').value} / ${currentEngine.replace(/_/g, ' ')}`, 'success');
+      toast(`Connected · ${document.getElementById('envSelect').value} / ${engineLabel(currentEngine)}`, 'success');
       refreshCache();
       const ids = navModel().map(i => i.id);
       const landing = (prefs.lastView && ids.includes(prefs.lastView)) ? prefs.lastView : ids[0];
@@ -1225,6 +1322,7 @@ function renderWelcome() {
 // ── Views ──
 
 let allUsers = [];
+let usersLoading = false;
 // Stale-while-revalidate cache: show the last result instantly, refresh behind it.
 const viewCache = new Map();
 function cacheKey(kind) { return `${document.getElementById('envSelect')?.value}:${currentEngine}:${kind}`; }
@@ -1235,9 +1333,11 @@ async function viewListUsers() {
   const key = cacheKey('users');
   const cached = viewCache.get(key);
   allUsers = cached || [];
+  usersLoading = !cached;  // first load has no data yet — show a skeleton, not "no users"
   renderUsersShell(!!cached);
   const res = await apiPost('/api/list-users').catch(() => ({ error: 'Request failed' }));
   if (currentView !== 'users' || cacheKey('users') !== key) return;  // navigated away
+  usersLoading = false;
   if (res.error) {
     if (!cached) setContent(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`);
     else { const h = document.getElementById('usersRefreshing'); if (h) h.textContent = 'refresh failed'; }
@@ -1251,7 +1351,7 @@ async function viewListUsers() {
 
 function renderUsersShell(fromCache) {
   const fam = engineFamily(currentEngine);
-  const title = fam === 'mysql' ? 'MySQL Accounts' : fam === 'documentdb' ? 'DocumentDB Users' : 'PostgreSQL Users';
+  const title = fam === 'mysql' ? 'MySQL Accounts' : fam === 'documentdb' ? 'MongoDB Users' : 'PostgreSQL Users';
   const isDocdb = fam === 'documentdb';
   const cols = isDocdb
     ? '<th>Username</th><th>Auth DB</th><th>Roles</th><th></th>'
@@ -1302,9 +1402,18 @@ function renderUserRows() {
         <td style="text-align:right">${manage(u)}</td></tr>`;
     }
   }
-  tbody.innerHTML = rows || `<tr><td colspan="5" style="color:var(--text-muted)">No matching users.</td></tr>`;
+  if (!rows && usersLoading) {
+    const ncols = isDocdb ? 4 : 5;
+    const cell = `<td><div class="skel" style="width:${60 + Math.floor(Math.random()*30)}%"></div></td>`;
+    rows = Array.from({ length: 4 }, () =>
+      `<tr>${cell.repeat(ncols)}</tr>`).join('');
+    tbody.innerHTML = rows;
+  } else {
+    const empty = q ? 'No users match your filter.' : 'No users on this connection yet.';
+    tbody.innerHTML = rows || `<tr><td colspan="5" style="color:var(--text-muted)">${empty}</td></tr>`;
+  }
   const c = document.getElementById('userCount');
-  if (c) c.textContent = q ? `${list.length} of ${allUsers.length}` : `${allUsers.length} total`;
+  if (c) c.textContent = usersLoading ? 'loading…' : (q ? `${list.length} of ${allUsers.length}` : `${allUsers.length} total`);
 }
 
 async function viewUserInfoFor(username) {
@@ -2006,12 +2115,15 @@ async function doListCollections() {
   if (res.error) { target.innerHTML = `<p style="color:var(--danger); margin-top:12px">${esc(res.error)}</p>`; return; }
   const act = (label, db, text, title) => `<button class="btn btn-ghost btn-sm" title="${esc(title)}"
     data-db="${esc(db)}" data-q="${esc(text)}" onclick="openQueryWith(this.dataset.db, this.dataset.q)">${label}</button>`;
+  const view = (db, extra) => `<button class="btn btn-primary btn-sm" title="Browse rows &amp; columns"
+    data-db="${esc(db)}" ${extra} onclick="openDataGrid(dgSpecFrom(this.dataset))">${ICONS.grid} View data</button>`;
   if (res.collections) {
     const collRef = c => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(c) ? `db.${c}` : `db.getCollection(${JSON.stringify(c)})`;
     const rows = res.collections.map(c => `<tr>
       <td class="mono">${esc(c)}</td>
       <td style="text-align:right; white-space:nowrap">
-        ${act('Sample', database, `${collRef(c)}.find({}).limit(5)`, 'Show 5 documents')}
+        ${view(database, `data-coll="${esc(c)}"`)}
+        ${act('Query', database, `${collRef(c)}.find({}).limit(5)`, 'Open in query console')}
         ${act('Count', database, `${collRef(c)}.estimatedDocumentCount()`, 'Fast document count')}
       </td></tr>`).join('');
     target.innerHTML = rows
@@ -2024,7 +2136,8 @@ async function doListCollections() {
       <td class="mono">${esc(t.schema)}</td><td class="mono">${esc(t.table)}</td>
       <td style="white-space:nowrap">${t.size_bytes != null ? fmtSize(t.size_bytes) : '—'}</td>
       <td style="text-align:right; white-space:nowrap">
-        ${act('Sample', database, `SELECT * FROM ${full} LIMIT 5;`, 'Show 5 rows')}
+        ${view(database, `data-schema="${esc(t.schema)}" data-table="${esc(t.table)}"`)}
+        ${act('Query', database, `SELECT * FROM ${full} LIMIT 5;`, 'Open in query console')}
         ${act('Count', database, `SELECT reltuples::bigint AS estimated_rows FROM pg_class WHERE oid = '${full}'::regclass;`, 'Fast row estimate')}
       </td></tr>`;
     }).join('');
@@ -2033,6 +2146,141 @@ async function doListCollections() {
       : `<div class="empty-state" style="margin-top:12px">No tables in this database</div>`;
   }
 }
+
+// ── Data browser (rows & columns grid) ──
+let dg = null;
+
+function dgSpecFrom(ds) {
+  const spec = { database: ds.db };
+  if (ds.coll) spec.collection = ds.coll;
+  else { spec.table = ds.table; if (ds.schema) spec.schema = ds.schema; }
+  return spec;
+}
+
+function openDataGrid(spec) {
+  // spec: {database, collection} (mongo) or {database, schema?, table} (sql)
+  if (!requireConnection()) return;
+  const name = spec.collection || (spec.schema ? `${spec.schema}.${spec.table}` : spec.table);
+  dg = { ...spec, name, limit: 50, offset: 0, total: null, columns: [], rows: [], loading: true, error: null };
+  document.getElementById('dataModal').classList.add('open');
+  renderDgChrome();
+  dgFetch();
+}
+
+function closeDataModal() {
+  document.getElementById('dataModal').classList.remove('open');
+  document.getElementById('cellModal').classList.remove('open');
+  dg = null;
+}
+
+async function dgFetch() {
+  if (!dg) return;
+  dg.loading = true;
+  renderDgBody(); renderDgFoot();
+  const payload = { database: dg.database, limit: dg.limit, offset: dg.offset };
+  if (dg.collection) payload.collection = dg.collection;
+  if (dg.table) { payload.table = dg.table; if (dg.schema) payload.schema = dg.schema; }
+  const res = await apiPost('/api/browse-data', payload).catch(() => ({ error: 'Request failed' }));
+  if (!dg) return;  // closed mid-flight
+  dg.loading = false;
+  if (res.error) { dg.error = res.error; }
+  else { dg.error = null; dg.columns = res.columns || []; dg.rows = res.rows || []; dg.total = res.total; }
+  renderDgBody(); renderDgFoot();
+}
+
+function renderDgChrome() {
+  const kind = dg.collection ? 'collection' : 'table';
+  const full = `${dg.database}.${dg.name}`;
+  document.getElementById('dgTitle').innerHTML =
+    `<span class="badge">${kind}</span><span class="name" title="${esc(full)}">${esc(full)}</span>`;
+  document.getElementById('dgTools').innerHTML = `
+    <label style="font-size:12px; color:var(--text-muted)">page size</label>
+    <select class="tb-select" onchange="dgSetLimit(this.value)">
+      ${[25,50,100,200].map(n => `<option value="${n}" ${n===dg.limit?'selected':''}>${n}</option>`).join('')}
+    </select>
+    <button class="btn btn-ghost btn-sm" onclick="dgFetch()" title="Refresh">↻</button>`;
+}
+
+function dgCellHtml(v) {
+  if (v === null || v === undefined) return '<span class="dg-null">NULL</span>';
+  const t = typeof v;
+  if (t === 'boolean') return `<span class="dg-bool ${v?'t':'f'}">${v}</span>`;
+  if (t === 'number') return `<span class="dg-num">${esc(String(v))}</span>`;
+  if (t === 'object') return `<span class="dg-json">${esc(JSON.stringify(v))}</span>`;
+  return esc(String(v));
+}
+
+function renderDgBody() {
+  const body = document.getElementById('dgBody');
+  if (!body || !dg) return;
+  if (dg.error) { body.innerHTML = `<div style="padding:24px; color:var(--danger)">${esc(dg.error)}</div>`; return; }
+  const cols = dg.columns;
+  if (dg.loading) {
+    const nc = cols.length || 5;
+    const head = `<thead><tr><th class="dg-corner"></th>${(cols.length ? cols.map(c=>`<th>${esc(c)}</th>`) : Array.from({length:nc},()=>'<th><div class="skel" style="width:80px"></div></th>')).join('')}</tr></thead>`;
+    const rows = Array.from({length:12}, () => `<tr class="dg-skelrow"><td class="dg-rownum"></td>${'<td><div class="skel" style="width:70%"></div></td>'.repeat(nc)}</tr>`).join('');
+    body.innerHTML = `<table class="dgrid">${head}<tbody>${rows}</tbody></table>`;
+    return;
+  }
+  if (!dg.rows.length) {
+    body.innerHTML = `<div class="dg-empty" style="padding:24px">No rows in this ${dg.collection ? 'collection' : 'table'}.</div>`;
+    return;
+  }
+  const head = `<thead><tr><th class="dg-corner"></th>${cols.map(c => `<th title="${esc(c)}">${esc(c)}</th>`).join('')}</tr></thead>`;
+  const tbody = dg.rows.map((row, r) => `<tr>
+    <td class="dg-rownum">${dg.offset + r + 1}</td>
+    ${cols.map((c, ci) => {
+      const v = row[ci];
+      const big = v !== null && v !== undefined && (typeof v === 'object' || String(v).length > 40);
+      return `<td class="${big ? 'dg-cell' : ''}"${big ? ` onclick="dgShowCell(${r},${ci})"` : ''}>${dgCellHtml(v)}</td>`;
+    }).join('')}
+  </tr>`).join('');
+  body.innerHTML = `<table class="dgrid">${head}<tbody>${tbody}</tbody></table>`;
+}
+
+function renderDgFoot() {
+  const foot = document.getElementById('dgFoot');
+  if (!foot || !dg) return;
+  const n = dg.rows.length;
+  const from = n ? dg.offset + 1 : 0;
+  const to = dg.offset + n;
+  const totalStr = dg.total != null ? dg.total.toLocaleString() : '?';
+  const atEnd = (dg.total != null && to >= dg.total) || (!dg.loading && n < dg.limit);
+  foot.innerHTML = `
+    <span class="count">${dg.loading ? 'loading…' : `${dg.columns.length} column${dg.columns.length===1?'':'s'}`}</span>
+    <div class="dg-pager">
+      <span class="range">${from.toLocaleString()}–${to.toLocaleString()} of ${totalStr}</span>
+      <button class="btn btn-ghost btn-sm" onclick="dgPage(-1)" ${dg.offset<=0?'disabled':''}>‹ Prev</button>
+      <button class="btn btn-ghost btn-sm" onclick="dgPage(1)" ${atEnd?'disabled':''}>Next ›</button>
+    </div>`;
+}
+
+function dgPage(dir) {
+  if (!dg) return;
+  const next = dg.offset + dir * dg.limit;
+  if (next < 0) return;
+  dg.offset = next;
+  dgFetch();
+}
+function dgSetLimit(v) { if (!dg) return; dg.limit = parseInt(v, 10) || 50; dg.offset = 0; renderDgChrome(); dgFetch(); }
+
+let dgCellValue = '';
+function dgShowCell(r, c) {
+  if (!dg) return;
+  const v = dg.rows[r][c];
+  dgCellValue = (v !== null && typeof v === 'object') ? JSON.stringify(v, null, 2) : String(v);
+  document.getElementById('cellTitle').textContent = `${dg.columns[c]} · row ${dg.offset + r + 1}`;
+  document.getElementById('cellBody').textContent = dgCellValue;
+  document.getElementById('cellModal').classList.add('open');
+}
+function dgCopyCell() { navigator.clipboard?.writeText(dgCellValue).then(() => toast('Copied', 'success')).catch(() => {}); }
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const cell = document.getElementById('cellModal');
+  if (cell.classList.contains('open')) { cell.classList.remove('open'); return; }
+  if (document.getElementById('dataModal').classList.contains('open')) closeDataModal();
+});
 
 // ── Audit log ──
 let auditEntries = [];
@@ -2118,7 +2366,7 @@ function viewQuery() {
     ? 'db.<collection>.find({ <field>: <value> }).limit(5)'
     : 'SELECT <columns> FROM <table> WHERE <condition> LIMIT 10;';
   setContent(`<div class="card"><h2>${ICONS.term} Run Query</h2>
-    <p class="card-meta">Runs as your admin user on <strong>${esc(creds().env)} / ${esc(currentEngine.replace(/_/g, ' '))}</strong>.
+    <p class="card-meta">Runs as your admin user on <strong>${esc(creds().env)} / ${esc(engineLabel(currentEngine))}</strong>.
       The plain-english preview updates as you type. Read it before running. ⌘⏎ to run.</p>
     <div class="form-row" style="margin-bottom:10px">
       <div class="form-field"${fam === 'sqlite' ? ' style="display:none"' : ''}><label>Database</label><input id="qDb" list="dbList" placeholder="${isDocdb ? 'admin (default)' : 'default database'}"></div>
@@ -2601,7 +2849,7 @@ function runQueryConfirm() {
   const database = document.getElementById('qDb').value.trim();
   const ex = explainQuery(isDocdb, query);
   if (ex.danger === 'read') { executeQuery(query, database); return; }
-  const target = `${esc(creds().env)} / ${esc(currentEngine.replace(/_/g, ' '))} / ${esc(database || (isDocdb ? 'admin' : 'default db'))}`;
+  const target = `${esc(creds().env)} / ${esc(engineLabel(currentEngine))} / ${esc(database || (isDocdb ? 'admin' : 'default db'))}`;
   showModal(ex.danger === 'danger' ? '⚠ Destructive Query' : 'Confirm Query', `
     <div class="explain-box explain-${ex.danger}" style="margin-bottom:12px">${DANGER_BADGE[ex.danger]}<div class="explain-text">${ex.html}</div></div>
     <p style="margin-bottom:0">Target: <strong>${target}</strong></p>
@@ -2860,7 +3108,7 @@ function viewEnvs() {
                               : actionBtn('Hide', 'hideEnv', env, eng));
       rows += `<tr${hidden ? ' style="opacity:0.45"' : ''}>
         <td class="mono">${esc(env)}</td>
-        <td><span class="pill pill-accent">${esc(eng.replace(/_/g, ' '))}</span></td>
+        <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
         <td class="mono" style="font-size:11px">${esc(cfg.host || '')}:${esc(cfg.port || '')}${cfg.tls ? ' · tls' : ''}</td>
         <td>${status}</td>
         <td style="text-align:right; white-space:nowrap">${actions}</td></tr>`;
@@ -2869,7 +3117,7 @@ function viewEnvs() {
     for (const [eng, cfg] of Object.entries(customEnvs[env] || {})) {
       if ((config.environments[env] || []).includes(eng)) continue;
       rows += `<tr><td class="mono">${esc(env)}</td>
-        <td><span class="pill pill-accent">${esc(eng.replace(/_/g, ' '))}</span></td>
+        <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
         <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${cfg.tls ? ' · tls' : ''}</td>
         <td><span class="pill pill-warn">added</span></td>
         <td style="text-align:right; white-space:nowrap">${actionBtn('Edit', 'editEnv', env, eng)} ${actionBtn('Delete', 'deleteCustomEnv', env, eng)}</td></tr>`;
@@ -2879,7 +3127,7 @@ function viewEnvs() {
     if (builtinNames.includes(env)) continue;
     for (const [eng, cfg] of Object.entries(engines)) {
       rows += `<tr><td class="mono">${esc(env)}</td>
-        <td><span class="pill pill-accent">${esc(eng.replace(/_/g, ' '))}</span></td>
+        <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
         <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${cfg.tls ? ' · tls' : ''}</td>
         <td><span class="pill pill-ok">custom</span></td>
         <td style="text-align:right; white-space:nowrap">${actionBtn('Edit', 'editEnv', env, eng)} ${actionBtn('Delete', 'deleteCustomEnv', env, eng)}</td></tr>`;
@@ -2913,7 +3161,7 @@ function viewEnvs() {
     <div class="form-row">
       <div class="form-field"><label>Name</label><input id="ceName" placeholder="name"></div>
       <div class="form-field"><label>Engine</label><select id="ceEngine" onchange="ceEngineChanged()">
-        <option value="documentdb">documentdb</option><option value="postgresql">postgresql</option><option value="mysql">mysql</option><option value="sqlite">sqlite</option></select></div>
+        <option value="documentdb">MongoDB</option><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="sqlite">SQLite</option></select></div>
       <div class="form-field"><label id="ceHostLabel">Host</label><input id="ceHost" placeholder="hostname or IP" style="min-width:300px"></div>
       <div class="form-field" id="cePortWrap"><label>Port</label><input id="cePort" type="number" placeholder="27017" style="min-width:90px"></div>
       <div class="form-field" id="ceDbWrap"><label id="ceDbLabel">Auth DB</label><input id="ceDb" placeholder="admin"></div>
@@ -3288,7 +3536,7 @@ function viewAudits() {
       </td></tr>`;
   }).join('');
   setContent(`<div class="card"><h2>${ICONS.shield} Security Audits</h2>
-    <p class="card-meta">Access reviews for <strong>${esc(document.getElementById('envSelect').value)} / ${esc(currentEngine.replace(/_/g, ' '))}</strong>.
+    <p class="card-meta">Access reviews for <strong>${esc(document.getElementById('envSelect').value)} / ${esc(engineLabel(currentEngine))}</strong>.
       Exclude known accounts (with a reason) so the findings show only real issues.</p>
     <div class="chips" style="margin-bottom:14px">
       <div class="chip"><span class="k">critical</span><span class="v" style="color:${totals.critical ? 'var(--danger)' : 'inherit'}">${totals.critical}</span></div>
