@@ -78,7 +78,7 @@ def require_creds(body):
     """Admin credentials, except for SQLite where there are none."""
     if engine_family(body.get("engine", "")) == "sqlite":
         return
-    require_creds(body)
+    require_fields(body, "admin_user", "admin_pass")
 
 
 def validate_docdb_roles(roles):
@@ -706,7 +706,7 @@ def api_list_databases(body):
             return {"error": err}
         dbs = []
         for d in (data or []):
-            size_bytes = d.get("sizeOnDisk", 0)
+            size_bytes = _docdb_num(d.get("sizeOnDisk", 0))
             dbs.append({
                 "name": d["name"],
                 "size_bytes": size_bytes,
@@ -880,6 +880,31 @@ def _js_balanced(q):
             if depth < 0:
                 return False
     return depth == 0 and in_str is None
+
+
+def _docdb_num(v):
+    """DocumentDB counters come back as BSON Longs that JSON.stringify turns
+    into objects ({$numberLong}, {low,high}, {$numberDecimal}). Coerce to int."""
+    if isinstance(v, (int, float)):
+        return int(v)
+    if isinstance(v, dict):
+        if "$numberLong" in v:
+            return int(v["$numberLong"])
+        if "$numberDecimal" in v:
+            return int(float(v["$numberDecimal"]))
+        if "$numberInt" in v:
+            return int(v["$numberInt"])
+        if "$numberDouble" in v:
+            try:
+                return int(float(v["$numberDouble"]))
+            except (ValueError, TypeError):
+                return 0
+        if "low" in v and "high" in v:
+            return (int(v["high"]) << 32) + (int(v["low"]) & 0xFFFFFFFF)
+    try:
+        return int(v)
+    except (ValueError, TypeError):
+        return 0
 
 
 def _clean_mongosh_noise(text):
@@ -1833,7 +1858,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response({"error": str(e)}, 400)
         except KeyError as e:
             self._json_response({"error": f"Missing field: {e}"}, 400)
-        except Exception as e:
+        except Exception:
+            import traceback
+            sys.stderr.write(traceback.format_exc())
             self._json_response({"error": "Internal server error"}, 500)
 
     MAX_UPLOAD = 512 * 1024 * 1024
