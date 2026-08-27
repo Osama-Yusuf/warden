@@ -14,7 +14,7 @@ from .config import (
 )
 from .docdb import docdb_args, docdb_eval, docdb_exec
 from .mysql import my_csv, my_exec, my_query
-from .sqlitedb import sq_csv, sq_exec, sq_query
+from .sqlitedb import sq_csv, sq_exec, sq_json, sq_query
 from .pg import pg_csv, pg_exec, pg_query
 from .util import (
     SAFE_IDENT_RE,

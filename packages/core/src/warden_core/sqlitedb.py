@@ -20,6 +20,18 @@ def sq_exec(path, sql, timeout=30):
     return code == 0, out, err
 
 
+def sq_json(path, sql, timeout=30):
+    """Result set as a JSON array of objects (clean, handles any cell content)."""
+    args = ["sqlite3", "-batch", "-json", str(path), sql]
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired:
+        return -1, "", "Query timed out"
+    except FileNotFoundError:
+        return -2, "", "sqlite3 not found"
+
+
 def sq_csv(path, sql, timeout=60):
     """Result sets as CSV with headers (query console)."""
     args = ["sqlite3", "-batch", "-csv", "-header", str(path), sql]
