@@ -1,0 +1,83 @@
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  wheels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build --all-packages --out-dir dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels
+          path: dist/*
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest       # Apple Silicon
+            artifact: warden-macos-arm64
+            sep: ":"
+            icon: packages/desktop/assets/warden.icns
+          - os: macos-latest       # Intel via Rosetta (GitHub retired the macos-13 Intel runners)
+            artifact: warden-macos-x86_64
+            sep: ":"
+            python: cpython-3.12-macos-x86_64-none
+            icon: packages/desktop/assets/warden.icns
+          - os: windows-latest
+            artifact: warden-windows-x86_64
+            sep: ";"
+            icon: packages/desktop/assets/warden.ico
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - if: matrix.python != ''
+        run: uv python install ${{ matrix.python }}
+      - run: uv sync ${{ matrix.python != '' && format('--python {0}', matrix.python) || '' }}
+      - run: uv pip install pyinstaller
+      - name: Bundle
+        shell: bash
+        run: |
+          uv run pyinstaller --noconfirm --clean --windowed --name warden \
+            --icon "${{ matrix.icon }}" \
+            --add-data "packages/web/src/warden_web/static${{ matrix.sep }}warden_web/static" \
+            packages/desktop/src/warden_desktop/main.py
+      - name: Report architecture
+        if: runner.os == 'macOS'
+        run: lipo -archs dist/warden.app/Contents/MacOS/warden
+      - name: Package
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ditto -c -k --keepParent dist/warden.app "${{ matrix.artifact }}.zip"
+          else
+            uv run python -c "import shutil; shutil.make_archive('${{ matrix.artifact }}', 'zip', 'dist', 'warden')"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [wheels, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/wheels/*
+            artifacts/warden-*/*.zip

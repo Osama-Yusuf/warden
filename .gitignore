@@ -1,0 +1,10 @@
+.venv/
+dist/
+build/
+*.spec
+__pycache__/
+*.py[co]
+.env
+environments.local.json
+.DS_Store
+.claude/

@@ -1,0 +1,3076 @@
+<title>warden</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%230d1117"/><ellipse cx="32" cy="19" rx="16" ry="7" fill="none" stroke="%2358a6ff" stroke-width="4.5"/><path d="M16 19v26c0 3.9 7.2 7 16 7s16-3.1 16-7V19" fill="none" stroke="%2358a6ff" stroke-width="4.5"/><path d="M16 32c0 3.9 7.2 7 16 7s16-3.1 16-7" fill="none" stroke="%2358a6ff" stroke-width="4.5" opacity="0.55"/></svg>'>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0b0e14;
+  --bg-glow: rgba(88, 166, 255, 0.055);
+  --surface: #12161f;
+  --surface-2: #171c27;
+  --surface-hover: #1c2230;
+  --border: #262d3b;
+  --border-strong: #333c4e;
+  --accent: #58a6ff;
+  --accent-bg: #1f6feb;
+  --accent-hover: #388bfd;
+  --accent-soft: rgba(88, 166, 255, 0.12);
+  --text: #c6cedb;
+  --text-strong: #eef2f8;
+  --text-muted: #7d8798;
+  --mono: #e6edf3;
+  --success: #3fb950;
+  --success-bg: #238636;
+  --warning: #d29922;
+  --danger: #f85149;
+  --danger-bg: #da3633;
+  --danger-soft: rgba(248, 81, 73, 0.1);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --radius: 8px;
+  --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono-font: "IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-family: var(--sans);
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f7f9fc; --bg-glow: rgba(9, 105, 218, 0.05);
+    --surface: #ffffff; --surface-2: #f2f5f9; --surface-hover: #eaeef4;
+    --border: #d7dde6; --border-strong: #c3ccd8;
+    --accent: #0969da; --accent-bg: #0969da; --accent-hover: #0550ae;
+    --accent-soft: rgba(9, 105, 218, 0.09);
+    --text: #333c48; --text-strong: #14181f; --text-muted: #67717f; --mono: #1f2328;
+    --success: #1a7f37; --success-bg: #1a7f37; --warning: #9a6700;
+    --danger: #cf222e; --danger-bg: #cf222e; --danger-soft: rgba(207, 34, 46, 0.08);
+    --shadow: 0 8px 24px rgba(20, 30, 50, 0.08);
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f7f9fc; --bg-glow: rgba(9, 105, 218, 0.05);
+  --surface: #ffffff; --surface-2: #f2f5f9; --surface-hover: #eaeef4;
+  --border: #d7dde6; --border-strong: #c3ccd8;
+  --accent: #0969da; --accent-bg: #0969da; --accent-hover: #0550ae;
+  --accent-soft: rgba(9, 105, 218, 0.09);
+  --text: #333c48; --text-strong: #14181f; --text-muted: #67717f; --mono: #1f2328;
+  --success: #1a7f37; --success-bg: #1a7f37; --warning: #9a6700;
+  --danger: #cf222e; --danger-bg: #cf222e; --danger-soft: rgba(207, 34, 46, 0.08);
+  --shadow: 0 8px 24px rgba(20, 30, 50, 0.08);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background:
+    radial-gradient(1100px 380px at 72% -8%, var(--bg-glow), transparent 70%),
+    var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex; flex-direction: column;
+}
+::selection { background: var(--accent-soft); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+
+/* ── Top bar ── */
+.topbar {
+  display: flex; align-items: flex-end; gap: 18px;
+  padding: 12px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  backdrop-filter: blur(8px);
+  flex-wrap: wrap;
+  position: sticky; top: 0; z-index: 50;
+}
+.brand { display: flex; align-items: center; gap: 10px; padding-bottom: 2px; }
+.brand-logo {
+  width: 30px; height: 30px; border-radius: 8px;
+  background: linear-gradient(145deg, var(--accent-soft), transparent);
+  border: 1px solid var(--border-strong);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent);
+}
+.brand-logo svg { width: 17px; height: 17px; }
+.brand h1 { font-size: 17px; font-weight: 700; color: var(--text-strong); letter-spacing: -0.02em; line-height: 1.1; }
+.brand h1 span { color: var(--accent); }
+.brand-sub { font-family: var(--mono-font); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--text-muted); }
+.topbar .sep { width: 1px; align-self: stretch; margin: 2px 0; background: var(--border); }
+.ctl { display: flex; flex-direction: column; gap: 3px; }
+.ctl label {
+  font-family: var(--mono-font); font-size: 9px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.12em; color: var(--text-muted);
+  padding-left: 2px;
+}
+.topbar select, .topbar input {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  padding: 6px 10px; border-radius: var(--radius); font-size: 13px;
+  font-family: inherit; height: 32px; transition: border-color 0.15s;
+}
+.topbar select:hover, .topbar input:hover { border-color: var(--border-strong); }
+/* Password mask dots come from the font; webfonts can lack the glyph in
+   WKWebView and render tofu boxes, so always use the system font for masks. */
+input[type="password"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.topbar select:focus, .topbar input:focus { outline: none; border-color: var(--accent); }
+.creds-cluster { display: flex; gap: 10px; align-items: flex-end; }
+.creds-cluster input { width: 132px; }
+.chk {
+  display: flex; align-items: center; gap: 5px; height: 32px;
+  font-size: 12px; color: var(--text-muted); cursor: pointer; user-select: none;
+}
+.chk input { accent-color: var(--accent-bg); width: 13px; height: 13px; cursor: pointer; }
+.btn {
+  padding: 0 14px; height: 32px; border-radius: var(--radius); font-size: 13px;
+  font-weight: 500; cursor: pointer; border: 1px solid transparent;
+  font-family: inherit; transition: background 0.15s, transform 0.05s, opacity 0.15s;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--accent-bg); color: #fff; }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-success { background: var(--success-bg); color: #fff; }
+.btn-success:hover { opacity: 0.92; }
+.btn-danger { background: var(--danger-bg); color: #fff; }
+.btn-danger:hover { opacity: 0.9; }
+.btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
+.btn-ghost:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+.btn-sm { height: 26px; padding: 0 10px; font-size: 12px; }
+.conn {
+  display: flex; align-items: center; gap: 8px; height: 32px;
+  padding: 0 12px; border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-family: var(--mono-font); font-size: 11.5px; color: var(--text-muted);
+  max-width: 420px;
+}
+.conn #connText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-dot { width: 8px; height: 8px; min-width: 8px; border-radius: 50%; background: var(--text-muted); }
+.conn-dot.ok { background: var(--success); box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.5); animation: pulse 2.2s infinite; }
+.conn-dot.fail { background: var(--danger); }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.45); }
+  70% { box-shadow: 0 0 0 7px rgba(63, 185, 80, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0); }
+}
+
+/* ── Layout ── */
+.main { display: flex; flex: 1; overflow: hidden; }
+.sidebar {
+  width: 236px; min-width: 236px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  display: flex; flex-direction: column;
+}
+.qf-wrap { padding: 12px 12px 4px; position: relative; }
+.qf {
+  display: flex; align-items: center; gap: 7px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0 9px; height: 30px; transition: border-color 0.15s;
+}
+.qf:focus-within { border-color: var(--accent); }
+.qf svg { width: 13px; height: 13px; color: var(--text-muted); flex-shrink: 0; }
+.qf input {
+  flex: 1; min-width: 0; background: none; border: none; outline: none;
+  color: var(--text); font-size: 12.5px; font-family: inherit;
+}
+.qf input::placeholder { color: var(--text-muted); }
+.qf input:disabled { cursor: not-allowed; }
+.qf-results {
+  position: absolute; left: 12px; right: 12px; top: 44px; z-index: 60;
+  background: var(--surface-2); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  overflow: hidden; display: none;
+}
+.qf-results.open { display: block; }
+.qf-hit {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 10px; background: none; border: none; cursor: pointer;
+  color: var(--text); font-size: 12.5px; font-family: var(--mono-font); text-align: left;
+}
+.qf-hit:hover, .qf-hit.sel { background: var(--accent-soft); }
+.qf-hit svg { width: 12px; height: 12px; color: var(--text-muted); flex-shrink: 0; }
+.qf-hit .tag { margin-left: auto; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
+.nav-sections { flex: 1; padding: 6px 0 12px; }
+.group-label {
+  font-family: var(--mono-font); font-size: 9.5px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.14em; color: var(--text-muted);
+  padding: 14px 16px 5px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 9px;
+  width: calc(100% - 12px); margin: 1px 6px; padding: 6px 10px;
+  border: none; border-radius: 6px; background: transparent;
+  color: var(--text); font-size: 13px; cursor: pointer;
+  font-family: inherit; text-align: left; position: relative;
+  transition: background 0.12s, color 0.12s;
+}
+.nav-item .ni { width: 15px; height: 15px; color: var(--text-muted); flex-shrink: 0; transition: color 0.12s; }
+.nav-item:hover:not(:disabled) { background: var(--surface-hover); }
+.nav-item:hover:not(:disabled) .ni { color: var(--text); }
+.nav-item.active { background: var(--accent-soft); color: var(--text-strong); }
+.nav-item.active::before {
+  content: ''; position: absolute; left: -6px; top: 5px; bottom: 5px;
+  width: 2.5px; border-radius: 2px; background: var(--accent);
+}
+.nav-item.active .ni { color: var(--accent); }
+.nav-item.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
+.nav-item.danger:hover:not(:disabled) .ni { color: var(--danger); }
+.nav-item:disabled { opacity: 0.32; cursor: not-allowed; }
+.nav-badge {
+  margin-left: auto; font-family: var(--mono-font); font-size: 10px;
+  background: var(--surface-hover); border: 1px solid var(--border);
+  color: var(--text-muted); border-radius: 9px; padding: 1px 7px;
+}
+.nav-item.active .nav-badge { border-color: transparent; background: var(--accent-soft); color: var(--accent); }
+.sidebar-foot {
+  padding: 10px 14px; border-top: 1px solid var(--border);
+  font-family: var(--mono-font); font-size: 10.5px; color: var(--text-muted);
+  display: flex; align-items: center; gap: 7px; line-height: 1.5;
+}
+.sidebar-foot svg { width: 12px; height: 12px; flex-shrink: 0; }
+.content { flex: 1; overflow-y: auto; padding: 22px 26px; }
+.content-inner { max-width: 1200px; }
+
+/* ── Cards & tables ── */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 18px; margin-bottom: 16px;
+  animation: rise 0.22s ease;
+}
+@keyframes rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+.card h2 {
+  font-size: 15px; font-weight: 600; color: var(--text-strong);
+  margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+}
+.card h2 .ni { width: 16px; height: 16px; color: var(--accent); }
+.card-meta { font-size: 12px; color: var(--text-muted); margin: -6px 0 12px; }
+.table-wrap { overflow: auto; max-height: 68vh; border: 1px solid var(--border); border-radius: var(--radius); }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th {
+  text-align: left; font-family: var(--mono-font); font-size: 10px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted);
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--surface-2); z-index: 5;
+}
+td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr { transition: background 0.1s; }
+tbody tr:hover td { background: var(--surface-hover); }
+.mono { font-family: var(--mono-font); font-size: 12px; color: var(--mono); }
+.pill {
+  display: inline-block; padding: 2px 8px; border-radius: 12px;
+  font-size: 11px; font-weight: 500;
+}
+.pill-ok { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+.pill-warn { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+.pill-danger { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.pill-muted { background: color-mix(in srgb, var(--text-muted) 14%, transparent); color: var(--text-muted); }
+.pill-accent { background: var(--accent-soft); color: var(--accent); }
+
+/* ── Forms ── */
+.form-row { display: flex; gap: 12px; align-items: flex-end; margin-bottom: 14px; flex-wrap: wrap; }
+.form-field { display: flex; flex-direction: column; gap: 4px; }
+.form-field label {
+  font-family: var(--mono-font); font-size: 9.5px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted);
+}
+.form-field input, .form-field select {
+  padding: 0 10px; height: 32px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit;
+  min-width: 170px; transition: border-color 0.15s;
+}
+.form-field input:hover, .form-field select:hover { border-color: var(--border-strong); }
+.form-field input:focus, .form-field select:focus { outline: none; border-color: var(--accent); }
+
+/* ── Stat chips (welcome) ── */
+.chips { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.chip {
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 14px; min-width: 140px;
+}
+.chip .k { font-family: var(--mono-font); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); }
+.chip .v { font-size: 13.5px; font-weight: 600; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+.chip .v.mono { font-size: 12px; font-weight: 500; }
+
+/* ── Modal ── */
+.modal-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(3, 6, 12, 0.66);
+  backdrop-filter: blur(3px);
+  z-index: 100; align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 12px; padding: 24px; max-width: 480px; width: 90%;
+  box-shadow: var(--shadow); animation: pop 0.16s ease;
+}
+@keyframes pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
+.modal h3 { font-size: 16px; font-weight: 600; color: var(--text-strong); margin-bottom: 12px; }
+.modal p { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; line-height: 1.55; }
+.modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+/* ── Toast ── */
+.toast-container { position: fixed; top: 68px; right: 16px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  padding: 10px 15px; border-radius: var(--radius);
+  font-size: 13px; color: #fff; max-width: 380px;
+  animation: slideIn 0.2s ease-out;
+  display: flex; align-items: center; gap: 9px;
+  box-shadow: var(--shadow);
+}
+.toast::before { font-weight: 700; font-size: 12px; }
+.toast-success { background: var(--success-bg); } .toast-success::before { content: '✓'; }
+.toast-error { background: var(--danger-bg); } .toast-error::before { content: '✕'; }
+.toast-info { background: var(--accent-bg); } .toast-info::before { content: 'ℹ'; }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* ── Password display ── */
+.password-box {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius);
+  padding: 9px 12px; margin: 8px 0;
+}
+.password-box code { flex: 1; font-family: var(--mono-font); font-size: 13px; color: var(--warning); word-break: break-all; }
+.copy-btn { cursor: pointer; color: var(--text-muted); background: none; border: none; font-size: 14px; padding: 4px; }
+.copy-btn:hover { color: var(--accent); }
+
+/* ── Size bars & sortable headers ── */
+.sizebar {
+  height: 4px; width: 150px; max-width: 100%;
+  background: color-mix(in srgb, var(--border) 55%, transparent);
+  border-radius: 2px; overflow: hidden; margin-top: 5px;
+}
+.sizebar > div {
+  height: 100%; border-radius: 2px; min-width: 1px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, var(--success)));
+}
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+th.sortable .arrow { font-size: 8px; margin-left: 3px; }
+
+/* ── Loader & skeleton ── */
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-msg { display: flex; align-items: center; gap: 9px; color: var(--text-muted); font-size: 13px; padding: 4px 0 14px; }
+.skel {
+  height: 13px; border-radius: 4px; margin-bottom: 10px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-hover) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%; animation: shimmer 1.3s infinite;
+}
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.empty-state {
+  padding: 28px; text-align: center; color: var(--text-muted); font-size: 13px;
+  border: 1px dashed var(--border); border-radius: var(--radius);
+}
+
+/* ── Query console ── */
+.query-input {
+  width: 100%; min-height: 120px; resize: vertical;
+  font-family: var(--mono-font); font-size: 12.5px; line-height: 1.55;
+  background: var(--bg); color: var(--mono);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 12px; transition: border-color 0.15s;
+}
+.query-input:focus { outline: none; border-color: var(--accent); }
+.explain-box {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted); border-radius: var(--radius);
+  padding: 10px 12px; font-size: 13px; line-height: 1.6; min-height: 42px;
+}
+.explain-box .pill { flex-shrink: 0; margin-top: 1px; }
+.explain-read { border-left-color: var(--success); }
+.explain-write { border-left-color: var(--warning); }
+.explain-danger { border-left-color: var(--danger); background: var(--danger-soft); }
+.explain-text b { color: var(--text-strong); }
+.explain-text code { font-family: var(--mono-font); font-size: 11.5px; color: var(--mono); }
+.hist-chip {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  padding: 4px 2px; cursor: pointer; color: var(--text-muted);
+  border-radius: 4px; overflow: hidden;
+}
+.hist-chip:hover { color: var(--text); background: var(--surface-hover); }
+.hist-chip code { font-family: var(--mono-font); font-size: 11.5px; white-space: nowrap; }
+.ctx-line {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 8px; padding: 7px 12px; font-size: 12.5px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.ctx-line b { color: inherit; }
+.ctx-ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 30%, var(--border)); }
+.ctx-ok::before { content: '✓'; font-weight: 700; }
+.ctx-warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 30%, var(--border)); }
+.ctx-warn::before { content: '⚠'; }
+.ctx-bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); background: var(--danger-soft); }
+.ctx-bad::before { content: '✕'; font-weight: 700; }
+.ctx-muted { color: var(--text-muted); }
+.ctx-muted::before { content: '…'; }
+.result-pre {
+  font-family: var(--mono-font); font-size: 12px; line-height: 1.55;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px; overflow: auto; max-height: 55vh; white-space: pre-wrap; word-break: break-word;
+  color: var(--mono);
+}
+
+/* ── Divider toolbar on user page ── */
+.user-toolbar {
+  display: flex; gap: 8px; margin-top: 20px; padding-top: 16px;
+  border-top: 1px solid var(--border); flex-wrap: wrap;
+}
+
+/* ── Responsive ── */
+@media (max-width: 860px) {
+  .sidebar { display: none; }
+  .topbar { padding: 8px 12px; gap: 10px; }
+  .creds-cluster input { width: 100px; }
+  .content { padding: 12px; }
+}
+.hidden { display: none; }
+</style>
+
+<!-- ── Top bar ── -->
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="7" ry="2.8"/><path d="M5 5.5v13c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-13"/><path d="M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8"/></svg></div>
+    <div>
+      <h1>war<span>den</span></h1>
+      <div class="brand-sub">ops console</div>
+    </div>
+  </div>
+  <div class="sep"></div>
+  <div class="ctl"><label>Environment</label><select id="envSelect"></select></div>
+  <div class="ctl"><label>Engine</label><select id="engineSelect"></select></div>
+  <div class="sep"></div>
+  <div class="creds-cluster">
+    <div class="ctl"><label>Admin user</label><input id="adminUser" type="text" placeholder="username" autocomplete="username"></div>
+    <div class="ctl"><label>Password</label><input id="adminPass" type="password" placeholder="••••••••" autocomplete="current-password"></div>
+    <label class="chk" title="Keep the password saved in this browser (localStorage) so it survives restarts. Unchecked: kept only until this tab closes."><input type="checkbox" id="rememberChk"> remember</label>
+    <button class="btn btn-ghost" id="keychainBtn" style="display:none" onclick="saveToKeychain()" title="Save this password to the macOS Keychain for this host + user. It will auto-fill next time in any browser.">🔑</button>
+    <button class="btn btn-primary" onclick="testConnection()">Connect</button>
+    <button class="btn btn-ghost" id="disconnBtn" style="display:none" onclick="doDisconnect()">Disconnect</button>
+  </div>
+  <button class="btn btn-ghost" id="roBtn" onclick="toggleReadOnly()" title="Read-only mode: the server refuses every write. User changes, grants, drops, write queries, all of it.">🛡 rw</button>
+  <div class="conn">
+    <div class="conn-dot" id="connDot"></div>
+    <span id="connText">offline</span>
+  </div>
+  <button class="btn btn-ghost" id="themeBtn" onclick="cycleTheme()" title="Theme: follows system, dark, or light">◐ auto</button>
+</div>
+
+<!-- ── Main layout ── -->
+<div class="main">
+  <div class="sidebar">
+    <div class="qf-wrap">
+      <div class="qf">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.2"/><path d="M15.8 15.8L21 21"/></svg>
+        <input id="qfInput" placeholder="Jump to user or db…" disabled autocomplete="off">
+      </div>
+      <div class="qf-results" id="qfResults"></div>
+    </div>
+    <div class="nav-sections" id="navSections"></div>
+    <div class="sidebar-foot" id="sidebarFoot"></div>
+  </div>
+  <div class="content"><div class="content-inner" id="content"></div></div>
+</div>
+
+<!-- ── Modal ── -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h3 id="modalTitle"></h3>
+    <div id="modalBody"></div>
+    <div class="actions" id="modalActions"></div>
+  </div>
+</div>
+
+<!-- ── Toasts ── -->
+<div class="toast-container" id="toasts"></div>
+
+<!-- ── Autocomplete sources (filled after connect) ── -->
+<datalist id="userList"></datalist>
+<datalist id="dbList"></datalist>
+
+<script>
+const API = '';
+let config = {};
+let connected = false;
+let currentEngine = '';
+let currentView = '';
+let cachedUsers = [];
+let cachedDbs = [];
+let dbData = [];
+let dbSort = { key: 'name', dir: 1 };
+
+// ── Icons (inline SVG, stroke = currentColor) ──
+const I = p => `<svg class="ni" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+const ICONS = {
+  users: I('<circle cx="9" cy="8" r="3.2"/><path d="M3 19.5c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9.5" r="2.3"/><path d="M21 19.5c0-2.6-1.7-4.8-4-5.6"/>'),
+  search: I('<circle cx="11" cy="11" r="6.2"/><path d="M15.8 15.8L21 21"/>'),
+  plus: I('<path d="M12 5v14M5 12h14"/>'),
+  key: I('<circle cx="8.5" cy="14.5" r="4"/><path d="M11.5 11.5L20 3M16.5 6.5l3 3"/>'),
+  shield: I('<path d="M12 3l7.5 2.8v5.4c0 4.6-3.2 7.7-7.5 9.8-4.3-2.1-7.5-5.2-7.5-9.8V5.8z"/><path d="M8.7 12l2.4 2.4 4.2-4.8"/>'),
+  ban: I('<circle cx="12" cy="12" r="8.2"/><path d="M6.3 6.3l11.4 11.4"/>'),
+  lock: I('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8.5 11V7.8a3.5 3.5 0 017 0V11"/>'),
+  trash: I('<path d="M4.5 7h15M10 7V4.5h4V7M6.5 7l.9 12.5h9.2L17.5 7M10 11v5M14 11v5"/>'),
+  db: I('<ellipse cx="12" cy="5.5" rx="7" ry="2.8"/><path d="M5 5.5v13c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-13"/><path d="M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8"/>'),
+  grid: I('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9.5h16M9.5 9.5V20"/>'),
+  scroll: I('<path d="M6.5 3.5h11V20l-2.75-1.8L12 20l-2.75-1.8L6.5 20z"/><path d="M9.5 8h5M9.5 11.5h5"/>'),
+  bolt: I('<path d="M13 2L4.5 13.5H11L9.5 22l8.5-11.5H13z"/>'),
+  pulse: I('<path d="M3 12h4l2.5-7 4 14 2.5-7h5"/>'),
+  term: I('<path d="M4 17l6-5-6-5M12 19h8"/>'),
+  sliders: I('<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/>'),
+};
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function plural(n, word, pluralForm) {
+  return `${n} ${n === 1 ? word : (pluralForm || word + 's')}`;
+}
+
+function fmtSize(bytes) {
+  if (bytes == null || isNaN(bytes)) return '—';
+  let v = Number(bytes);
+  if (v < 1024) return `${Math.round(v)} B`;
+  for (const unit of ['KB', 'MB', 'GB', 'TB', 'PB']) {
+    v /= 1024;
+    if (v < 1024 || unit === 'PB') {
+      const digits = v >= 100 ? 0 : v >= 10 ? 1 : 2;
+      return `${v.toFixed(digits)} ${unit}`;
+    }
+  }
+}
+
+// ── Preferences & session persistence ──
+// One-time storage migration from the tool's earlier name (dbctl.* keys)
+(() => {
+  for (const store of [localStorage, sessionStorage]) {
+    for (const k of Object.keys(store)) {
+      if (k.startsWith('dbctl.')) {
+        const nk = 'warden.' + k.slice(6);
+        if (store.getItem(nk) == null) store.setItem(nk, store.getItem(k));
+        store.removeItem(k);
+      }
+    }
+  }
+})();
+
+const PREFS_KEY = 'warden.prefs';
+const PASS_KEY = 'warden.k';
+let prefs = (() => { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch { return {}; } })();
+function savePrefs(patch) {
+  prefs = { ...prefs, ...patch };
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch {}
+}
+// Credentials are stored PER TARGET (env + engine): username and remember flag
+// in warden.creds, the password under a per-target key. Legacy single-slot
+// passwords are kept as a read fallback.
+function targetKey() {
+  return `${document.getElementById('envSelect')?.value || ''}:${currentEngine}`;
+}
+function credsStore() { try { return JSON.parse(localStorage.getItem('warden.creds')) || {}; } catch { return {}; } }
+function saveTargetCreds(user, remember) {
+  const s = credsStore();
+  s[targetKey()] = { user, remember: !!remember };
+  try { localStorage.setItem('warden.creds', JSON.stringify(s)); } catch {}
+}
+function targetCreds() { return credsStore()[targetKey()] || null; }
+
+function savePassword(pwd) {
+  try {
+    const enc = btoa(unescape(encodeURIComponent(pwd)));
+    const key = PASS_KEY + '.' + targetKey();
+    if (document.getElementById('rememberChk').checked) {
+      localStorage.setItem(key, enc); sessionStorage.removeItem(key);
+    } else {
+      sessionStorage.setItem(key, enc); localStorage.removeItem(key);
+    }
+  } catch {}
+}
+function loadPassword() {
+  try {
+    const key = PASS_KEY + '.' + targetKey();
+    const v = sessionStorage.getItem(key) || localStorage.getItem(key)
+      || sessionStorage.getItem(PASS_KEY) || localStorage.getItem(PASS_KEY); // legacy slot
+    return v ? decodeURIComponent(escape(atob(v))) : '';
+  } catch { return ''; }
+}
+function clearPassword() {
+  const key = PASS_KEY + '.' + targetKey();
+  sessionStorage.removeItem(key); localStorage.removeItem(key);
+  sessionStorage.removeItem(PASS_KEY); localStorage.removeItem(PASS_KEY);
+}
+
+async function loadCredsForTarget() {
+  // Fill the credential fields for the selected env/engine. Never connects
+  // on its own; connecting is always an explicit click.
+  const userInput = document.getElementById('adminUser');
+  const passInput = document.getElementById('adminPass');
+  if (!userInput || !passInput) return;
+  const saved = targetCreds();
+  userInput.value = saved?.user || prefs.adminUser || config.defaults?.admin_user || '';
+  document.getElementById('rememberChk').checked = saved ? !!saved.remember : !!prefs.remember;
+  passInput.value = loadPassword();
+  if (!passInput.value && userInput.value.trim()) await keychainAutofill();
+}
+
+// ── Theme (system → dark → light) ──
+function applyTheme(t) {
+  const root = document.documentElement;
+  if (t === 'dark' || t === 'light') root.dataset.theme = t;
+  else delete root.dataset.theme;
+  const btn = document.getElementById('themeBtn');
+  if (btn) btn.textContent = t === 'dark' ? '● dark' : t === 'light' ? '○ light' : '◐ auto';
+}
+function cycleTheme() {
+  const order = ['system', 'dark', 'light'];
+  const next = order[(order.indexOf(prefs.theme || 'system') + 1) % order.length];
+  savePrefs({ theme: next });
+  applyTheme(next);
+}
+
+// ── Environment overlay (browser-local): custom envs, overrides of
+//    built-ins, and hidden built-in engines. Sent to the server per-request. ──
+const CUSTOM_ENVS_KEY = 'warden.customEnvs';
+const HIDDEN_ENVS_KEY = 'warden.hiddenEnvs';
+let customEnvs = (() => { try { return JSON.parse(localStorage.getItem(CUSTOM_ENVS_KEY)) || {}; } catch { return {}; } })();
+let hiddenEnvs = (() => { try { return JSON.parse(localStorage.getItem(HIDDEN_ENVS_KEY)) || []; } catch { return []; } })();
+function saveCustomEnvs() { try { localStorage.setItem(CUSTOM_ENVS_KEY, JSON.stringify(customEnvs)); } catch {} }
+function saveHiddenEnvs() { try { localStorage.setItem(HIDDEN_ENVS_KEY, JSON.stringify(hiddenEnvs)); } catch {} }
+function isHidden(env, eng) { return hiddenEnvs.includes(env + '/' + eng); }
+
+function envEngines(env) {
+  const builtin = (config.environments?.[env] || []).filter(e => !isHidden(env, e));
+  const custom = Object.keys(customEnvs[env] || {}).filter(e => !builtin.includes(e));
+  return [...builtin, ...custom];
+}
+function envConfigFor(env, engine) {
+  // An entry in customEnvs wins. It's either a custom env or an override of a built-in.
+  return customEnvs[env]?.[engine] || null;
+}
+function envVisible(env) { return envEngines(env).length > 0; }
+function renderEnvOptions(selected) {
+  const envSel = document.getElementById('envSelect');
+  const builtins = Object.keys(config.environments || {});
+  let html = '';
+  for (const env of builtins) {
+    if (!envVisible(env)) continue;
+    const modified = Object.keys(customEnvs[env] || {}).length > 0;
+    html += `<option value="${esc(env)}">${esc(env)}${modified ? ' · modified' : ''}</option>`;
+  }
+  for (const env of Object.keys(customEnvs)) {
+    if (builtins.includes(env) || !envVisible(env)) continue;
+    html += `<option value="${esc(env)}">${esc(env)} · custom</option>`;
+  }
+  envSel.innerHTML = html;
+  if (selected && envVisible(selected)) envSel.value = selected;
+}
+
+// ── Autocomplete cache: feeds search dropdowns, quick-jump & badges ──
+async function refreshCache() {
+  if (!connected) return;
+  try {
+    const [u, d] = await Promise.all([
+      apiPost('/api/list-users'),
+      apiPost('/api/list-databases'),
+    ]);
+    cachedUsers = (u.users || []).map(x => x.user).filter(Boolean).sort();
+    cachedDbs = (d.databases || []).map(x => x.name).filter(Boolean).sort();
+    document.getElementById('userList').innerHTML = cachedUsers.map(n => `<option value="${esc(n)}">`).join('');
+    document.getElementById('dbList').innerHTML = cachedDbs.map(n => `<option value="${esc(n)}">`).join('');
+    renderBadges();
+  } catch (e) { /* autocomplete is best-effort */ }
+}
+
+function renderBadges() {
+  const bu = document.getElementById('badge-users');
+  const bd = document.getElementById('badge-databases');
+  if (bu) bu.textContent = cachedUsers.length || '';
+  if (bd) bd.textContent = cachedDbs.length || '';
+  if (bu) bu.style.display = cachedUsers.length ? '' : 'none';
+  if (bd) bd.style.display = cachedDbs.length ? '' : 'none';
+  const ba = document.getElementById('badge-audits');
+  if (ba) {
+    const n = connected ? auditIssueCount() : 0;
+    ba.textContent = n || '';
+    ba.style.display = n ? '' : 'none';
+    ba.style.color = n ? 'var(--danger)' : '';
+  }
+}
+
+// ── Init ──
+async function init() {
+  applyTheme(prefs.theme || 'system');
+  const r = await fetch(API + '/api/config');
+  config = await r.json();
+  const envSel = document.getElementById('envSelect');
+  const defaults = config.defaults || {};
+  const startEnv =
+    (prefs.env && envVisible(prefs.env)) ? prefs.env
+    : (defaults.env && envVisible(defaults.env)) ? defaults.env : '';
+  renderEnvOptions(startEnv);
+  envSel.onchange = () => { savePrefs({ env: envSel.value }); disconnected(); updateEngines(); loadCredsForTarget(); };
+  updateEngines(true);
+
+  document.getElementById('adminPass').addEventListener('keydown', e => { if (e.key === 'Enter') testConnection(); });
+  document.getElementById('rememberChk').addEventListener('change', e => savePrefs({ remember: e.target.checked }));
+  if (config.tools?.keychain) document.getElementById('keychainBtn').style.display = '';
+  renderRoBtn();
+
+  // Prefill the saved credentials for this target. Connecting stays manual
+  await loadCredsForTarget();
+  renderWelcome();
+}
+
+function updateEngines(restoring = false) {
+  const env = document.getElementById('envSelect').value;
+  const engSel = document.getElementById('engineSelect');
+  const engines = envEngines(env) || [];
+  engSel.innerHTML = '';
+  for (const e of engines) {
+    engSel.innerHTML += `<option value="${esc(e)}">${esc(e.replace(/_/g, ' '))}</option>`;
+  }
+  // Keep the currently selected engine when the new env also has it, since
+  // switching env shouldn't silently flip postgresql back to documentdb.
+  const previous = currentEngine;
+  currentEngine = engines.includes(previous) ? previous : (engines[0] || '');
+  if (restoring && prefs.engine && engines.includes(prefs.engine)) {
+    currentEngine = prefs.engine;
+  }
+  engSel.value = currentEngine;
+  savePrefs({ engine: currentEngine });
+  engSel.onchange = () => {
+    currentEngine = engSel.value;
+    savePrefs({ engine: currentEngine });
+    disconnected(); renderNav(); renderWelcome();
+    loadCredsForTarget();
+  };
+  renderNav();
+}
+
+// ── Sidebar: data-driven nav ──
+function navModel() {
+  const isDocdb = currentEngine.startsWith('document');
+  return [
+    { label: 'Users', items: [
+      { id: 'users', icon: ICONS.users, label: 'List users', badge: 'users' },
+      { id: 'userinfo', icon: ICONS.search, label: 'User info' },
+      { id: 'create', icon: ICONS.plus, label: 'Create user', mutating: true },
+      { id: 'reset', icon: ICONS.key, label: 'Reset password', mutating: true },
+    ]},
+    { label: 'Permissions', items: [
+      { id: 'grant', icon: ICONS.shield, label: isDocdb ? 'Grant roles' : 'Grant privileges', mutating: true },
+      { id: 'revoke', icon: ICONS.ban, label: isDocdb ? 'Revoke roles' : 'Revoke privileges', mutating: true },
+      ...(!isDocdb ? [{ id: 'toggle', icon: ICONS.lock, label: 'Enable / disable', mutating: true }] : []),
+    ]},
+    { label: 'Query', items: [
+      { id: 'query', icon: ICONS.term, label: 'Run query' },
+    ]},
+    { label: 'Explore', items: [
+      { id: 'databases', icon: ICONS.db, label: 'Databases', badge: 'databases' },
+      { id: 'collections', icon: ICONS.grid, label: isDocdb ? 'Collections' : 'Tables' },
+      { id: 'health', icon: ICONS.pulse, label: 'Cluster health' },
+    ]},
+    { label: 'Security', items: [
+      { id: 'audits', icon: ICONS.shield, label: 'Audits', badge: 'audits' },
+    ]},
+    { label: 'Danger', items: [
+      { id: 'drop', icon: ICONS.trash, label: 'Drop user', danger: true, mutating: true },
+    ]},
+    { label: 'Logs', items: [
+      { id: 'audit', icon: ICONS.scroll, label: 'Audit log', always: true },
+    ]},
+    { label: 'Settings', items: [
+      { id: 'envs', icon: ICONS.sliders, label: 'Environments', always: true },
+    ]},
+  ];
+}
+
+const VIEWS = {
+  users: () => viewListUsers(),
+  userinfo: () => viewUserInfo(),
+  create: () => viewCreateUser(),
+  reset: () => viewResetPassword(),
+  grant: () => viewGrant(),
+  revoke: () => viewRevoke(),
+  toggle: () => viewToggleLogin(),
+  drop: () => viewDropUser(),
+  databases: () => viewDatabases(),
+  collections: () => viewCollections(),
+  query: () => viewQuery(),
+  health: () => viewHealth(),
+  audits: () => viewAudits(),
+  audit: () => viewAuditLog(),
+  envs: () => viewEnvs(),
+};
+
+function renderNav() {
+  const box = document.getElementById('navSections');
+  let html = '';
+  for (const group of navModel()) {
+    html += `<div class="group-label">${esc(group.label)}</div>`;
+    for (const item of group.items) {
+      const roLocked = prefs.readOnly && item.mutating;
+      const dis = ((connected || item.always) && !roLocked) ? '' : 'disabled';
+      const badge = item.badge ? `<span class="nav-badge" id="badge-${item.badge}" style="display:none"></span>` : '';
+      const title = roLocked ? 'title="Disabled while read-only mode is on"' : '';
+      html += `<button id="nav-${item.id}" class="nav-item${item.danger ? ' danger' : ''}" ${dis} ${title}
+        onclick="navigate('${item.id}')">${item.icon}<span>${esc(item.label)}</span>${roLocked ? '<span class="nav-badge">🛡</span>' : badge}</button>`;
+    }
+  }
+  box.innerHTML = html;
+  markActive(currentView);
+  renderBadges();
+  renderSidebarFoot();
+  const qf = document.getElementById('qfInput');
+  qf.disabled = !connected;
+  qf.placeholder = connected ? 'Jump to user or db…' : 'Connect to search…';
+}
+
+function renderSidebarFoot() {
+  const foot = document.getElementById('sidebarFoot');
+  if (connected) {
+    foot.innerHTML = `${ICONS.bolt}<span>${esc(document.getElementById('envSelect').value)} · ${esc(currentEngine.replace(/_/g, ' '))}</span>`;
+  } else {
+    foot.innerHTML = `${ICONS.lock}<span>connect to unlock operations</span>`;
+  }
+}
+
+function navigate(id) {
+  const fn = VIEWS[id];
+  if (!fn) return;
+  currentView = id;
+  savePrefs({ lastView: id });
+  markActive(id);
+  fn();
+}
+
+function markActive(id) {
+  document.querySelectorAll('.nav-item.active').forEach(el => el.classList.remove('active'));
+  const el = document.getElementById('nav-' + id);
+  if (el) el.classList.add('active');
+  currentView = id || currentView;
+}
+
+// ── Quick-jump search ──
+function qfRender() {
+  const input = document.getElementById('qfInput');
+  const box = document.getElementById('qfResults');
+  const q = input.value.trim().toLowerCase();
+  if (!q || !connected) { box.classList.remove('open'); box.innerHTML = ''; return; }
+  const us = cachedUsers.filter(n => n.toLowerCase().includes(q)).slice(0, 6);
+  const ds = cachedDbs.filter(n => n.toLowerCase().includes(q)).slice(0, 6);
+  if (!us.length && !ds.length) {
+    box.innerHTML = `<div class="qf-hit" style="cursor:default;color:var(--text-muted)">no matches</div>`;
+    box.classList.add('open');
+    return;
+  }
+  let html = '';
+  for (const n of us) html += `<button class="qf-hit" data-name="${esc(n)}" onclick="qfGo('user', this.dataset.name)">${ICONS.users}<span>${esc(n)}</span><span class="tag">user</span></button>`;
+  for (const n of ds) html += `<button class="qf-hit" data-name="${esc(n)}" onclick="qfGo('db', this.dataset.name)">${ICONS.db}<span>${esc(n)}</span><span class="tag">db</span></button>`;
+  box.innerHTML = html;
+  box.classList.add('open');
+}
+function qfGo(type, name) {
+  const input = document.getElementById('qfInput');
+  input.value = '';
+  qfRender();
+  if (type === 'user') { markActive('userinfo'); viewUserInfoFor(name); }
+  else { markActive('collections'); viewCollections(name); }
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const qf = document.getElementById('qfInput');
+  qf.addEventListener('input', qfRender);
+  qf.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      const first = document.querySelector('#qfResults .qf-hit[data-name]');
+      if (first) first.click();
+    } else if (e.key === 'Escape') { qf.value = ''; qfRender(); qf.blur(); }
+  });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.qf-wrap')) document.getElementById('qfResults').classList.remove('open');
+  });
+});
+
+// ── Helpers ──
+function creds() {
+  const env = document.getElementById('envSelect').value;
+  const body = {
+    env,
+    engine: currentEngine,
+    admin_user: document.getElementById('adminUser').value,
+    admin_pass: document.getElementById('adminPass').value,
+  };
+  const override = envConfigFor(env, currentEngine);
+  if (override) body.custom_config = override;
+  if (prefs.readOnly) body.read_only = true;
+  return body;
+}
+
+// ── Read-only mode ──
+function toggleReadOnly() {
+  savePrefs({ readOnly: !prefs.readOnly });
+  renderRoBtn();
+  renderNav();
+  toast(prefs.readOnly ? 'Read-only mode ON, the server now refuses all writes' : 'Read-only mode off', prefs.readOnly ? 'info' : 'success');
+}
+function renderRoBtn() {
+  const btn = document.getElementById('roBtn');
+  if (!btn) return;
+  btn.textContent = prefs.readOnly ? '🛡 read-only' : '🛡 rw';
+  btn.style.borderColor = prefs.readOnly ? 'var(--warning)' : '';
+  btn.style.color = prefs.readOnly ? 'var(--warning)' : '';
+}
+
+// ── macOS Keychain (server-mediated) ──
+function currentHost() {
+  const env = document.getElementById('envSelect').value;
+  return envConfigFor(env, currentEngine)?.host
+    || config.environment_details?.[env]?.[currentEngine]?.host || '';
+}
+async function saveToKeychain() {
+  const host = currentHost();
+  const user = document.getElementById('adminUser').value.trim();
+  const password = document.getElementById('adminPass').value;
+  if (!host || !user || !password) { toast('Need env, username and password first', 'error'); return; }
+  const res = await apiPost('/api/keychain-save', { host, user, password });
+  if (res.ok) toast(`Password saved to Keychain for ${user}@${host.split('.')[0]}`, 'success');
+  else toast(res.error || 'Keychain save failed', 'error');
+}
+async function keychainAutofill() {
+  if (!config.tools?.keychain) return false;
+  const host = currentHost();
+  const user = document.getElementById('adminUser').value.trim();
+  if (!host || !user || document.getElementById('adminPass').value) return false;
+  try {
+    const res = await apiPost('/api/keychain-get', { host, user });
+    if (res.ok && res.password) {
+      document.getElementById('adminPass').value = res.password;
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+function requireConnection() {
+  if (!connected) {
+    toast('Connect first: enter credentials and click Connect', 'error');
+    return false;
+  }
+  return true;
+}
+
+async function apiPost(path, extra = {}) {
+  const body = { ...creds(), ...extra };
+  const r = await fetch(API + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+function setContent(html) {
+  if (window._viewTimer) { clearInterval(window._viewTimer); window._viewTimer = null; }
+  document.getElementById('content').innerHTML = html;
+}
+
+function loading(msg = 'Loading…') {
+  return `<div class="card">
+    <div class="loading-msg"><div class="spinner"></div> ${esc(msg)}</div>
+    <div class="skel" style="width:55%"></div>
+    <div class="skel" style="width:82%"></div>
+    <div class="skel" style="width:68%"></div>
+    <div class="skel" style="width:74%; margin-bottom:0"></div>
+  </div>`;
+}
+
+function loadingInline(msg = 'Loading…') {
+  return `<div class="loading-msg"><div class="spinner"></div> ${esc(msg)}</div>`;
+}
+
+function copyText(text) {
+  navigator.clipboard.writeText(text);
+  toast('Copied to clipboard', 'success');
+}
+
+function passwordHtml(pwd) {
+  return `<div class="password-box">
+    <code>${esc(pwd)}</code>
+    <button class="copy-btn" data-clip="${esc(pwd)}" onclick="copyText(this.dataset.clip)" title="Copy">📋</button>
+  </div>`;
+}
+
+function showModal(title, bodyHtml, actions) {
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalBody').innerHTML = bodyHtml;
+  const actEl = document.getElementById('modalActions');
+  actEl.innerHTML = '';
+  for (const a of actions) {
+    const btn = document.createElement('button');
+    btn.className = `btn ${a.cls || 'btn-ghost'}`;
+    btn.textContent = a.label;
+    btn.onclick = () => { closeModal(); if (a.fn) a.fn(); };
+    actEl.appendChild(btn);
+  }
+  document.getElementById('modal').classList.add('open');
+}
+function closeModal() { document.getElementById('modal').classList.remove('open'); }
+
+function disconnected() {
+  connected = false;
+  cachedUsers = [];
+  cachedDbs = [];
+  collCache = {};
+  collFetching = {};
+  document.getElementById('userList').innerHTML = '';
+  document.getElementById('dbList').innerHTML = '';
+  document.getElementById('connDot').className = 'conn-dot';
+  document.getElementById('connText').textContent = 'offline';
+  document.getElementById('disconnBtn').style.display = 'none';
+  document.getElementById('qfResults').classList.remove('open');
+}
+function doDisconnect() {
+  clearPassword();
+  document.getElementById('adminPass').value = '';
+  disconnected();
+  renderNav();
+  renderWelcome();
+  toast('Disconnected, saved password cleared', 'success');
+}
+
+// ── Connection ──
+async function testConnection() {
+  const u = document.getElementById('adminUser').value.trim();
+  const p = document.getElementById('adminPass').value.trim();
+  if (!u || !p) { toast('Enter admin username and password', 'error'); return; }
+  const dot = document.getElementById('connDot');
+  const txt = document.getElementById('connText');
+  dot.className = 'conn-dot'; txt.textContent = 'connecting…';
+  const requestTarget = targetKey();
+  try {
+    const t0 = performance.now();
+    const res = await apiPost('/api/connect');
+    const rtt = Math.round(performance.now() - t0);
+    if (targetKey() !== requestTarget) return; // user switched away mid-connect
+    if (res.ok) {
+      dot.className = 'conn-dot ok';
+      txt.textContent = `${res.user ? res.user + ' @ ' : ''}${res.host || 'connected'} · ${rtt}ms`;
+      txt.title = `${res.user || ''} @ ${res.host || ''}, connect round-trip ${rtt}ms`;
+      connected = true;
+      document.getElementById('disconnBtn').style.display = '';
+      savePrefs({ adminUser: u, env: document.getElementById('envSelect').value, engine: currentEngine });
+      saveTargetCreds(u, document.getElementById('rememberChk').checked);
+      savePassword(p);
+      renderNav();
+      toast(`Connected · ${document.getElementById('envSelect').value} / ${currentEngine.replace(/_/g, ' ')}`, 'success');
+      refreshCache();
+      navigate((prefs.lastView && VIEWS[prefs.lastView]) ? prefs.lastView : 'users');
+    } else {
+      dot.className = 'conn-dot fail';
+      txt.textContent = 'auth failed';
+      connected = false;
+      renderNav();
+      toast(res.error || 'Connection failed', 'error');
+    }
+  } catch (e) {
+    dot.className = 'conn-dot fail';
+    txt.textContent = 'error';
+    connected = false;
+    renderNav();
+    toast('Server unreachable', 'error');
+    if (auto) renderWelcome();
+  }
+}
+
+// ── Welcome / status view ──
+function renderWelcome() {
+  const env = document.getElementById('envSelect')?.value || '—';
+  const tools = config.tools || {};
+  const toolChip = (name, ok) => `<div class="chip"><span class="k">${esc(name)}</span>
+    <span class="v">${ok ? '<span class="pill pill-ok">available</span>' : '<span class="pill pill-danger">missing</span>'}</span></div>`;
+  setContent(`<div class="card">
+    <h2>${ICONS.bolt} Control Room</h2>
+    <p style="color:var(--text-muted); line-height:1.6">
+      ${Object.keys(config.environments || {}).length || Object.keys(customEnvs).length
+        ? `Pick an environment and engine, enter admin credentials, and hit <strong>Connect</strong>.`
+        : `No environments yet. Add one in <strong>Settings → Environments</strong>, or import a backup from another warden there.`}
+    </p>
+    <div class="chips">
+      <div class="chip"><span class="k">environment</span><span class="v">${esc(env)}</span></div>
+      <div class="chip"><span class="k">engine</span><span class="v">${esc(currentEngine.replace(/_/g, ' ') || '—')}</span></div>
+      ${toolChip('mongosh', tools.mongosh)}
+      ${toolChip('psql', tools.psql)}
+    </div>
+  </div>`);
+}
+
+// ── Views ──
+
+async function viewListUsers() {
+  if (!requireConnection()) return;
+  setContent(loading('Fetching users…'));
+  const res = await apiPost('/api/list-users');
+  if (res.error) { setContent(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`); return; }
+  const isDocdb = currentEngine.startsWith('document');
+  let rows = '';
+  if (isDocdb) {
+    for (const u of res.users) {
+      const roles = u.roles.map(r => `<span class="pill pill-ok">${esc(r)}</span>`).join(' ');
+      rows += `<tr>
+        <td class="mono">${esc(u.user)}</td>
+        <td>${esc(u.db)}</td>
+        <td>${roles || '<span class="pill pill-muted">none</span>'}</td>
+        <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-user="${esc(u.user)}" onclick="markActive('userinfo');viewUserInfoFor(this.dataset.user)">Manage</button></td>
+      </tr>`;
+    }
+    setContent(`<div class="card"><h2>${ICONS.users} DocumentDB Users</h2>
+      <p class="card-meta">${res.users.length} users · click Manage to grant, revoke, reset or drop</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Username</th><th>Auth DB</th><th>Roles</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div></div>`);
+  } else {
+    for (const u of res.users) {
+      const status = u.can_login
+        ? '<span class="pill pill-ok">active</span>'
+        : '<span class="pill pill-danger">disabled</span>';
+      const flags = [];
+      if (u.superuser) flags.push('superuser');
+      if (u.createdb) flags.push('createdb');
+      if (u.createrole) flags.push('createrole');
+      rows += `<tr>
+        <td class="mono">${esc(u.user)}</td>
+        <td>${status}</td>
+        <td>${flags.join(', ') || '—'}</td>
+        <td style="color:var(--text-muted)">${u.valid_until === 'never' ? '—' : esc(u.valid_until)}</td>
+        <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-user="${esc(u.user)}" onclick="markActive('userinfo');viewUserInfoFor(this.dataset.user)">Manage</button></td>
+      </tr>`;
+    }
+    setContent(`<div class="card"><h2>${ICONS.users} PostgreSQL Users</h2>
+      <p class="card-meta">${res.users.length} roles · click Manage to grant, revoke, reset or drop</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Username</th><th>Status</th><th>Flags</th><th>Expires</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div></div>`);
+  }
+}
+
+function viewUserInfo() {
+  if (!requireConnection()) return;
+  setContent(`<div class="card"><h2>${ICONS.search} User Info</h2>
+    <div class="form-row">
+      <div class="form-field"><label>Username</label><input id="infoUser" list="userList" placeholder="type to search users…"></div>
+      <button class="btn btn-primary" onclick="viewUserInfoFor(document.getElementById('infoUser').value)">Look up</button>
+    </div></div>`);
+}
+
+async function viewUserInfoFor(username) {
+  setContent(loading('Looking up user…'));
+  const res = await apiPost('/api/user-info', { username });
+  if (res.error) { setContent(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`); return; }
+  const isDocdb = currentEngine.startsWith('document');
+  const uAttr = esc(res.user);
+  let html = `<div class="card"><h2>${ICONS.users} User: <span class="mono" style="font-size:14px">${uAttr}</span></h2>`;
+  if (isDocdb) {
+    html += `<p class="card-meta"><strong>Auth DB:</strong> ${esc(res.db)} &nbsp;·&nbsp; <strong>ID:</strong> <span class="mono">${esc(res.userId)}</span></p>`;
+    let rRows = '';
+    for (const r of res.roles) {
+      rRows += `<tr>
+        <td>${esc(r.role)}</td><td class="mono">${esc(r.db || '*')}</td>
+        <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-user="${uAttr}" data-role="${esc(r.role)}" data-db="${esc(r.db || '')}"
+          onclick="revokeRoleDirect(this.dataset.user, this.dataset.role, this.dataset.db)">Revoke</button></td>
+      </tr>`;
+    }
+    html += `<div class="table-wrap"><table><thead><tr><th>Role</th><th>Database</th><th></th></tr></thead><tbody>${rRows || '<tr><td colspan="3" style="color:var(--text-muted)">No roles</td></tr>'}</tbody></table></div>`;
+    const roleOpts = (config.docdb_roles || []).map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
+    html += `<h2 style="margin-top:20px">${ICONS.shield} Grant a Role</h2>
+      <div class="form-row" style="margin-bottom:0">
+        <div class="form-field"><label>Role</label><select id="uiGrantRole">${roleOpts}</select></div>
+        <div class="form-field"><label>Database</label><input id="uiGrantDb" list="dbList" placeholder="type to search databases…"></div>
+        <button class="btn btn-success" data-user="${uAttr}" onclick="grantRoleDirect(this.dataset.user)">Grant</button>
+      </div>`;
+  } else {
+    const status = res.can_login ? '<span class="pill pill-ok">active</span>' : '<span class="pill pill-danger">disabled</span>';
+    const flags = [];
+    if (res.superuser) flags.push('superuser');
+    if (res.createdb) flags.push('createdb');
+    if (res.createrole) flags.push('createrole');
+    html += `<p style="margin-bottom:8px">${status} &nbsp; Flags: ${flags.join(', ') || 'none'} &nbsp; Expires: ${esc(res.valid_until)} &nbsp; Conn limit: ${esc(res.conn_limit)}</p>`;
+    const granted = (res.db_privileges || []).filter(d => d.privileges && d.privileges.length);
+    if (granted.length) {
+      let dbRows = '';
+      for (const d of granted) {
+        const btns = d.privileges.map(p => `<button class="btn btn-ghost btn-sm" data-user="${uAttr}" data-priv="${esc(p)}" data-db="${esc(d.database)}"
+          onclick="revokePgDbPriv(this.dataset.user, this.dataset.priv, this.dataset.db)">Revoke ${esc(p)}</button>`).join(' ');
+        dbRows += `<tr><td class="mono">${esc(d.database)}</td><td>${d.privileges.map(esc).join(', ')}</td><td style="text-align:right">${btns}</td></tr>`;
+      }
+      html += `<h2 style="margin-top:16px">Database Privileges</h2>
+        <div class="table-wrap"><table><thead><tr><th>Database</th><th>Privileges</th><th></th></tr></thead><tbody>${dbRows}</tbody></table></div>`;
+    }
+    if (res.grants && res.grants.length) {
+      let gRows = '';
+      for (const g of res.grants) {
+        gRows += `<tr><td class="mono">${esc(g.db)}</td><td class="mono">${esc(g.table)}</td><td>${esc(g.privilege)}</td></tr>`;
+      }
+      html += `<h2 style="margin-top:16px">Table Grants</h2>
+        <div class="table-wrap"><table><thead><tr><th>Database</th><th>Table</th><th>Privilege</th></tr></thead><tbody>${gRows}</tbody></table></div>`;
+    }
+    const privOpts = (config.pg_privileges || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    html += `<h2 style="margin-top:20px">${ICONS.shield} Grant a Privilege</h2>
+      <div class="form-row" style="margin-bottom:0">
+        <div class="form-field"><label>Privilege</label><select id="uiGrantPriv">${privOpts}</select></div>
+        <div class="form-field"><label>Database</label><input id="uiGrantDb" list="dbList" placeholder="type to search databases…"></div>
+        <div class="form-field"><label>Schema</label><input id="uiGrantSchema" value="public"></div>
+        <button class="btn btn-success" data-user="${uAttr}" onclick="grantPgPrivDirect(this.dataset.user)">Grant</button>
+      </div>`;
+  }
+  // Management toolbar
+  const pgButtons = isDocdb ? '' : (res.can_login
+    ? `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, false)">🔒 Disable login</button>`
+    : `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, true)">🔓 Enable login</button>`);
+  html += `<div class="user-toolbar">
+    <button class="btn btn-primary" data-user="${uAttr}" onclick="markActive('reset');viewResetPassword(this.dataset.user)">🔑 Reset password</button>
+    ${pgButtons}
+    <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">🗑️ Drop user</button>
+  </div>`;
+  html += '</div>';
+  setContent(html);
+}
+
+// ── Direct actions from the user info page ──
+
+function revokeRoleDirect(username, role, db) {
+  showModal('Confirm Revoke', `<p style="color:var(--danger)">Revoke <strong>${esc(role)} on ${esc(db)}</strong> from <strong>${esc(username)}</strong>?</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Revoke', cls: 'btn-danger', fn: async () => {
+      const res = await apiPost('/api/revoke', { username, roles: [{ role, db }] });
+      if (res.ok) { toast(`Revoked ${role} on ${db}`, 'success'); viewUserInfoFor(username); }
+      else toast(res.error || 'Failed', 'error');
+    }},
+  ]);
+}
+
+function grantRoleDirect(username) {
+  const role = document.getElementById('uiGrantRole').value;
+  const db = document.getElementById('uiGrantDb').value.trim();
+  if (!db) { toast('Database required', 'error'); return; }
+  showModal('Confirm Grant', `<p>Grant <strong>${esc(role)} on ${esc(db)}</strong> to <strong>${esc(username)}</strong>?</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Grant', cls: 'btn-success', fn: async () => {
+      const res = await apiPost('/api/grant', { username, roles: [{ role, db }] });
+      if (res.ok) { toast(`Granted ${role} on ${db}`, 'success'); viewUserInfoFor(username); }
+      else toast(res.error || 'Failed', 'error');
+    }},
+  ]);
+}
+
+function grantPgPrivDirect(username) {
+  const privilege = document.getElementById('uiGrantPriv').value;
+  const database = document.getElementById('uiGrantDb').value.trim();
+  const schema = document.getElementById('uiGrantSchema').value.trim() || 'public';
+  if (!database) { toast('Database required', 'error'); return; }
+  showModal('Confirm Grant', `<p>Grant <strong>${esc(privilege)} on ${esc(database)}</strong> to <strong>${esc(username)}</strong>?</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Grant', cls: 'btn-success', fn: async () => {
+      const res = await apiPost('/api/grant', { username, privilege, database, schema });
+      if (res.ok) { toast(`Granted ${privilege} on ${database}`, 'success'); viewUserInfoFor(username); }
+      else toast(res.error || 'Failed', 'error');
+    }},
+  ]);
+}
+
+function revokePgDbPriv(username, privilege, database) {
+  showModal('Confirm Revoke', `<p style="color:var(--danger)">Revoke <strong>${esc(privilege)} on ${esc(database)}</strong> from <strong>${esc(username)}</strong>?</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Revoke', cls: 'btn-danger', fn: async () => {
+      const res = await apiPost('/api/revoke', { username, privilege, database });
+      if (res.ok) { toast(`Revoked ${privilege} on ${database}`, 'success'); viewUserInfoFor(username); }
+      else toast(res.error || 'Failed', 'error');
+    }},
+  ]);
+}
+
+function toggleLoginDirect(username, enable) {
+  const action = enable ? 'Enable' : 'Disable';
+  showModal(`${action} Login`, `<p>${action} login for <strong>${esc(username)}</strong>?</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: action, cls: enable ? 'btn-success' : 'btn-danger', fn: async () => {
+      const res = await apiPost('/api/toggle-login', { username, enable });
+      if (res.ok) { toast(`${action}d login for ${username}`, 'success'); viewUserInfoFor(username); }
+      else toast(res.error || 'Failed', 'error');
+    }},
+  ]);
+}
+
+function confirmDropUser(username) {
+  showModal('Confirm Delete', `
+    <p style="color:var(--danger); font-weight:600; margin-bottom:8px">
+      Permanently delete user <strong>${esc(username)}</strong> from <strong>${esc(creds().env)}</strong>?
+    </p>
+    <div class="form-field" style="margin-bottom:0">
+      <label>Type the username to confirm</label>
+      <input id="confirmDrop" placeholder="${esc(username)}">
+    </div>
+  `, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Delete', cls: 'btn-danger', fn: async () => {
+      const typed = document.getElementById('confirmDrop')?.value;
+      if (typed !== username) { toast('Username does not match', 'error'); return; }
+      const res = await apiPost('/api/drop-user', { username });
+      if (res.ok) { toast(`User ${username} dropped`, 'success'); refreshCache(); navigate('users'); }
+      else { toast(res.error || 'Failed', 'error'); }
+    }},
+  ]);
+}
+
+function viewCreateUser() {
+  if (!requireConnection()) return;
+  const isDocdb = currentEngine.startsWith('document');
+  let extra = '';
+  if (isDocdb) {
+    const roleOpts = (config.docdb_roles || []).map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
+    extra = `
+      <div class="form-field"><label>Initial role</label><select id="createRole">${roleOpts}</select></div>
+      <div class="form-field"><label>On database</label><input id="createRoleDb" list="dbList" placeholder="type to search databases…"></div>`;
+  } else {
+    extra = `<div class="form-field"><label>Allow login</label><select id="createLogin"><option value="true">Yes</option><option value="false">No</option></select></div>`;
+  }
+  setContent(`<div class="card"><h2>${ICONS.plus} Create User</h2>
+    <div class="form-row">
+      <div class="form-field"><label>Username</label><input id="createUser" placeholder="username"></div>
+      <div class="form-field"><label>Password (blank = generate)</label><input id="createPass" type="password" placeholder="auto-generate"></div>
+      ${extra}
+    </div>
+    ${isDocdb ? '<p class="card-meta">More roles can be granted afterwards from the user’s info page.</p>' : ''}
+    <button class="btn btn-success" onclick="doCreateUser()">Create User</button>
+  </div>`);
+}
+
+async function doCreateUser() {
+  const username = document.getElementById('createUser').value;
+  if (!username) { toast('Username required', 'error'); return; }
+  const password = document.getElementById('createPass')?.value || '';
+  const isDocdb = currentEngine.startsWith('document');
+  const extra = {};
+  if (isDocdb) {
+    const role = document.getElementById('createRole').value;
+    const db = document.getElementById('createRoleDb').value.trim();
+    if (!db) { toast('Database required for the initial role', 'error'); return; }
+    extra.roles = [{ role, db }];
+  } else {
+    extra.can_login = document.getElementById('createLogin').value === 'true';
+  }
+  showModal('Confirm Create User', `<p>Create user <strong>${esc(username)}</strong> on <strong>${esc(creds().env)} / ${esc(currentEngine)}</strong>?</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Create', cls: 'btn-success', fn: async () => {
+      const res = await apiPost('/api/create-user', { username, password, ...extra });
+      if (res.ok) {
+        toast('User created', 'success');
+        refreshCache();
+        setContent(`<div class="card"><h2>${ICONS.plus} User Created: <span class="mono" style="font-size:14px">${esc(username)}</span></h2>
+          <p style="margin-bottom:8px; color:var(--warning); font-weight:600">Save this password, it won't be shown again:</p>
+          ${passwordHtml(res.password)}
+          <button class="btn btn-ghost" style="margin-top:12px" onclick="navigate('users')">Back to users</button>
+        </div>`);
+      } else {
+        toast(res.error || 'Failed', 'error');
+      }
+    }},
+  ]);
+}
+
+function viewResetPassword(prefill = '') {
+  if (!requireConnection()) return;
+  setContent(`<div class="card"><h2>${ICONS.key} Reset Password</h2>
+    <div class="form-row">
+      <div class="form-field"><label>Username</label><input id="resetUser" list="userList" placeholder="type to search users…"></div>
+      <div class="form-field"><label>New password (blank = generate)</label><input id="resetPass" type="password" placeholder="auto-generate"></div>
+    </div>
+    <button class="btn btn-primary" onclick="doResetPassword()">Reset Password</button>
+  </div>`);
+  if (prefill && typeof prefill === 'string') document.getElementById('resetUser').value = prefill;
+}
+
+async function doResetPassword() {
+  const username = document.getElementById('resetUser').value;
+  if (!username) { toast('Username required', 'error'); return; }
+  const password = document.getElementById('resetPass')?.value || '';
+  showModal('Confirm Password Reset', `<p>Reset password for <strong>${esc(username)}</strong>?</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Reset', cls: 'btn-primary', fn: async () => {
+      const res = await apiPost('/api/reset-password', { username, password });
+      if (res.ok) {
+        toast('Password reset', 'success');
+        setContent(`<div class="card"><h2>${ICONS.key} Password Reset: <span class="mono" style="font-size:14px">${esc(username)}</span></h2>
+          <p style="margin-bottom:8px; color:var(--warning); font-weight:600">New password:</p>
+          ${passwordHtml(res.password)}
+        </div>`);
+      } else {
+        toast(res.error || 'Failed', 'error');
+      }
+    }},
+  ]);
+}
+
+function viewGrant(prefill = '') {
+  if (!requireConnection()) return;
+  const isDocdb = currentEngine.startsWith('document');
+  let fields = '';
+  if (isDocdb) {
+    const opts = (config.docdb_roles || []).map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
+    fields = `
+      <div class="form-field"><label>Role</label><select id="grantRole">${opts}</select></div>
+      <div class="form-field"><label>Database</label><input id="grantDb" list="dbList" placeholder="type to search databases…"></div>
+    `;
+  } else {
+    const opts = (config.pg_privileges || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    fields = `
+      <div class="form-field"><label>Privilege</label><select id="grantPriv">${opts}</select></div>
+      <div class="form-field"><label>Database</label><input id="grantDb" list="dbList" placeholder="type to search databases…"></div>
+      <div class="form-field"><label>Schema</label><input id="grantSchema" value="public"></div>
+    `;
+  }
+  setContent(`<div class="card"><h2>${ICONS.shield} Grant ${isDocdb ? 'Roles' : 'Privileges'}</h2>
+    <div class="form-row">
+      <div class="form-field"><label>Username</label><input id="grantUser" list="userList" placeholder="type to search users…"></div>
+      ${fields}
+    </div>
+    <button class="btn btn-success" onclick="doGrant()">Grant</button>
+  </div>`);
+  if (prefill && typeof prefill === 'string') document.getElementById('grantUser').value = prefill;
+}
+
+async function doGrant() {
+  const username = document.getElementById('grantUser').value;
+  if (!username) { toast('Username required', 'error'); return; }
+  const isDocdb = currentEngine.startsWith('document');
+  const extra = {};
+  if (isDocdb) {
+    extra.roles = [{ role: document.getElementById('grantRole').value, db: document.getElementById('grantDb').value }];
+  } else {
+    extra.privilege = document.getElementById('grantPriv').value;
+    extra.database = document.getElementById('grantDb').value;
+    extra.schema = document.getElementById('grantSchema')?.value || 'public';
+  }
+  const desc = isDocdb ? `${esc(extra.roles[0].role)} on ${esc(extra.roles[0].db)}` : `${esc(extra.privilege)} on ${esc(extra.database)}`;
+  showModal('Confirm Grant', `<p>Grant <strong>${desc}</strong> to <strong>${esc(username)}</strong>?</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Grant', cls: 'btn-success', fn: async () => {
+      const res = await apiPost('/api/grant', { username, ...extra });
+      if (res.ok) { toast('Granted', 'success'); }
+      else { toast(res.error || 'Failed', 'error'); }
+    }},
+  ]);
+}
+
+function viewRevoke(prefill = '') {
+  if (!requireConnection()) return;
+  const isDocdb = currentEngine.startsWith('document');
+  let fields = '';
+  if (isDocdb) {
+    const opts = (config.docdb_roles || []).map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
+    fields = `
+      <div class="form-field"><label>Role</label><select id="revokeRole">${opts}</select></div>
+      <div class="form-field"><label>Database</label><input id="revokeDb" list="dbList" placeholder="type to search databases…"></div>
+    `;
+  } else {
+    const opts = (config.pg_privileges || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    fields = `
+      <div class="form-field"><label>Privilege</label><select id="revokePriv">${opts}</select></div>
+      <div class="form-field"><label>Database</label><input id="revokeDb" list="dbList" placeholder="type to search databases…"></div>
+      <div class="form-field"><label>Schema</label><input id="revokeSchema" value="public"></div>
+    `;
+  }
+  setContent(`<div class="card"><h2>${ICONS.ban} Revoke ${isDocdb ? 'Roles' : 'Privileges'}</h2>
+    <div class="form-row">
+      <div class="form-field"><label>Username</label><input id="revokeUser" list="userList" placeholder="type to search users…"></div>
+      ${fields}
+    </div>
+    <button class="btn btn-danger" onclick="doRevoke()">Revoke</button>
+  </div>`);
+  if (prefill && typeof prefill === 'string') document.getElementById('revokeUser').value = prefill;
+}
+
+async function doRevoke() {
+  const username = document.getElementById('revokeUser').value;
+  if (!username) { toast('Username required', 'error'); return; }
+  const isDocdb = currentEngine.startsWith('document');
+  const extra = {};
+  if (isDocdb) {
+    extra.roles = [{ role: document.getElementById('revokeRole').value, db: document.getElementById('revokeDb').value }];
+  } else {
+    extra.privilege = document.getElementById('revokePriv').value;
+    extra.database = document.getElementById('revokeDb').value;
+    extra.schema = document.getElementById('revokeSchema')?.value || 'public';
+  }
+  const desc = isDocdb ? `${esc(extra.roles[0].role)} on ${esc(extra.roles[0].db)}` : `${esc(extra.privilege)} on ${esc(extra.database)}`;
+  showModal('Confirm Revoke', `<p style="color:var(--danger)">Revoke <strong>${desc}</strong> from <strong>${esc(username)}</strong>?</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Revoke', cls: 'btn-danger', fn: async () => {
+      const res = await apiPost('/api/revoke', { username, ...extra });
+      if (res.ok) { toast('Revoked', 'success'); }
+      else { toast(res.error || 'Failed', 'error'); }
+    }},
+  ]);
+}
+
+function viewToggleLogin() {
+  if (!requireConnection()) return;
+  setContent(`<div class="card"><h2>${ICONS.lock} Enable / Disable User Login</h2>
+    <div class="form-row">
+      <div class="form-field"><label>Username</label><input id="toggleUser" list="userList" placeholder="type to search users…"></div>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:4px">
+      <button class="btn btn-success" onclick="doToggleLogin(true)">Enable Login</button>
+      <button class="btn btn-danger" onclick="doToggleLogin(false)">Disable Login</button>
+    </div>
+  </div>`);
+}
+
+async function doToggleLogin(enable) {
+  const username = document.getElementById('toggleUser').value;
+  if (!username) { toast('Username required', 'error'); return; }
+  toggleLoginDirect(username, enable);
+}
+
+function viewDropUser() {
+  if (!requireConnection()) return;
+  setContent(`<div class="card"><h2 style="color:var(--danger)">${ICONS.trash} Drop User</h2>
+    <p class="card-meta">This permanently deletes the user. This cannot be undone.</p>
+    <div class="form-row">
+      <div class="form-field"><label>Username</label><input id="dropUser" list="userList" placeholder="type to search users…"></div>
+    </div>
+    <button class="btn btn-danger" onclick="doDropUser()">Drop User</button>
+  </div>`);
+}
+
+function doDropUser() {
+  const username = document.getElementById('dropUser').value;
+  if (!username) { toast('Username required', 'error'); return; }
+  confirmDropUser(username);
+}
+
+async function viewDatabases() {
+  if (!requireConnection()) return;
+  setContent(loading('Listing databases…'));
+  const res = await apiPost('/api/list-databases');
+  if (res.error) { setContent(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`); return; }
+  dbData = (res.databases || []).map(d => ({
+    ...d,
+    bytes: d.size_bytes != null ? Number(d.size_bytes) : Number(d.size_mb || 0) * 1048576,
+  }));
+  dbSort = { key: 'size', dir: -1 };
+  renderDatabases();
+}
+
+function sortDatabases(key) {
+  if (dbSort.key === key) dbSort.dir = -dbSort.dir;
+  else dbSort = { key, dir: key === 'size' ? -1 : 1 };
+  renderDatabases();
+}
+
+function renderDatabases() {
+  const arrow = k => dbSort.key === k ? `<span class="arrow">${dbSort.dir === 1 ? '▲' : '▼'}</span>` : '';
+  const sorted = [...dbData].sort((a, b) => {
+    const cmp = dbSort.key === 'size'
+      ? a.bytes - b.bytes
+      : a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+    return cmp * dbSort.dir;
+  });
+  const maxBytes = Math.max(1, ...dbData.map(d => d.bytes));
+  const totalBytes = dbData.reduce((s, d) => s + d.bytes, 0);
+  let rows = '';
+  for (const d of sorted) {
+    const empty = d.empty ? '<span class="pill pill-muted">empty</span>' : '';
+    const pct = Math.max(0.5, (d.bytes / maxBytes) * 100);
+    rows += `<tr>
+      <td class="mono" style="cursor:pointer" data-db="${esc(d.name)}" onclick="markActive('collections');viewCollections(this.dataset.db)" title="List ${currentEngine.startsWith('document') ? 'collections' : 'tables'}">${esc(d.name)}</td>
+      <td style="white-space:nowrap">${fmtSize(d.bytes)}<div class="sizebar"><div style="width:${pct.toFixed(1)}%"></div></div></td>
+      <td>${empty}</td>
+    </tr>`;
+  }
+  setContent(`<div class="card"><h2>${ICONS.db} Databases</h2>
+    <p class="card-meta">${dbData.length} databases · ${fmtSize(totalBytes)} total · click a name to browse it</p>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th class="sortable" onclick="sortDatabases('name')">Name${arrow('name')}</th>
+        <th class="sortable" onclick="sortDatabases('size')">Size${arrow('size')}</th>
+        <th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div></div>`);
+}
+
+function viewCollections(prefillDb = '') {
+  if (!requireConnection()) return;
+  const label = currentEngine.startsWith('document') ? 'collections' : 'tables';
+  setContent(`<div class="card"><h2>${ICONS.grid} List ${label}</h2>
+    <div class="form-row">
+      <div class="form-field"><label>Database</label><input id="collDb" list="dbList" placeholder="type to search databases…"></div>
+      <button class="btn btn-primary" onclick="doListCollections()">List</button>
+    </div><div id="collResults"></div></div>`);
+  if (prefillDb && typeof prefillDb === 'string') {
+    document.getElementById('collDb').value = prefillDb;
+    doListCollections();
+  }
+}
+
+async function doListCollections() {
+  const database = document.getElementById('collDb').value;
+  if (!database) { toast('Database required', 'error'); return; }
+  document.getElementById('collResults').innerHTML = loadingInline();
+  const res = await apiPost('/api/list-collections', { database });
+  const target = document.getElementById('collResults');
+  if (!target) return;
+  if (res.error) { target.innerHTML = `<p style="color:var(--danger); margin-top:12px">${esc(res.error)}</p>`; return; }
+  const act = (label, db, text, title) => `<button class="btn btn-ghost btn-sm" title="${esc(title)}"
+    data-db="${esc(db)}" data-q="${esc(text)}" onclick="openQueryWith(this.dataset.db, this.dataset.q)">${label}</button>`;
+  if (res.collections) {
+    const collRef = c => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(c) ? `db.${c}` : `db.getCollection(${JSON.stringify(c)})`;
+    const rows = res.collections.map(c => `<tr>
+      <td class="mono">${esc(c)}</td>
+      <td style="text-align:right; white-space:nowrap">
+        ${act('Sample', database, `${collRef(c)}.find({}).limit(5)`, 'Show 5 documents')}
+        ${act('Count', database, `${collRef(c)}.estimatedDocumentCount()`, 'Fast document count')}
+      </td></tr>`).join('');
+    target.innerHTML = rows
+      ? `<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Collection (${res.collections.length})</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : `<div class="empty-state" style="margin-top:12px">No collections in this database</div>`;
+  } else if (res.tables) {
+    const rows = res.tables.map(t => {
+      const full = `"${t.schema}"."${t.table}"`;
+      return `<tr>
+      <td class="mono">${esc(t.schema)}</td><td class="mono">${esc(t.table)}</td>
+      <td style="white-space:nowrap">${t.size_bytes != null ? fmtSize(t.size_bytes) : '—'}</td>
+      <td style="text-align:right; white-space:nowrap">
+        ${act('Sample', database, `SELECT * FROM ${full} LIMIT 5;`, 'Show 5 rows')}
+        ${act('Count', database, `SELECT reltuples::bigint AS estimated_rows FROM pg_class WHERE oid = '${full}'::regclass;`, 'Fast row estimate')}
+      </td></tr>`;
+    }).join('');
+    target.innerHTML = rows
+      ? `<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Schema</th><th>Table</th><th>Size</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : `<div class="empty-state" style="margin-top:12px">No tables in this database</div>`;
+  }
+}
+
+// ── Audit log ──
+let auditEntries = [];
+let auditFilter = { text: '', action: '' };
+
+async function viewAuditLog() {
+  setContent(loading('Reading audit log…'));
+  const res = await fetch('/api/audit-log', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' }).then(r => r.json());
+  if (!res.entries || !res.entries.length) {
+    setContent(`<div class="card"><h2>${ICONS.scroll} Audit Log</h2><div class="empty-state">No audit entries yet. Actions you take here get recorded.</div></div>`);
+    return;
+  }
+  auditEntries = res.entries;
+  auditFilter = { text: '', action: '' };
+  const chips = ['GRANT', 'REVOKE', 'CREATE', 'DROP', 'QUERY', 'PASSWORD'];
+  setContent(`<div class="card"><h2>${ICONS.scroll} Audit Log</h2>
+    <p class="card-meta">Last ${res.entries.length} entries (newest first) · stored at ~/.warden/audit.log</p>
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap">
+      <div class="qf" style="width:260px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.2"/><path d="M15.8 15.8L21 21"/></svg>
+        <input id="auditSearch" placeholder="filter entries…" oninput="auditFilter.text=this.value; renderAuditRows()"></div>
+      ${chips.map(c => `<button class="btn btn-ghost btn-sm" id="chip-${c}" onclick="toggleAuditChip('${c}')">${c}</button>`).join('')}
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Time</th><th>Target</th><th>Action</th><th>Details</th></tr></thead>
+      <tbody id="auditRows"></tbody>
+    </table></div></div>`);
+  renderAuditRows();
+}
+
+function toggleAuditChip(action) {
+  auditFilter.action = auditFilter.action === action ? '' : action;
+  document.querySelectorAll('[id^="chip-"]').forEach(b => b.classList.remove('btn-primary'));
+  if (auditFilter.action) document.getElementById('chip-' + auditFilter.action)?.classList.add('btn-primary');
+  renderAuditRows();
+}
+
+function renderAuditRows() {
+  const tbody = document.getElementById('auditRows');
+  if (!tbody) return;
+  const actionPill = a => {
+    const up = a.toUpperCase();
+    if (up.includes('DROP') || up.includes('REVOKE') || up.includes('DISABLE')) return `<span class="pill pill-danger">${esc(a)}</span>`;
+    if (up.includes('CREATE') || up.includes('GRANT') || up.includes('ENABLE')) return `<span class="pill pill-ok">${esc(a)}</span>`;
+    return `<span class="pill pill-warn">${esc(a)}</span>`;
+  };
+  const text = auditFilter.text.trim().toLowerCase();
+  const rows = auditEntries.filter(line => {
+    if (text && !line.toLowerCase().includes(text)) return false;
+    if (auditFilter.action) {
+      const m = line.match(/\]\s+([A-Z ]+?)(?:\s+—|$)/);
+      if (!m || !m[1].includes(auditFilter.action)) return false;
+    }
+    return true;
+  }).map(line => {
+    const m = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\[([^\]]+)\]\s+(.*?)(?:\s+—\s+(.*))?$/);
+    if (m) {
+      return `<tr>
+        <td class="mono" style="white-space:nowrap; color:var(--text-muted)">${esc(m[1])}</td>
+        <td><span class="pill pill-accent">${esc(m[2])}</span></td>
+        <td>${actionPill(m[3])}</td>
+        <td class="mono" style="font-size:11.5px">${esc(m[4] || '')}</td>
+      </tr>`;
+    }
+    return `<tr><td colspan="4" class="mono" style="white-space:pre-wrap; font-size:12px">${esc(line)}</td></tr>`;
+  }).join('');
+  tbody.innerHTML = rows || `<tr><td colspan="4" style="color:var(--text-muted)">No entries match the filter.</td></tr>`;
+}
+
+// ── Query console ─────────────────────────────────────────────────────────
+
+const DANGER_BADGE = {
+  read: '<span class="pill pill-ok">READ-ONLY</span>',
+  write: '<span class="pill pill-warn">MODIFIES DATA</span>',
+  danger: '<span class="pill pill-danger">DESTRUCTIVE</span>',
+  none: '',
+};
+
+function viewQuery() {
+  if (!requireConnection()) return;
+  const isDocdb = currentEngine.startsWith('document');
+  const ph = isDocdb
+    ? 'db.<collection>.find({ <field>: <value> }).limit(5)'
+    : 'SELECT <columns> FROM <table> WHERE <condition> LIMIT 10;';
+  setContent(`<div class="card"><h2>${ICONS.term} Run Query</h2>
+    <p class="card-meta">Runs as your admin user on <strong>${esc(creds().env)} / ${esc(currentEngine.replace(/_/g, ' '))}</strong>.
+      The plain-english preview updates as you type. Read it before running. ⌘⏎ to run.</p>
+    <div class="form-row" style="margin-bottom:10px">
+      <div class="form-field"><label>Database</label><input id="qDb" list="dbList" placeholder="${isDocdb ? 'admin (default)' : 'default database'}"></div>
+      <div class="form-field"><label>Snippets</label><select id="qSnippets" onchange="applySnippet()">
+        <option value="">insert a ready-made query…</option>
+        ${querySnippets().map((s, i) => `<option value="${i}">${esc(s.label)}</option>`).join('')}
+      </select></div>
+    </div>
+    <div class="form-field" style="margin-bottom:10px"><label>${isDocdb ? 'mongosh query' : 'SQL'}</label>
+      <textarea id="qText" class="query-input" spellcheck="false" placeholder="${esc(ph)}"></textarea></div>
+    <div id="qExplain" class="explain-box"></div>
+    <div id="qContext"></div>
+    <div style="display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="runQueryConfirm()">Run</button>
+      <button class="btn btn-ghost" onclick="runExplain()" title="Show the execution plan without modifying anything">Explain</button>
+      <label class="chk" title="Power mode: stream the engine's raw output live as it arrives, instead of the formatted table."><input type="checkbox" id="qLive"> live output</label>
+      <span id="qTiming" style="font-family:var(--mono-font); font-size:11px; color:var(--text-muted)"></span>
+    </div>
+    <div id="qHistory"></div>
+    <div id="qResults" style="margin-top:14px"></div>
+  </div>`);
+  const t = document.getElementById('qText');
+  t.addEventListener('input', qExplainUpdate);
+  t.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); runQueryConfirm(); } });
+  document.getElementById('qDb').addEventListener('input', qExplainUpdate);
+  const live = document.getElementById('qLive');
+  live.checked = !!prefs.qLive;
+  live.addEventListener('change', () => savePrefs({ qLive: live.checked }));
+  qExplainUpdate();
+  renderQueryHistory();
+}
+
+function querySnippets() {
+  if (currentEngine.startsWith('document')) {
+    return [
+      { label: 'Find by _id', q: 'db.<collection>.find({ _id: ObjectId("<id>") })' },
+      { label: 'Latest 10 documents', q: 'db.<collection>.find({}).sort({ _id: -1 }).limit(10)' },
+      { label: 'Count documents (fast estimate)', q: 'db.<collection>.estimatedDocumentCount()' },
+      { label: 'List indexes of a collection', q: 'db.<collection>.getIndexes()' },
+      { label: 'Currently running operations', q: 'db.adminCommand({ currentOp: 1, active: true })' },
+      { label: 'Connection count', q: 'db.adminCommand({ serverStatus: 1 }).connections' },
+      { label: 'Database storage stats', q: 'db.runCommand({ dbStats: 1 })' },
+    ];
+  }
+  return [
+    { label: 'Latest 10 rows', q: 'SELECT * FROM <table> ORDER BY <id_column> DESC LIMIT 10;' },
+    { label: 'Row count (fast estimate)', q: "SELECT reltuples::bigint AS estimated_rows FROM pg_class WHERE relname = '<table>';" },
+    { label: 'Active queries (longest first)', q: "SELECT pid, usename, state, now() - query_start AS runtime, left(query, 100) AS query\nFROM pg_stat_activity WHERE state <> 'idle' AND pid <> pg_backend_pid()\nORDER BY runtime DESC NULLS LAST;" },
+    { label: 'Biggest tables', q: "SELECT relname AS table, pg_size_pretty(pg_total_relation_size(c.oid)) AS size\nFROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace\nWHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog','information_schema')\nORDER BY pg_total_relation_size(c.oid) DESC LIMIT 20;" },
+    { label: 'Connections per database', q: 'SELECT datname, count(*) FROM pg_stat_activity GROUP BY datname ORDER BY count(*) DESC;' },
+    { label: 'Blocking locks', q: "SELECT blocked.pid AS blocked_pid, left(blocked.query, 60) AS blocked_query,\n       blocking.pid AS blocking_pid, left(blocking.query, 60) AS blocking_query\nFROM pg_stat_activity blocked\nJOIN pg_locks bl ON bl.pid = blocked.pid AND NOT bl.granted\nJOIN pg_locks gl ON gl.locktype = bl.locktype AND gl.database IS NOT DISTINCT FROM bl.database\n  AND gl.relation IS NOT DISTINCT FROM bl.relation AND gl.granted\nJOIN pg_stat_activity blocking ON blocking.pid = gl.pid;" },
+    { label: 'Terminate a query by pid', q: 'SELECT pg_terminate_backend(<pid>);' },
+  ];
+}
+
+function applySnippet() {
+  const sel = document.getElementById('qSnippets');
+  const s = querySnippets()[Number(sel.value)];
+  sel.value = '';
+  if (!s) return;
+  const t = document.getElementById('qText');
+  t.value = s.q;
+  qExplainUpdate();
+  t.focus();
+}
+
+function runExplain() {
+  const t = document.getElementById('qText');
+  let q = (t?.value || '').trim().replace(/;+\s*$/, '');
+  if (!q) { toast('Type a query first', 'error'); return; }
+  const database = document.getElementById('qDb').value.trim();
+  if (currentEngine.startsWith('document')) {
+    if (!/\.(find|aggregate)\s*\(/.test(q) || /\.explain\s*\(/.test(q)) {
+      toast('Explain works on find() / aggregate() queries', 'error');
+      return;
+    }
+    executeQuery(q + '.explain()', database);
+  } else {
+    executeQuery(/^\s*explain/i.test(q) ? q : 'EXPLAIN ' + q, database);
+  }
+}
+
+function openQueryWith(db, text) {
+  markActive('query');
+  viewQuery();
+  if (!document.getElementById('qText')) return;
+  document.getElementById('qDb').value = db || '';
+  document.getElementById('qText').value = text;
+  qExplainUpdate();
+  executeQuery(text, db || '');
+}
+
+let qTimer;
+function qExplainUpdate() {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => {
+    const box = document.getElementById('qExplain');
+    if (!box) return;
+    const txt = document.getElementById('qText')?.value || '';
+    const ex = explainQuery(currentEngine.startsWith('document'), txt);
+    box.className = 'explain-box explain-' + ex.danger;
+    box.innerHTML = (DANGER_BADGE[ex.danger] || '') + `<div class="explain-text">${ex.html}</div>`;
+    qContextCheck();
+  }, 200);
+}
+
+// Live target checks: does the db exist, does the collection/table exist
+
+let collCache = {};      // db -> [names] | null (fetch failed)
+let collFetching = {};
+
+function extractMongoTarget(text) {
+  let rest = (text || '').trim(), db = null;
+  const m = rest.match(/^db\.getSiblingDB\(\s*['"]([^'"]+)['"]\s*\)\.([\s\S]*)$/);
+  if (m) { db = m[1]; rest = 'db.' + m[2]; }
+  const call = parseMongoCall(rest);
+  return { db, coll: call ? call.coll : null, method: call ? call.method : null };
+}
+
+function extractSqlTable(text) {
+  const first = splitTopLevel((text || '').trim(), ';')[0] || '';
+  const m = first.match(/\b(?:from|into|update|truncate\s+(?:table\s+)?|join)\s+([a-zA-Z0-9_"]+)/i);
+  return m ? m[1].replace(/"/g, '') : null;
+}
+
+const ctxLine = (cls, html) => `<div class="ctx-line ctx-${cls}">${html}</div>`;
+const ctxSuggest = names => names.slice(0, 3).map(d =>
+  `<button class="btn btn-ghost btn-sm" data-db="${esc(d)}" onclick="qSetDb(this.dataset.db)">use ${esc(d)}</button>`).join(' ');
+
+function qSetDb(db) {
+  const input = document.getElementById('qDb');
+  if (!input) return;
+  input.value = db;
+  qExplainUpdate();
+}
+
+async function fetchColls(db) {
+  if (collFetching[db]) return;
+  collFetching[db] = true;
+  try {
+    const res = await apiPost('/api/list-collections', { database: db });
+    if (res.collections) collCache[db] = res.collections;
+    else if (res.tables) collCache[db] = res.tables.map(t => t.table);
+    else collCache[db] = null;
+  } catch { collCache[db] = null; }
+  collFetching[db] = false;
+  qContextCheck();
+}
+
+function qContextCheck() {
+  const box = document.getElementById('qContext');
+  if (!box || !connected) { if (box) box.innerHTML = ''; return; }
+  const isDocdb = currentEngine.startsWith('document');
+  const txt = document.getElementById('qText')?.value.trim() || '';
+  const dbInput = document.getElementById('qDb');
+  if (!txt) { box.innerHTML = ''; return; }
+  const lines = [];
+
+  let effDb = dbInput.value.trim();
+  let target = { coll: null, method: null };
+  if (isDocdb) {
+    target = extractMongoTarget(txt);
+    if (target.db && target.db !== effDb) {
+      dbInput.value = target.db;
+      effDb = target.db;
+      lines.push(ctxLine('ok', `database <b>${esc(target.db)}</b> picked up from the query (getSiblingDB)`));
+    }
+    if (!effDb) effDb = 'admin';
+  } else {
+    target.coll = extractSqlTable(txt);
+  }
+
+  // does the database exist on this cluster?
+  let dbOk = true;
+  if (effDb && cachedDbs.length) {
+    if (!cachedDbs.includes(effDb)) {
+      dbOk = false;
+      const q = effDb.toLowerCase();
+      const near = cachedDbs.filter(d => d.toLowerCase().includes(q) || q.includes(d.toLowerCase()));
+      lines.push(ctxLine('bad', `database <b>${esc(effDb)}</b> does not exist on this cluster ${near.length ? '· ' + ctxSuggest(near) : ''}`));
+    }
+  }
+
+  // does the collection/table exist in that database?
+  if (target.coll && effDb && dbOk) {
+    const colls = collCache[effDb];
+    const isInsert = (target.method || '').startsWith('insert');
+    if (colls === undefined) {
+      fetchColls(effDb);
+      lines.push(ctxLine('muted', `checking <b>${esc(target.coll)}</b> in ${esc(effDb)}…`));
+    } else if (Array.isArray(colls)) {
+      if (colls.includes(target.coll)) {
+        lines.push(ctxLine('ok', `<b>${esc(target.coll)}</b> exists in database <b>${esc(effDb)}</b>, the query runs there`));
+      } else if (isInsert && isDocdb) {
+        lines.push(ctxLine('warn', `<b>${esc(target.coll)}</b> doesn't exist in <b>${esc(effDb)}</b> yet, the insert would CREATE it there`));
+      } else {
+        const elsewhere = Object.entries(collCache)
+          .filter(([d, c]) => Array.isArray(c) && c.includes(target.coll)).map(([d]) => d);
+        const stem = target.coll.toLowerCase().replace(/s$/, '');
+        const guesses = cachedDbs.filter(d => {
+          const dl = d.toLowerCase();
+          return dl.includes(stem) || stem.includes(dl);
+        }).filter(d => d !== effDb);
+        const suggestions = [...new Set([...elsewhere, ...guesses])];
+        lines.push(ctxLine('bad',
+          `<b>${esc(target.coll)}</b> not found in database <b>${esc(effDb)}</b>, the query would match nothing there ${suggestions.length ? '· ' + ctxSuggest(suggestions) : ''}`));
+        for (const g of suggestions.slice(0, 2)) if (collCache[g] === undefined) fetchColls(g);
+      }
+    }
+  }
+  box.innerHTML = lines.join('');
+}
+
+// Explainer: turns a query into plain english plus a danger level
+
+function preview(v, max = 48) {
+  v = String(v == null ? '' : v).trim().replace(/\s+/g, ' ');
+  if (v.length > max) v = v.slice(0, max) + '…';
+  return `<code>${esc(v)}</code>`;
+}
+
+function splitTopLevel(s, sep = ',') {
+  const parts = [];
+  let cur = '', depth = 0, inStr = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) { cur += c; if (c === inStr && s[i - 1] !== '\\') inStr = null; continue; }
+    if (c === '"' || c === "'" || c === '`') { inStr = c; cur += c; continue; }
+    if ('([{'.includes(c)) depth++;
+    if (')]}'.includes(c)) depth--;
+    if (c === sep && depth === 0) { parts.push(cur); cur = ''; continue; }
+    cur += c;
+  }
+  if (cur.trim()) parts.push(cur);
+  return parts.map(p => p.trim());
+}
+
+function shallowKeys(objText) {
+  objText = (objText || '').trim();
+  if (!objText.startsWith('{')) return [];
+  const inner = objText.slice(1, objText.lastIndexOf('}'));
+  return splitTopLevel(inner).map(pair => {
+    const idx = (() => {
+      let depth = 0, inStr = null;
+      for (let i = 0; i < pair.length; i++) {
+        const c = pair[i];
+        if (inStr) { if (c === inStr && pair[i - 1] !== '\\') inStr = null; continue; }
+        if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+        if ('([{'.includes(c)) depth++;
+        if (')]}'.includes(c)) depth--;
+        if (c === ':' && depth === 0) return i;
+      }
+      return -1;
+    })();
+    if (idx < 0) return { key: pair.trim().replace(/['"]/g, ''), value: '' };
+    return {
+      key: pair.slice(0, idx).trim().replace(/['"]/g, ''),
+      value: pair.slice(idx + 1).trim(),
+    };
+  }).filter(kv => kv.key);
+}
+
+function kvSummary(objText, max = 4) {
+  const kvs = shallowKeys(objText);
+  if (!kvs.length) return '';
+  const parts = kvs.slice(0, max).map(kv => `<b>${esc(kv.key)}</b> = ${preview(kv.value)}`);
+  if (kvs.length > max) parts.push(`+${kvs.length - max} more`);
+  return parts.join(', ');
+}
+
+function filterDesc(argText, emptyMeansAll) {
+  argText = (argText || '').trim();
+  if (!argText || /^\{\s*\}$/.test(argText)) {
+    return emptyMeansAll ? { html: '<b style="color:var(--danger)">matching EVERY document</b>', all: true } : { html: '(all documents)', all: true };
+  }
+  const summary = kvSummary(argText);
+  return { html: summary ? `where ${summary}` : `matching ${preview(argText, 80)}`, all: false };
+}
+
+function updateDesc(argText) {
+  const ops = shallowKeys(argText);
+  if (!ops.length) return `with ${preview(argText, 80)}`;
+  const known = {
+    '$set': v => `sets ${kvSummary(v, 5) || preview(v)}`,
+    '$unset': v => `removes ${shallowKeys(v).length === 1 ? 'field' : 'fields'} ${shallowKeys(v).map(k => `<b>${esc(k.key)}</b>`).join(', ') || preview(v)}`,
+    '$push': v => `appends to ${kvSummary(v)}`,
+    '$addToSet': v => `adds to set ${kvSummary(v)}`,
+    '$pull': v => `removes matching items from ${kvSummary(v)}`,
+    '$inc': v => `increments ${kvSummary(v)}`,
+    '$rename': v => `renames ${kvSummary(v)}`,
+  };
+  const hasOperator = ops.some(o => o.key.startsWith('$'));
+  if (!hasOperator) return `<b style="color:var(--danger)">REPLACES the entire document</b> with ${kvSummary(argText) || preview(argText)}`;
+  return ops.map(o => known[o.key] ? known[o.key](o.value) : `applies <code>${esc(o.key)}</code> to ${kvSummary(o.value) || preview(o.value)}`).join('; ');
+}
+
+function parseMongoCall(rest) {
+  const m = rest.match(/^db\.([A-Za-z0-9_$\-]+(?:\.[A-Za-z0-9_$\-]+)*)\.([A-Za-z]+)\s*\(/);
+  if (!m) return null;
+  let i = m[0].length, depth = 1, inStr = null, args = '';
+  for (; i < rest.length && depth > 0; i++) {
+    const c = rest[i];
+    if (inStr) { if (c === inStr && rest[i - 1] !== '\\') inStr = null; }
+    else if (c === '"' || c === "'" || c === '`') inStr = c;
+    else if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c)) { depth--; if (!depth) break; }
+    args += c;
+  }
+  return { coll: m[1], method: m[2], args, tail: rest.slice(i + 1).trim() };
+}
+
+function explainMongo(text) {
+  let dbNote = '';
+  let rest = text;
+  const sib = text.match(/^db\.getSiblingDB\(\s*['"]([^'"]+)['"]\s*\)\.([\s\S]*)$/);
+  if (sib) { dbNote = ` in database <b>${esc(sib[1])}</b>`; rest = 'db.' + sib[2]; }
+
+  // db-level methods (no collection)
+  const dbLevel = rest.match(/^db\.([A-Za-z]+)\s*\(/);
+  const call = parseMongoCall(rest);
+  if (!call && dbLevel) {
+    const dm = dbLevel[1];
+    if (dm === 'dropDatabase') return { danger: 'danger', html: `<b style="color:var(--danger)">Deletes the ENTIRE database</b>${dbNote}: every collection and document in it.` };
+    if (dm === 'getCollectionNames' || dm === 'stats' || dm === 'getCollectionInfos') return { danger: 'read', html: `Reads database metadata${dbNote} (no data is changed).` };
+    if (/^(createUser|updateUser|grantRolesToUser|revokeRolesFromUser|dropUser)$/.test(dm)) return { danger: 'write', html: `Runs the user-management command <code>${esc(dm)}</code>${dbNote}. The Users pages do this with confirmation built in.` };
+    if (dm === 'adminCommand' || dm === 'runCommand') return { danger: 'write', html: `Runs a raw database command${dbNote}. Effects depend on the command, review carefully.` };
+    return { danger: 'write', html: `Runs <code>db.${esc(dm)}(…)</code>${dbNote}. Review carefully before running.` };
+  }
+  if (!call) return { danger: 'write', html: `Runs custom JavaScript${dbNote} that could read or modify anything. Review carefully before running.` };
+
+  const { coll, method, args, tail } = call;
+  const argList = splitTopLevel(args);
+  const collB = `<b>${esc(coll)}</b>`;
+  const mods = [];
+  const lim = tail.match(/\.limit\(\s*(\d+)\s*\)/); if (lim) mods.push(`at most ${lim[1]} results`);
+  if (/\.sort\(/.test(tail)) mods.push('sorted');
+  const modTxt = mods.length ? ` (${mods.join(', ')})` : '';
+
+  switch (method) {
+    case 'find': case 'findOne': {
+      const f = filterDesc(argList[0], false);
+      const one = method === 'findOne' ? 'one document' : 'documents';
+      return { danger: 'read', html: `<b>Reads</b> ${one} from ${collB}${dbNote} ${f.html}${modTxt}. Nothing is changed.` };
+    }
+    case 'countDocuments': case 'count': case 'estimatedDocumentCount':
+      return { danger: 'read', html: `<b>Counts</b> documents in ${collB}${dbNote} ${filterDesc(argList[0], false).html}. Nothing is changed.` };
+    case 'distinct':
+      return { danger: 'read', html: `<b>Lists distinct values</b> of ${preview(argList[0])} in ${collB}${dbNote}. Nothing is changed.` };
+    case 'aggregate': {
+      const writes = /\$out|\$merge/.test(args);
+      return writes
+        ? { danger: 'danger', html: `Runs an aggregation on ${collB}${dbNote} that <b style="color:var(--danger)">WRITES its results to another collection</b> ($out/$merge).` }
+        : { danger: 'read', html: `Runs an <b>aggregation pipeline</b> on ${collB}${dbNote} (${splitTopLevel(argList[0]?.replace(/^\[|\]$/g, '') || '').length || '?'} stages). Nothing is changed.` };
+    }
+    case 'insertOne':
+      return { danger: 'write', html: `<b>Adds one new document</b> to ${collB}${dbNote}: ${kvSummary(argList[0]) || preview(argList[0])}.` };
+    case 'insertMany':
+      return { danger: 'write', html: `<b>Adds multiple new documents</b> to ${collB}${dbNote}.` };
+    case 'updateOne': case 'findOneAndUpdate': {
+      const f = filterDesc(argList[0], true);
+      return { danger: f.all ? 'danger' : 'write', html: `<b>Updates ONE document</b> in ${collB}${dbNote} ${f.html}: ${updateDesc(argList[1] || '')}.` };
+    }
+    case 'updateMany': {
+      const f = filterDesc(argList[0], true);
+      return { danger: f.all ? 'danger' : 'write', html: `<b>Updates ALL documents</b> in ${collB}${dbNote} ${f.html}: ${updateDesc(argList[1] || '')}.` };
+    }
+    case 'replaceOne': {
+      const f = filterDesc(argList[0], true);
+      return { danger: 'write', html: `<b style="color:var(--danger)">REPLACES one entire document</b> in ${collB}${dbNote} ${f.html} with ${kvSummary(argList[1]) || preview(argList[1])}.` };
+    }
+    case 'deleteOne': {
+      const f = filterDesc(argList[0], true);
+      return { danger: 'danger', html: `<b style="color:var(--danger)">DELETES one document</b> from ${collB}${dbNote} ${f.html}. This cannot be undone.` };
+    }
+    case 'deleteMany': case 'remove': {
+      const f = filterDesc(argList[0], true);
+      return { danger: 'danger', html: `<b style="color:var(--danger)">DELETES ${f.all ? 'EVERY document' : 'all matching documents'}</b> from ${collB}${dbNote} ${f.all ? '' : f.html}. This cannot be undone.` };
+    }
+    case 'drop':
+      return { danger: 'danger', html: `<b style="color:var(--danger)">DELETES the entire collection</b> ${collB}${dbNote} and all its documents. This cannot be undone.` };
+    case 'createIndex':
+      return { danger: 'write', html: `Creates an index on ${collB}${dbNote}: ${preview(argList[0], 80)}.` };
+    case 'dropIndex': case 'dropIndexes':
+      return { danger: 'danger', html: `<b style="color:var(--danger)">Drops index(es)</b> on ${collB}${dbNote}, which can slow queries down badly.` };
+    case 'getIndexes': case 'stats':
+      return { danger: 'read', html: `Reads metadata of ${collB}${dbNote}. Nothing is changed.` };
+    default:
+      return { danger: 'write', html: `Runs <code>${esc(method)}</code> on ${collB}${dbNote}. Not a recognized read operation, review carefully.` };
+  }
+}
+
+function explainSql(text) {
+  const stmts = splitTopLevel(text, ';').map(s => s.trim()).filter(Boolean);
+  if (!stmts.length) return { danger: 'none', html: '' };
+  const first = stmts[0];
+  const kw = (first.match(/^[A-Za-z]+/) || [''])[0].toUpperCase();
+  const table = re => { const m = first.match(re); return m ? `<b>${esc(m[1].replace(/"/g, ''))}</b>` : 'a table'; };
+  const whereM = first.match(/\bwhere\b([\s\S]+?)(\border\s+by\b|\blimit\b|\bgroup\s+by\b|\breturning\b|$)/i);
+  const where = whereM ? ` where ${preview(whereM[1], 90)}` : '';
+  const more = stmts.length > 1 ? ` <b>+ ${plural(stmts.length - 1, 'more statement')}</b>, only the first is explained here.` : '';
+  const bump = d => (stmts.length > 1 && d === 'read') ? 'write' : d;
+
+  let r;
+  switch (kw) {
+    case 'SELECT': case 'WITH': case 'EXPLAIN': case 'SHOW':
+      r = { danger: 'read', html: `<b>Reads</b> rows from ${table(/\bfrom\s+([a-zA-Z0-9_."]+)/i)}${where || ' (no filter)'}${/\blimit\b/i.test(first) ? '' : where ? '' : ', <b>all rows</b>'}. Nothing is changed.` };
+      break;
+    case 'INSERT':
+      r = { danger: 'write', html: `<b>Adds new rows</b> to ${table(/\binto\s+([a-zA-Z0-9_."]+)/i)}.` };
+      break;
+    case 'UPDATE': {
+      const cols = (first.match(/\bset\b([\s\S]+?)(\bwhere\b|$)/i) || [])[1] || '';
+      const colList = splitTopLevel(cols).slice(0, 4).map(c => preview(c, 40)).join(', ');
+      r = whereM
+        ? { danger: 'write', html: `<b>Updates rows</b> in ${table(/\bupdate\s+([a-zA-Z0-9_."]+)/i)}${where}, setting ${colList}.` }
+        : { danger: 'danger', html: `<b style="color:var(--danger)">Updates EVERY row</b> in ${table(/\bupdate\s+([a-zA-Z0-9_."]+)/i)} (no WHERE clause!), setting ${colList}.` };
+      break;
+    }
+    case 'DELETE':
+      r = whereM
+        ? { danger: 'danger', html: `<b style="color:var(--danger)">DELETES rows</b> from ${table(/\bfrom\s+([a-zA-Z0-9_."]+)/i)}${where}. This cannot be undone.` }
+        : { danger: 'danger', html: `<b style="color:var(--danger)">DELETES EVERY row</b> from ${table(/\bfrom\s+([a-zA-Z0-9_."]+)/i)} (no WHERE clause!). This cannot be undone.` };
+      break;
+    case 'TRUNCATE':
+      r = { danger: 'danger', html: `<b style="color:var(--danger)">Removes ALL rows</b> from ${table(/\btruncate\s+(?:table\s+)?([a-zA-Z0-9_."]+)/i)} instantly. This cannot be undone.` };
+      break;
+    case 'DROP':
+      r = { danger: 'danger', html: `<b style="color:var(--danger)">Permanently deletes</b> ${preview(first.replace(/^drop\s+/i, ''), 70)}. This cannot be undone.` };
+      break;
+    case 'ALTER':
+      r = { danger: 'danger', html: `<b>Changes the structure</b> of ${preview(first.replace(/^alter\s+/i, ''), 70)}, which can break applications using it.` };
+      break;
+    case 'CREATE':
+      r = { danger: 'write', html: `<b>Creates</b> ${preview(first.replace(/^create\s+/i, ''), 70)}.` };
+      break;
+    case 'GRANT': case 'REVOKE':
+      r = { danger: 'write', html: `<b>Changes permissions</b>: ${preview(first, 90)}. The Permissions pages do this with confirmation built in.` };
+      break;
+    case 'VACUUM': case 'ANALYZE': case 'REINDEX':
+      r = { danger: 'write', html: `Runs maintenance (<code>${esc(kw)}</code>). Safe for data but can load the server.` };
+      break;
+    default:
+      r = { danger: 'write', html: `Runs <code>${esc(kw || first.slice(0, 20))}</code>. Not a recognized read statement, review carefully.` };
+  }
+  return { danger: bump(r.danger), html: r.html + more };
+}
+
+function explainQuery(isDocdb, text) {
+  text = (text || '').trim();
+  if (!text) return { danger: 'none', html: '<span style="color:var(--text-muted)">Type a query and a plain-english explanation of what it does will appear here.</span>' };
+  return isDocdb ? explainMongo(text) : explainSql(text);
+}
+
+// Execution
+
+function runQueryConfirm() {
+  const query = document.getElementById('qText').value.trim();
+  if (!query) { toast('Query is empty', 'error'); return; }
+  const isDocdb = currentEngine.startsWith('document');
+  const database = document.getElementById('qDb').value.trim();
+  const ex = explainQuery(isDocdb, query);
+  if (ex.danger === 'read') { executeQuery(query, database); return; }
+  const target = `${esc(creds().env)} / ${esc(currentEngine.replace(/_/g, ' '))} / ${esc(database || (isDocdb ? 'admin' : 'default db'))}`;
+  showModal(ex.danger === 'danger' ? '⚠ Destructive Query' : 'Confirm Query', `
+    <div class="explain-box explain-${ex.danger}" style="margin-bottom:12px">${DANGER_BADGE[ex.danger]}<div class="explain-text">${ex.html}</div></div>
+    <p style="margin-bottom:0">Target: <strong>${target}</strong></p>
+  `, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Run it', cls: ex.danger === 'danger' ? 'btn-danger' : 'btn-primary', fn: () => executeQuery(query, database) },
+  ]);
+}
+
+async function executeQuery(query, database) {
+  if (document.getElementById('qLive')?.checked) return streamQuery(query, database);
+  const box = document.getElementById('qResults');
+  if (box) box.innerHTML = loadingInline('Running…');
+  const t0 = performance.now();
+  const res = await apiPost('/api/query', { query, database });
+  const timing = document.getElementById('qTiming');
+  if (timing) {
+    const mode = res.mode === 'warm' ? ' · ⚡ warm session' : res.mode === 'cold' ? ' · cold start' : '';
+    timing.textContent = `${Math.round(performance.now() - t0)} ms · db: ${res.database || ''}${mode}`;
+  }
+  pushQueryHistory(query);
+  renderQueryHistory();
+  renderQueryResults(res);
+}
+
+async function streamQuery(query, database) {
+  const box = document.getElementById('qResults');
+  if (!box) return;
+  box.innerHTML = `<p class="card-meta" style="margin-bottom:6px">Live output, raw engine stream</p><pre class="result-pre" id="qLivePre"></pre>`;
+  const pre = document.getElementById('qLivePre');
+  const t0 = performance.now();
+  pushQueryHistory(query);
+  renderQueryHistory();
+  try {
+    const resp = await fetch(API + '/api/query-stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...creds(), query, database }),
+    });
+    if ((resp.headers.get('content-type') || '').includes('json')) {
+      const err = await resp.json();
+      box.innerHTML = `<div class="explain-box explain-danger"><div class="explain-text"><b>Failed:</b> ${esc(err.error || 'Unknown error')}</div></div>`;
+      return;
+    }
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pre.textContent += dec.decode(value, { stream: true });
+      pre.scrollTop = pre.scrollHeight;
+    }
+    if (!pre.textContent.trim()) pre.textContent = '(no output, statement executed)';
+  } catch (e) {
+    pre.textContent += '\n[stream interrupted: ' + e.message + ']';
+  }
+  const timing = document.getElementById('qTiming');
+  if (timing) timing.textContent = `${Math.round(performance.now() - t0)} ms · live stream`;
+}
+
+function jsonCell(v) {
+  if (v == null) return '<span style="color:var(--text-muted)">null</span>';
+  if (typeof v === 'object') {
+    const s = JSON.stringify(v);
+    return `<span title="${esc(s.slice(0, 500))}">${esc(s.length > 60 ? s.slice(0, 60) + '…' : s)}</span>`;
+  }
+  return esc(String(v).length > 120 ? String(v).slice(0, 120) + '…' : String(v));
+}
+
+function downloadFile(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+function csvFromDocs(docs) {
+  const cols = [];
+  for (const d of docs) for (const k of Object.keys(d)) if (!cols.includes(k)) cols.push(k);
+  const cell = v => {
+    let s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  return [cols.join(','), ...docs.map(d => cols.map(c => cell(d[c])).join(','))].join('\n');
+}
+
+function exportResults(kind) {
+  const res = window._qLast;
+  if (!res || !res.ok) return;
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  if (res.data !== undefined && res.data !== null) {
+    const json = JSON.stringify(res.data, null, 2);
+    if (kind === 'copy') { copyText(json); return; }
+    if (kind === 'json') { downloadFile(`warden-result-${stamp}.json`, json, 'application/json'); return; }
+    if (kind === 'csv') {
+      const docs = Array.isArray(res.data) ? res.data : [res.data];
+      downloadFile(`warden-result-${stamp}.csv`, csvFromDocs(docs.filter(d => d && typeof d === 'object')), 'text/csv');
+      return;
+    }
+  }
+  if (res.csv !== undefined) {
+    if (kind === 'copy') { copyText(res.csv); return; }
+    if (kind === 'csv') { downloadFile(`warden-result-${stamp}.csv`, res.csv, 'text/csv'); return; }
+    if (kind === 'json') {
+      const rows = parseCSV(res.csv.trim());
+      const docs = rows.slice(1).map(r => Object.fromEntries(rows[0].map((c, i) => [c, r[i]])));
+      downloadFile(`warden-result-${stamp}.json`, JSON.stringify(docs, null, 2), 'application/json');
+      return;
+    }
+  }
+  copyText(res.output || '');
+}
+
+function renderQueryResults(res) {
+  const box = document.getElementById('qResults');
+  if (!box) return;
+  window._qLast = res;
+  if (!res.ok) {
+    box.innerHTML = `<div class="explain-box explain-danger"><div class="explain-text"><b>Failed:</b> <pre class="result-pre" style="margin-top:8px">${esc(res.error || res.output || 'Unknown error')}</pre></div></div>`;
+    return;
+  }
+  let html = '';
+  const hasTabular = (Array.isArray(res.data) && res.data.length) || (res.csv && res.csv.trim());
+  if (hasTabular || (res.data !== undefined && res.data !== null)) {
+    html += `<div style="display:flex; gap:8px; margin-bottom:8px">
+      <button class="btn btn-ghost btn-sm" onclick="exportResults('copy')">Copy</button>
+      <button class="btn btn-ghost btn-sm" onclick="exportResults('json')">↓ JSON</button>
+      ${hasTabular ? `<button class="btn btn-ghost btn-sm" onclick="exportResults('csv')">↓ CSV</button>` : ''}
+    </div>`;
+  }
+  const trunc = res.truncated ? '<p class="card-meta">Output truncated. Narrow the query for full results.</p>' : '';
+
+  if (res.data !== undefined && res.data !== null) {
+    const data = res.data;
+    if (Array.isArray(data) && data.length && data.every(d => d && typeof d === 'object' && !Array.isArray(d))) {
+      const cols = [];
+      for (const d of data.slice(0, 50)) for (const k of Object.keys(d)) if (!cols.includes(k)) cols.push(k);
+      const shown = cols.slice(0, 10);
+      const rows = data.slice(0, 200).map(d =>
+        `<tr>${shown.map(c => `<td class="mono" style="font-size:11.5px">${jsonCell(d[c])}</td>`).join('')}</tr>`).join('');
+      html += `<p class="card-meta">${plural(data.length, 'document')}${data.length > 200 ? ', showing first 200' : ''}${cols.length > 10 ? ` · ${plural(cols.length - 10, 'column')} hidden` : ''}</p>
+        <div class="table-wrap"><table><thead><tr>${shown.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+    } else if (Array.isArray(data) && !data.length) {
+      html += `<div class="empty-state">No documents matched.</div>`;
+    } else {
+      html += `<pre class="result-pre">${esc(JSON.stringify(data, null, 2))}</pre>`;
+    }
+  } else if (res.csv !== undefined) {
+    const rows = parseCSV(res.csv.trim());
+    if (rows.length > 1 && rows[0].length > 0) {
+      const head = rows[0], body = rows.slice(1, 201);
+      html += `<p class="card-meta">${plural(rows.length - 1, 'row')}${rows.length - 1 > 200 ? ', showing first 200' : ''}</p>
+        <div class="table-wrap"><table><thead><tr>${head.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+        <tbody>${body.map(r => `<tr>${r.map(c => `<td class="mono" style="font-size:11.5px">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    } else {
+      html += `<pre class="result-pre">${esc(res.output.trim() || '(no output, statement executed)')}</pre>`;
+    }
+    if (res.notices) html += `<pre class="result-pre" style="margin-top:8px; color:var(--text-muted)">${esc(res.notices.trim())}</pre>`;
+  } else {
+    html += `<pre class="result-pre">${esc((res.output || '').trim() || '(no output)')}</pre>`;
+  }
+  box.innerHTML = html + trunc;
+}
+
+function parseCSV(text) {
+  const rows = [];
+  let row = [], cur = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+      else cur += c;
+    }
+    else if (c === '"') inQ = true;
+    else if (c === ',') { row.push(cur); cur = ''; }
+    else if (c === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+    else if (c !== '\r') cur += c;
+  }
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+
+// History (localStorage, per engine)
+
+function historyKey() { return 'warden.queryHistory.' + (currentEngine.startsWith('document') ? 'docdb' : 'pg'); }
+function pinnedKey() { return 'warden.queryPinned.' + (currentEngine.startsWith('document') ? 'docdb' : 'pg'); }
+function loadList(key) { try { return JSON.parse(localStorage.getItem(key)) || []; } catch { return []; } }
+function saveList(key, list) { try { localStorage.setItem(key, JSON.stringify(list)); } catch {} }
+
+function pushQueryHistory(q) {
+  const h = [q, ...loadList(historyKey()).filter(x => x !== q)].slice(0, 15);
+  saveList(historyKey(), h);
+}
+
+function togglePin(q) {
+  let p = loadList(pinnedKey());
+  p = p.includes(q) ? p.filter(x => x !== q) : [q, ...p].slice(0, 10);
+  saveList(pinnedKey(), p);
+  renderQueryHistory();
+}
+
+function renderQueryHistory() {
+  const box = document.getElementById('qHistory');
+  if (!box) return;
+  const pinned = loadList(pinnedKey());
+  const recent = loadList(historyKey()).filter(q => !pinned.includes(q));
+  window._qHist = [...pinned, ...recent];
+  const chip = (q, i, isPinned) => `<div style="display:flex; align-items:center; gap:4px">
+    <button class="copy-btn" data-i="${i}" onclick="togglePin(window._qHist[this.dataset.i])" title="${isPinned ? 'Unpin' : 'Pin this query'}" style="font-size:12px">${isPinned ? '★' : '☆'}</button>
+    <button class="hist-chip" data-i="${i}" onclick="recallQuery(this.dataset.i)"><code>${esc(q.length > 105 ? q.slice(0, 105) + '…' : q)}</code></button>
+  </div>`;
+  let html = '';
+  if (pinned.length) html += `<div class="group-label" style="padding:14px 0 4px">Pinned</div>` +
+    pinned.map((q, i) => chip(q, i, true)).join('');
+  if (recent.length) html += `<div class="group-label" style="padding:14px 0 4px">Recent queries</div>` +
+    recent.map((q, i) => chip(q, pinned.length + i, false)).join('');
+  box.innerHTML = html;
+}
+
+function recallQuery(i) {
+  const q = (window._qHist || [])[i];
+  if (!q) return;
+  document.getElementById('qText').value = q;
+  qExplainUpdate();
+  document.getElementById('qText').focus();
+}
+
+// ── Environments manager (custom envs live in localStorage) ───────────────
+
+function viewEnvs() {
+  const details = config.environment_details || {};
+  const builtinNames = Object.keys(config.environments || {});
+  let rows = '';
+  const actionBtn = (label, fn, env, eng, danger) =>
+    `<button class="btn btn-ghost btn-sm${danger ? '' : ''}" data-env="${esc(env)}" data-eng="${esc(eng)}"
+      onclick="${fn}(this.dataset.env, this.dataset.eng)">${label}</button>`;
+
+  const isServerProfile = (env, eng) => (config.profile_envs?.[env] || []).includes(eng);
+  for (const env of builtinNames) {
+    for (const eng of (config.environments[env] || [])) {
+      const override = customEnvs[env]?.[eng];
+      const cfg = override || details[env]?.[eng] || {};
+      const hidden = isHidden(env, eng);
+      const server = isServerProfile(env, eng);
+      const status = hidden ? '<span class="pill pill-muted">hidden</span>'
+        : override ? '<span class="pill pill-warn">override</span>'
+        : server ? '<span class="pill pill-accent">server profile</span>'
+        : '<span class="pill pill-muted">built-in</span>';
+      const actions = hidden
+        ? actionBtn('Restore', 'restoreEnv', env, eng)
+        : server && !override
+          ? actionBtn('Edit', 'editEnv', env, eng) + ' ' + actionBtn('Delete', 'deleteServerProfile', env, eng)
+          : actionBtn('Edit', 'editEnv', env, eng)
+            + ' ' + (override ? actionBtn('Restore built-in', 'deleteCustomEnv', env, eng)
+                              : actionBtn('Hide', 'hideEnv', env, eng));
+      rows += `<tr${hidden ? ' style="opacity:0.45"' : ''}>
+        <td class="mono">${esc(env)}</td>
+        <td><span class="pill pill-accent">${esc(eng.replace(/_/g, ' '))}</span></td>
+        <td class="mono" style="font-size:11px">${esc(cfg.host || '')}:${esc(cfg.port || '')}${cfg.tls ? ' · tls' : ''}</td>
+        <td>${status}</td>
+        <td style="text-align:right; white-space:nowrap">${actions}</td></tr>`;
+    }
+    // engines added onto a built-in env
+    for (const [eng, cfg] of Object.entries(customEnvs[env] || {})) {
+      if ((config.environments[env] || []).includes(eng)) continue;
+      rows += `<tr><td class="mono">${esc(env)}</td>
+        <td><span class="pill pill-accent">${esc(eng.replace(/_/g, ' '))}</span></td>
+        <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${cfg.tls ? ' · tls' : ''}</td>
+        <td><span class="pill pill-warn">added</span></td>
+        <td style="text-align:right; white-space:nowrap">${actionBtn('Edit', 'editEnv', env, eng)} ${actionBtn('Delete', 'deleteCustomEnv', env, eng)}</td></tr>`;
+    }
+  }
+  for (const [env, engines] of Object.entries(customEnvs)) {
+    if (builtinNames.includes(env)) continue;
+    for (const [eng, cfg] of Object.entries(engines)) {
+      rows += `<tr><td class="mono">${esc(env)}</td>
+        <td><span class="pill pill-accent">${esc(eng.replace(/_/g, ' '))}</span></td>
+        <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${cfg.tls ? ' · tls' : ''}</td>
+        <td><span class="pill pill-ok">custom</span></td>
+        <td style="text-align:right; white-space:nowrap">${actionBtn('Edit', 'editEnv', env, eng)} ${actionBtn('Delete', 'deleteCustomEnv', env, eng)}</td></tr>`;
+    }
+  }
+  setContent(`<div class="card"><h2>${ICONS.sliders} Environments</h2>
+    <p class="card-meta">Edits, hides and custom entries live in this browser only (localStorage). The server's built-ins are never touched, so everything is restorable.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Environment</th><th>Engine</th><th>Endpoint</th><th>Status</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <h2 style="margin-top:22px" id="ceFormTitle">${ICONS.plus} Add Environment</h2>
+    <p class="card-meta">Use an existing name to override a built-in, or a new name for a custom environment. Repo-wide alternative: environments.local.json.</p>
+    <div class="form-row">
+      <div class="form-field"><label>Name</label><input id="ceName" placeholder="name"></div>
+      <div class="form-field"><label>Engine</label><select id="ceEngine" onchange="ceEngineChanged()">
+        <option value="documentdb">documentdb</option><option value="postgresql">postgresql</option></select></div>
+      <div class="form-field"><label>Host</label><input id="ceHost" placeholder="hostname or IP" style="min-width:300px"></div>
+      <div class="form-field"><label>Port</label><input id="cePort" type="number" placeholder="27017" style="min-width:90px"></div>
+      <div class="form-field"><label id="ceDbLabel">Auth DB</label><input id="ceDb" placeholder="admin"></div>
+      <label class="chk" id="ceTlsWrap" style="height:32px"><input type="checkbox" id="ceTls"> TLS</label>
+      <label class="chk" style="height:32px" title="Store on the server (SQLite at ~/.warden/profiles.sqlite) so it works in every browser and the CLI. Passwords are never stored there."><input type="checkbox" id="ceServer"> save on server</label>
+      <button class="btn btn-success" onclick="addCustomEnv()">Save</button>
+    </div>
+    <h2 style="margin-top:26px">${ICONS.db} Backup &amp; Transfer</h2>
+    <p class="card-meta">Move everything to the desktop app or another browser: saved credentials per environment, custom environments and overrides,
+      audit results and exclusions, pinned queries and history, preferences. Open this same page there and import the file.</p>
+    <div class="form-row">
+      <div class="form-field"><label>Passphrase (optional, encrypts the file)</label>
+        <input id="beoPass" type="password" placeholder="recommended, the file contains passwords" style="min-width:280px"></div>
+      <button class="btn btn-primary" onclick="doExportAll()">Export everything</button>
+      <button class="btn btn-ghost" onclick="document.getElementById('beoFile').click()">Import…</button>
+      <input type="file" id="beoFile" accept=".json,application/json" style="display:none" onchange="importBackupPicked(this)">
+    </div></div>`);
+}
+
+async function reloadConfig() {
+  try { config = await (await fetch(API + '/api/config')).json(); } catch {}
+}
+
+function deleteServerProfile(env, eng) {
+  showModal('Delete Server Profile', `<p>Delete profile <strong>${esc(env)} / ${esc(eng)}</strong> from the server? Every browser and the CLI will lose it.</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Delete', cls: 'btn-danger', fn: async () => {
+      const res = await apiPost('/api/profile-delete', { name: env, profile_engine: eng });
+      if (res.error) { toast(res.error, 'error'); return; }
+      await reloadConfig();
+      afterEnvChange(env);
+      toast('Server profile deleted', 'success');
+      viewEnvs();
+    }},
+  ]);
+}
+
+function editEnv(env, eng) {
+  const cfg = customEnvs[env]?.[eng] || config.environment_details?.[env]?.[eng] || {};
+  document.getElementById('ceName').value = env;
+  document.getElementById('ceEngine').value = eng;
+  ceEngineChanged();
+  document.getElementById('ceHost').value = cfg.host || '';
+  document.getElementById('cePort').value = cfg.port || '';
+  document.getElementById('ceDb').value = cfg.auth_db || cfg.default_db || '';
+  document.getElementById('ceTls').checked = !!cfg.tls;
+  const serverChk = document.getElementById('ceServer');
+  if (serverChk) serverChk.checked = (config.profile_envs?.[env] || []).includes(eng);
+  document.getElementById('ceFormTitle').innerHTML = `${ICONS.sliders} Edit ${esc(env)} / ${esc(eng)}`;
+  document.getElementById('ceHost').focus();
+}
+
+function hideEnv(env, eng) {
+  hiddenEnvs.push(env + '/' + eng);
+  saveHiddenEnvs();
+  afterEnvChange(env);
+  toast(`Hidden ${env} / ${eng}`, 'success');
+  viewEnvs();
+}
+
+function restoreEnv(env, eng) {
+  hiddenEnvs = hiddenEnvs.filter(h => h !== env + '/' + eng);
+  saveHiddenEnvs();
+  renderEnvOptions(document.getElementById('envSelect').value);
+  toast(`Restored ${env} / ${eng}`, 'success');
+  viewEnvs();
+}
+
+function afterEnvChange(env) {
+  const sel = document.getElementById('envSelect');
+  const cur = sel.value;
+  renderEnvOptions(cur);
+  if (cur === env) { disconnected(); updateEngines(); }
+}
+
+function ceEngineChanged() {
+  const docdb = document.getElementById('ceEngine').value === 'documentdb';
+  document.getElementById('ceDbLabel').textContent = docdb ? 'Auth DB' : 'Default DB';
+  document.getElementById('ceDb').placeholder = docdb ? 'admin' : 'postgres';
+  document.getElementById('cePort').placeholder = docdb ? '27017' : '5432';
+  document.getElementById('ceTlsWrap').style.display = docdb ? '' : 'none';
+}
+
+function addCustomEnv() {
+  const name = document.getElementById('ceName').value.trim();
+  const eng = document.getElementById('ceEngine').value;
+  const host = document.getElementById('ceHost').value.trim();
+  const port = parseInt(document.getElementById('cePort').value || (eng === 'documentdb' ? '27017' : '5432'), 10);
+  const dbv = document.getElementById('ceDb').value.trim();
+  if (!name || !/^[a-zA-Z0-9_.\-]+$/.test(name)) { toast('Name: letters, digits, _ . - only', 'error'); return; }
+  if (!host || !/^[a-zA-Z0-9_.\-]+$/.test(host)) { toast('Valid host required', 'error'); return; }
+  if (!(port >= 1 && port <= 65535)) { toast('Valid port required', 'error'); return; }
+  const cfg = { host, port, tls: document.getElementById('ceTls').checked };
+  if (eng === 'documentdb') cfg.auth_db = dbv || 'admin';
+  else cfg.default_db = dbv || 'postgres';
+  if (document.getElementById('ceServer')?.checked) {
+    apiPost('/api/profile-save', { name, profile_engine: eng, profile: cfg }).then(async res => {
+      if (res.error) { toast(res.error, 'error'); return; }
+      await reloadConfig();
+      afterEnvChange(name);
+      toast(`Server profile saved: ${name} / ${eng}`, 'success');
+      viewEnvs();
+    });
+    return;
+  }
+  const isOverride = !!config.environments?.[name];
+  customEnvs[name] = customEnvs[name] || {};
+  customEnvs[name][eng] = cfg;
+  saveCustomEnvs();
+  afterEnvChange(name);
+  toast(isOverride ? `Override saved for ${name} / ${eng}` : `Saved ${name} / ${eng}`, 'success');
+  viewEnvs();
+}
+
+function deleteCustomEnv(env, eng) {
+  const isOverride = !!config.environments?.[env];
+  showModal(isOverride ? 'Restore Built-in' : 'Remove Environment',
+    `<p>${isOverride ? 'Discard your override and restore the built-in settings for' : 'Remove'} <strong>${esc(env)} / ${esc(eng)}</strong>?</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: isOverride ? 'Restore' : 'Remove', cls: 'btn-danger', fn: () => {
+      if (customEnvs[env]) {
+        delete customEnvs[env][eng];
+        if (!Object.keys(customEnvs[env]).length) delete customEnvs[env];
+      }
+      saveCustomEnvs();
+      afterEnvChange(env);
+      toast(isOverride ? 'Built-in restored' : 'Removed', 'success');
+      viewEnvs();
+    }},
+  ]);
+}
+
+// ── Cluster health ─────────────────────────────────────────────────────────
+
+function fmtUptime(sec) {
+  sec = Number(sec) || 0;
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function viewHealth() {
+  if (!requireConnection()) return;
+  setContent(`<div class="card"><h2>${ICONS.pulse} Cluster Health</h2>
+    <div style="display:flex; gap:12px; align-items:center; margin-bottom:12px">
+      <button class="btn btn-ghost btn-sm" onclick="refreshHealth()">Refresh</button>
+      <label class="chk"><input type="checkbox" id="healthAuto" onchange="healthAutoChanged()"> auto-refresh (10s)</label>
+      <span id="healthMeta" style="font-family:var(--mono-font); font-size:11px; color:var(--text-muted)"></span>
+    </div>
+    <div class="chips" id="healthChips">${loadingInline('Checking cluster…')}</div>
+    <div id="healthOps" style="margin-top:16px"></div>
+  </div>`);
+  const auto = document.getElementById('healthAuto');
+  auto.checked = !!prefs.healthAuto;
+  healthAutoChanged();
+  refreshHealth();
+}
+
+function healthAutoChanged() {
+  const on = document.getElementById('healthAuto')?.checked;
+  savePrefs({ healthAuto: !!on });
+  if (window._viewTimer) { clearInterval(window._viewTimer); window._viewTimer = null; }
+  if (on) window._viewTimer = setInterval(refreshHealth, 10000);
+}
+
+async function refreshHealth() {
+  const chips = document.getElementById('healthChips');
+  if (!chips) return;
+  const res = await apiPost('/api/health');
+  const meta = document.getElementById('healthMeta');
+  if (!document.getElementById('healthChips')) return;
+  if (res.error) {
+    document.getElementById('healthChips').innerHTML = `<div class="explain-box explain-danger"><div class="explain-text">${esc(res.error)}</div></div>`;
+    return;
+  }
+  if (meta) meta.textContent = `updated ${new Date().toLocaleTimeString()}`;
+  const chip = (k, v, warnIf) => `<div class="chip"><span class="k">${esc(k)}</span><span class="v"${warnIf ? ' style="color:var(--danger)"' : ''}>${v}</span></div>`;
+  const num = v => (typeof v === 'number' && isFinite(v)) ? v : null;
+  let html = '';
+  let ops = '';
+  if (res.engine === 'documentdb') {
+    const h = res.health || {};
+    const c = h.connections || {};
+    const cur = num(c.current), avail = num(c.available);
+    html += chip('version', esc(h.version || '—'));
+    html += chip('uptime', num(h.uptime) != null ? fmtUptime(h.uptime) : '—');
+    html += chip('connections', cur != null ? `${cur}${avail != null ? ' / ' + (cur + avail) : ''}` : '—');
+    html += chip('active ops', esc(num(h.active_ops) ?? '—'));
+    if (num(h.mem?.resident)) html += chip('memory', `${h.mem.resident} MB`);
+    const slow = h.slow_ops || [];
+    html += chip('slow ops (≥5s)', slow.length, slow.length > 0);
+    if (slow.length) {
+      ops = `<h2>Slow operations</h2><div class="table-wrap"><table>
+        <thead><tr><th>OpId</th><th>Running</th><th>Namespace</th><th>Op</th></tr></thead>
+        <tbody>${slow.map(o => `<tr><td class="mono">${esc(o.opid)}</td><td>${esc(o.secs)}s</td><td class="mono">${esc(o.ns || '')}</td><td>${esc(o.op || '')}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+    }
+  } else {
+    const h = res.health || {};
+    const conns = h.connections || [];
+    html += chip('version', esc(h.version?.[0] || '—'));
+    html += chip('uptime', esc(h.uptime?.[0] || '—'));
+    html += chip('connections', conns.length >= 4 ? `${esc(conns[2])} / ${esc(conns[3])} (${esc(conns[0])} active)` : '—');
+    html += chip('cache hit', h.cache_hit_pct?.[0] ? `${esc(h.cache_hit_pct[0])}%` : '—');
+    html += chip('blocked queries', esc(h.blocked?.[0] ?? '—'), Number(h.blocked?.[0]) > 0);
+    const reps = h.replicas || [];
+    html += chip('replicas', reps[0] ? `${esc(reps[0])}${reps[1] ? ' · lag ' + esc(reps[1]) : ''}` : '0');
+    if (h.total_size?.[0]) html += chip('total size', fmtSize(Number(h.total_size[0])));
+    const slow = h.slow_queries || [];
+    html += chip('slow queries (≥5s)', slow.length, slow.length > 0);
+    if (slow.length) {
+      ops = `<h2>Slow queries</h2><div class="table-wrap"><table>
+        <thead><tr><th>PID</th><th>User</th><th>Runtime</th><th>Query</th></tr></thead>
+        <tbody>${slow.map(q => `<tr><td class="mono">${esc(q.pid)}</td><td>${esc(q.user)}</td><td>${esc(q.runtime)}</td><td class="mono" style="font-size:11px">${esc(q.query)}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+    }
+  }
+  document.getElementById('healthChips').innerHTML = html;
+  document.getElementById('healthOps').innerHTML = ops;
+}
+
+// ── Security audits ────────────────────────────────────────────────────────
+
+function auditKind() { return currentEngine.startsWith('document') ? 'documentdb' : 'postgresql'; }
+function auditCatalog() { return (config.audits || []).filter(a => a.engine === auditKind()); }
+function auditRunKey(id) { return `${document.getElementById('envSelect').value}:${auditKind()}:${id}`; }
+function auditExclKey(id) { return `${document.getElementById('envSelect').value}:${id}`; }
+function loadAuditRuns() { try { return JSON.parse(localStorage.getItem('warden.auditRuns')) || {}; } catch { return {}; } }
+function loadExclusions() { try { return JSON.parse(localStorage.getItem('warden.auditExcl')) || {}; } catch { return {}; } }
+function saveExclusions(map) { try { localStorage.setItem('warden.auditExcl', JSON.stringify(map)); } catch {} }
+function exclFor(id) { return loadExclusions()[auditExclKey(id)] || []; }
+
+function sevPill(s) {
+  return s === 'critical' ? '<span class="pill pill-danger">critical</span>'
+    : s === 'warning' ? '<span class="pill pill-warn">warning</span>'
+    : '<span class="pill pill-muted">info</span>';
+}
+
+function auditIssueCount() {
+  const runs = loadAuditRuns();
+  let n = 0;
+  for (const a of auditCatalog()) {
+    const run = runs[auditRunKey(a.id)];
+    if (!run) continue;
+    const excluded = new Set(exclFor(a.id).map(e => e.user));
+    n += (run.findings || []).filter(f => !excluded.has(f.user) && f.severity !== 'info').length;
+  }
+  return n;
+}
+
+async function runAudit(id, silent = false) {
+  const res = await apiPost('/api/audit-run', { audit: id });
+  if (res.error) { if (!silent) toast(res.error, 'error'); return null; }
+  const runs = loadAuditRuns();
+  runs[auditRunKey(id)] = res;
+  try { localStorage.setItem('warden.auditRuns', JSON.stringify(runs)); } catch {}
+  renderBadges();
+  return res;
+}
+
+function viewAudits() {
+  if (!requireConnection()) return;
+  const runs = loadAuditRuns();
+  const totals = { critical: 0, warning: 0, info: 0, excluded: 0 };
+  const rows = auditCatalog().map(a => {
+    const run = runs[auditRunKey(a.id)];
+    const excluded = new Set(exclFor(a.id).map(e => e.user));
+    let counts = '';
+    if (run) {
+      const live = (run.findings || []).filter(f => !excluded.has(f.user));
+      const exCount = (run.findings || []).length - live.length;
+      totals.excluded += exCount;
+      for (const f of live) totals[f.severity] = (totals[f.severity] || 0) + 1;
+      counts = `${plural(live.length, 'finding')}${exCount ? ` · ${exCount} excluded` : ''} · ${esc(run.ran_at)}`;
+    } else {
+      counts = 'never run';
+    }
+    return `<tr>
+      <td>${sevPill(a.severity)}</td>
+      <td><strong>${esc(a.title)}</strong><br><span style="color:var(--text-muted); font-size:12px">${esc(a.description)}</span></td>
+      <td style="color:var(--text-muted); font-size:12px; white-space:nowrap">${counts}</td>
+      <td style="text-align:right; white-space:nowrap">
+        <button class="btn btn-ghost btn-sm" data-id="${esc(a.id)}" onclick="viewAuditDetail(this.dataset.id)">Open</button>
+        <button class="btn btn-primary btn-sm" data-id="${esc(a.id)}" onclick="runAudit(this.dataset.id).then(r => r && viewAuditDetail(this.dataset.id))">Run</button>
+      </td></tr>`;
+  }).join('');
+  setContent(`<div class="card"><h2>${ICONS.shield} Security Audits</h2>
+    <p class="card-meta">Access reviews for <strong>${esc(document.getElementById('envSelect').value)} / ${esc(currentEngine.replace(/_/g, ' '))}</strong>.
+      Exclude known accounts (with a reason) so the findings show only real issues.</p>
+    <div class="chips" style="margin-bottom:14px">
+      <div class="chip"><span class="k">critical</span><span class="v" style="color:${totals.critical ? 'var(--danger)' : 'inherit'}">${totals.critical}</span></div>
+      <div class="chip"><span class="k">warning</span><span class="v" style="color:${totals.warning ? 'var(--warning)' : 'inherit'}">${totals.warning}</span></div>
+      <div class="chip"><span class="k">info</span><span class="v">${totals.info}</span></div>
+      <div class="chip"><span class="k">excluded</span><span class="v">${totals.excluded}</span></div>
+      <button class="btn btn-success" style="align-self:center" onclick="runAllAudits()">Run all</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Severity</th><th>Audit</th><th>Last run</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div></div>`);
+}
+
+async function runAllAudits() {
+  const catalog = auditCatalog();
+  toast(`Running ${catalog.length} audits…`, 'info');
+  for (const a of catalog) await runAudit(a.id, true);
+  toast('All audits finished', 'success');
+  viewAudits();
+}
+
+async function viewAuditDetail(id) {
+  markActive('audits');
+  const def = (config.audits || []).find(a => a.id === id);
+  if (!def) return;
+  let run = loadAuditRuns()[auditRunKey(id)];
+  if (!run) {
+    setContent(loading(`Running audit: ${def.title}…`));
+    run = await runAudit(id);
+    if (!run) { viewAudits(); return; }
+  }
+  const exclusions = exclFor(id);
+  const excludedSet = new Set(exclusions.map(e => e.user));
+  const live = (run.findings || []).filter(f => !excludedSet.has(f.user));
+  const excludedFindings = (run.findings || []).filter(f => excludedSet.has(f.user));
+
+  const findingRow = f => `<tr>
+    <td><input type="checkbox" class="audit-sel" data-user="${esc(f.user)}" onchange="auditSelChanged()"></td>
+    <td>${sevPill(f.severity)}</td>
+    <td class="mono" style="cursor:pointer" data-user="${esc(f.user)}" onclick="markActive('userinfo');viewUserInfoFor(this.dataset.user)" title="Open user page">${esc(f.user)}</td>
+    <td>${esc(f.summary)}</td>
+    <td class="mono" style="font-size:11px; color:var(--text-muted)">${esc(f.detail)}</td>
+    <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-id="${esc(id)}" data-user="${esc(f.user)}"
+      onclick="excludeFromAudit(this.dataset.id, this.dataset.user)">Exclude</button></td></tr>`;
+
+  let html = `<div class="card">
+    <h2>${ICONS.shield} ${esc(def.title)}</h2>
+    <p class="card-meta">${esc(def.description)} · ${plural(run.scanned, 'account')} checked · ${esc(run.ran_at)}</p>
+    <div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm" onclick="viewAudits()">← All audits</button>
+      <button class="btn btn-primary btn-sm" data-id="${esc(id)}" onclick="runAudit(this.dataset.id).then(r => r && viewAuditDetail(this.dataset.id))">Re-run</button>
+      <button class="btn btn-ghost btn-sm" data-id="${esc(id)}" onclick="exportAudit(this.dataset.id, 'json')">↓ JSON</button>
+      <button class="btn btn-ghost btn-sm" data-id="${esc(id)}" onclick="exportAudit(this.dataset.id, 'csv')">↓ CSV</button>
+      <button class="btn btn-primary btn-sm" id="exclSelBtn" style="display:none" data-id="${esc(id)}"
+        onclick="excludeSelected(this.dataset.id)">Exclude selected</button>
+    </div>`;
+  html += live.length
+    ? `<div class="table-wrap"><table>
+        <thead><tr><th><input type="checkbox" id="auditSelAll" onchange="auditSelAll(this.checked)" title="Select all"></th><th>Severity</th><th>User</th><th>Finding</th><th>Detail</th><th></th></tr></thead>
+        <tbody>${live.map(findingRow).join('')}</tbody></table></div>`
+    : `<div class="empty-state">No findings${excludedFindings.length ? ' (everything is excluded)' : ', all clear'} ✓</div>`;
+  if (exclusions.length) {
+    html += `<h2 style="margin-top:20px">Excluded (${exclusions.length})</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>User</th><th>Reason</th><th>Since</th><th></th></tr></thead>
+        <tbody>${exclusions.map(e => `<tr style="opacity:0.6">
+          <td class="mono">${esc(e.user)}</td><td>${esc(e.reason || '—')}</td>
+          <td style="color:var(--text-muted)">${esc(e.at || '')}</td>
+          <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-id="${esc(id)}" data-user="${esc(e.user)}"
+            onclick="restoreToAudit(this.dataset.id, this.dataset.user)">Restore</button></td></tr>`).join('')}</tbody>
+      </table></div>`;
+  }
+  html += '</div>';
+  setContent(html);
+}
+
+function auditSelected() {
+  return [...document.querySelectorAll('.audit-sel:checked')].map(c => c.dataset.user);
+}
+
+function auditSelChanged() {
+  const btn = document.getElementById('exclSelBtn');
+  if (!btn) return;
+  const n = auditSelected().length;
+  btn.style.display = n ? '' : 'none';
+  btn.textContent = `Exclude selected (${n})`;
+  const all = document.getElementById('auditSelAll');
+  const boxes = document.querySelectorAll('.audit-sel');
+  if (all) all.checked = n > 0 && n === boxes.length;
+}
+
+function auditSelAll(checked) {
+  document.querySelectorAll('.audit-sel').forEach(c => { c.checked = checked; });
+  auditSelChanged();
+}
+
+function excludeSelected(id) {
+  const users = auditSelected();
+  if (!users.length) return;
+  showModal(`Exclude ${plural(users.length, 'user')}`, `
+    <p>Exclude <strong>${users.slice(0, 6).map(esc).join(', ')}${users.length > 6 ? ` +${users.length - 6} more` : ''}</strong> from this audit's findings?</p>
+    <div class="form-field" style="margin-bottom:0">
+      <label>Reason, applied to all (recommended)</label>
+      <input id="exclReason" placeholder="e.g. service accounts, approved admins">
+    </div>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: `Exclude ${users.length}`, cls: 'btn-primary', fn: () => {
+      const reason = document.getElementById('exclReason')?.value.trim() || '';
+      const at = new Date().toISOString().slice(0, 10);
+      const map = loadExclusions();
+      const key = auditExclKey(id);
+      const kept = (map[key] || []).filter(e => !users.includes(e.user));
+      map[key] = [...kept, ...users.map(user => ({ user, reason, at }))];
+      saveExclusions(map);
+      renderBadges();
+      toast(`Excluded ${plural(users.length, 'user')}`, 'success');
+      viewAuditDetail(id);
+    }},
+  ]);
+}
+
+function excludeFromAudit(id, user) {
+  showModal(`Exclude ${user}`, `
+    <p>Exclude <strong>${esc(user)}</strong> from this audit's findings so you can focus on real issues?</p>
+    <div class="form-field" style="margin-bottom:0">
+      <label>Reason (recommended, future you will ask)</label>
+      <input id="exclReason" placeholder="e.g. service account, approved admin">
+    </div>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Exclude', cls: 'btn-primary', fn: () => {
+      const map = loadExclusions();
+      const key = auditExclKey(id);
+      map[key] = [...(map[key] || []).filter(e => e.user !== user),
+        { user, reason: document.getElementById('exclReason')?.value.trim() || '', at: new Date().toISOString().slice(0, 10) }];
+      saveExclusions(map);
+      renderBadges();
+      viewAuditDetail(id);
+    }},
+  ]);
+}
+
+function restoreToAudit(id, user) {
+  const map = loadExclusions();
+  const key = auditExclKey(id);
+  map[key] = (map[key] || []).filter(e => e.user !== user);
+  saveExclusions(map);
+  renderBadges();
+  viewAuditDetail(id);
+}
+
+function exportAudit(id, kind) {
+  const run = loadAuditRuns()[auditRunKey(id)];
+  if (!run) return;
+  const excluded = new Set(exclFor(id).map(e => e.user));
+  const rows = (run.findings || []).map(f => ({ ...f, excluded: excluded.has(f.user) }));
+  const stamp = run.ran_at.replace(/[: ]/g, '-');
+  if (kind === 'json') {
+    downloadFile(`audit-${id}-${stamp}.json`, JSON.stringify({ ...run, findings: rows }, null, 2), 'application/json');
+  } else {
+    downloadFile(`audit-${id}-${stamp}.csv`, csvFromDocs(rows), 'text/csv');
+  }
+}
+
+// ── Backup & transfer (everything under warden.* keys) ─────────────────────
+
+const BACKUP_VERSION = 1;
+const b64buf = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64buf = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+function collectExportData() {
+  const local = {}, session = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k.startsWith('warden.')) local[k] = localStorage.getItem(k);
+  }
+  for (let i = 0; i < sessionStorage.length; i++) {
+    const k = sessionStorage.key(i);
+    if (k.startsWith('warden.')) session[k] = sessionStorage.getItem(k);
+  }
+  return { app: 'warden', version: BACKUP_VERSION, exported_at: new Date().toISOString(), local, session };
+}
+
+async function backupKey(pass, salt) {
+  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' },
+    material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+async function encryptBackup(payload, pass) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await backupKey(pass, salt);
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key,
+    new TextEncoder().encode(JSON.stringify(payload)));
+  return { app: 'warden', version: BACKUP_VERSION, encrypted: true,
+           salt: b64buf(salt), iv: b64buf(iv), data: b64buf(ct) };
+}
+
+async function decryptBackup(obj, pass) {
+  const key = await backupKey(pass, unb64buf(obj.salt));
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64buf(obj.iv) }, key, unb64buf(obj.data));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+async function doExportAll() {
+  const pass = document.getElementById('beoPass')?.value || '';
+  const payload = collectExportData();
+  const out = pass ? await encryptBackup(payload, pass) : payload;
+  downloadFile(`warden-backup-${new Date().toISOString().slice(0, 10)}.json`,
+    JSON.stringify(out, null, 2), 'application/json');
+  toast(pass ? 'Encrypted backup downloaded' : 'Backup downloaded. It contains saved passwords, keep it safe', pass ? 'success' : 'info');
+}
+
+function importBackupPicked(input) {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      let obj = JSON.parse(reader.result);
+      if (obj.app !== 'warden' && obj.app !== 'dbctl') throw new Error('not a warden backup file');
+      if (obj.encrypted) {
+        const pass = document.getElementById('beoPass')?.value || '';
+        if (!pass) { toast('This backup is encrypted, enter the passphrase in the field first', 'error'); return; }
+        try { obj = await decryptBackup(obj, pass); }
+        catch { toast('Wrong passphrase', 'error'); return; }
+      }
+      confirmImport(obj);
+    } catch (e) {
+      toast('Import failed: ' + e.message, 'error');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function confirmImport(obj) {
+  // Normalize keys from pre-rename (dbctl) backups
+  const norm = o => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [k.replace(/^dbctl\./, 'warden.'), v]));
+  obj = { ...obj, local: norm(obj.local), session: norm(obj.session) };
+  const local = obj.local || {};
+  const parse = (k, fb) => { try { return JSON.parse(local[k]) || fb; } catch { return fb; } };
+  const nCreds = Object.keys(parse('warden.creds', {})).length;
+  const nPass = Object.keys(local).filter(k => k.startsWith('warden.k')).length;
+  const nEnvs = Object.values(parse('warden.customEnvs', {})).reduce((s, e) => s + Object.keys(e).length, 0);
+  const nRuns = Object.keys(parse('warden.auditRuns', {})).length;
+  const nExcl = Object.values(parse('warden.auditExcl', {})).reduce((s, l) => s + l.length, 0);
+  const line = (n, label) => n ? `<div>• ${plural(n, label)}</div>` : '';
+  showModal('Import Backup', `
+    <p>Backup from <strong>${esc((obj.exported_at || 'unknown date').slice(0, 19).replace('T', ' '))}</strong> containing:</p>
+    <div style="font-size:13px; line-height:1.8; margin-bottom:12px">
+      ${line(nCreds, 'saved login')}${line(nPass, 'stored password')}${line(nEnvs, 'custom environment / override')}
+      ${line(nRuns, 'audit result')}${line(nExcl, 'audit exclusion')}
+      ${!(nCreds || nPass || nEnvs || nRuns || nExcl) ? '<div>preferences and history only</div>' : ''}
+    </div>
+    <p>This replaces the matching settings here, then reloads the app.</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Import', cls: 'btn-primary', fn: () => {
+      for (const [k, v] of Object.entries(obj.local || {})) { try { localStorage.setItem(k, v); } catch {} }
+      for (const [k, v] of Object.entries(obj.session || {})) { try { sessionStorage.setItem(k, v); } catch {} }
+      toast('Imported, reloading…', 'success');
+      setTimeout(() => location.reload(), 700);
+    }},
+  ]);
+}
+
+// ── Keyboard: Esc closes modal, ⌘K / Ctrl+K focuses quick-jump ──
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal();
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    document.getElementById('qfInput').focus();
+  }
+});
+
+init();
+</script>

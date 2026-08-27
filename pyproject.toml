@@ -1,0 +1,10 @@
+# Virtual workspace root. uv resolves and installs all packages together.
+# See Makefile for the day-to-day commands.
+
+[tool.uv.workspace]
+members = [
+    "packages/core",
+    "packages/cli",
+    "packages/web",
+    "packages/desktop",
+]
