@@ -16,7 +16,7 @@ Works with DocumentDB/MongoDB, PostgreSQL (Aurora and friends), MySQL/MariaDB, p
 - read-only mode for when you just want to look at prod without fear
 - every change lands in an append-only audit log
 
-Elasticsearch/OpenSearch and Redis/Valkey/ElastiCache currently do connect, data browsing, cluster health, and the query console. Their user/role/ACL management is the next pass.
+All six engines are on the same footing now: connect, data browsing, cluster health, the query console, in-grid CRUD, and user management. For Elasticsearch that's native-realm users and roles (X-Pack or the OpenSearch security plugin); for Redis it's ACL users (`ACL SETUSER`), so you can create a `cache:*` read-only user in a couple of clicks.
 
 ## Running it
 
