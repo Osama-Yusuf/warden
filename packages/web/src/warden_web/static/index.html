@@ -1312,6 +1312,7 @@ async function viewUserInfoFor(username) {
       : `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, true)">Unlock account</button>`;
     html += `<div class="user-toolbar">
       <button class="btn btn-primary" data-user="${uAttr}" onclick="openResetModal(this.dataset.user)">Reset password</button>
+      <button class="btn btn-ghost" data-user="${uAttr}" onclick="openTestLoginModal(this.dataset.user, '')">Test access</button>
       ${lockBtn}
       <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">Drop user</button>
     </div></div>`;
@@ -1377,6 +1378,7 @@ async function viewUserInfoFor(username) {
     : `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, true)">🔓 Enable login</button>`);
   html += `<div class="user-toolbar">
     <button class="btn btn-primary" data-user="${uAttr}" onclick="openResetModal(this.dataset.user)">🔑 Reset password</button>
+    <button class="btn btn-ghost" data-user="${uAttr}" onclick="openTestLoginModal(this.dataset.user, '')">✓ Test access</button>
     ${pgButtons}
     <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">🗑️ Drop user</button>
   </div>`;
@@ -1407,6 +1409,59 @@ function openResetModal(username) {
       else toast(res.error || 'Failed', 'error');
     }},
   ]);
+}
+
+function openTestLoginModal(username, password) {
+  if (engineFamily(currentEngine) === 'sqlite') { toast('SQLite has no user accounts', 'error'); return; }
+  document.getElementById('modalTitle').textContent = 'Test a login';
+  document.getElementById('modalBody').innerHTML = `
+    <p>Connects as this user with their own credentials and checks what they can reach. Your admin connection stays put.</p>
+    <div style="display:flex; flex-direction:column; gap:10px">
+      <div class="form-field"><label>Username</label><input id="tlUser" value="${esc(username || '')}" style="width:100%"></div>
+      <div class="form-field"><label>Password</label><input id="tlPass" type="password" value="${esc(password || '')}" placeholder="their password" style="width:100%"></div>
+      <div class="form-field"><label>Database to check (optional)</label><input id="tlDb" list="dbList" placeholder="database name" style="width:100%"></div>
+    </div>
+    <button class="btn btn-primary" style="margin-top:14px" onclick="doTestLogin()">Run test</button>
+    <div id="tlResult" style="margin-top:14px"></div>`;
+  const actEl = document.getElementById('modalActions');
+  actEl.innerHTML = '';
+  const b = document.createElement('button');
+  b.className = 'btn btn-ghost'; b.textContent = 'Close'; b.onclick = closeModal;
+  actEl.appendChild(b);
+  document.getElementById('modal').classList.add('open');
+  setTimeout(() => document.getElementById(password ? 'tlDb' : 'tlPass')?.focus(), 40);
+}
+
+async function doTestLogin() {
+  const test_user = document.getElementById('tlUser').value.trim();
+  const test_pass = document.getElementById('tlPass').value;
+  const test_db = document.getElementById('tlDb').value.trim();
+  if (!test_user || !test_pass) { toast('Username and password required', 'error'); return; }
+  const box = document.getElementById('tlResult');
+  box.innerHTML = loadingInline('Testing login…');
+  const base = creds();
+  const body = { env: base.env, engine: base.engine, test_user, test_pass };
+  if (test_db) body.test_db = test_db;
+  if (base.custom_config) body.custom_config = base.custom_config;
+  let res;
+  try {
+    res = await fetch(API + '/api/test-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+  } catch (e) {
+    box.innerHTML = `<div class="explain-box explain-danger"><div class="explain-text">Request failed: ${esc(e.message)}</div></div>`;
+    return;
+  }
+  if (res.error) { box.innerHTML = `<div class="explain-box explain-danger"><div class="explain-text">${esc(res.error)}</div></div>`; return; }
+  if (!res.auth) {
+    box.innerHTML = `<div class="explain-box explain-danger"><div class="explain-text"><b>Login failed.</b> ${esc(res.error || 'Those credentials were rejected.')}</div></div>`;
+    return;
+  }
+  let html = `<div class="ctx-line ctx-ok"><b>Login works</b> — authenticated as <span class="mono">${esc(res.identity || test_user)}</span></div>`;
+  if (res.roles && res.roles.length) html += `<div style="margin:10px 0 4px; font-size:12.5px"><span style="color:var(--text-muted)">roles: </span>${res.roles.map(r => `<span class="pill pill-ok">${esc(r)}</span>`).join(' ')}</div>`;
+  if (res.grants && res.grants.length) html += `<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Grants</th></tr></thead><tbody>${res.grants.map(g => `<tr><td class="mono" style="font-size:11px">${esc(g)}</td></tr>`).join('')}</tbody></table></div>`;
+  for (const c of (res.checks || [])) {
+    html += `<div class="ctx-line ${c.ok ? 'ctx-ok' : 'ctx-bad'}"><b>${esc(c.name)}</b>${c.detail ? ` — <span style="color:var(--text-muted)">${esc(c.detail)}</span>` : ''}</div>`;
+  }
+  box.innerHTML = html;
 }
 
 function openCreateUserModal() {
@@ -1458,7 +1513,9 @@ async function doCreateFromModal() {
     const box = document.getElementById('cmResult');
     if (box) box.innerHTML = `<div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border)">
       <p style="color:var(--warning); font-weight:600; margin-bottom:6px">Saved. Copy this password now, it won't show again:</p>
-      ${passwordHtml(res.password)}</div>`;
+      ${passwordHtml(res.password)}
+      <button class="btn btn-primary btn-sm" style="margin-top:10px" data-u="${esc(username)}" data-p="${esc(res.password)}"
+        onclick="openTestLoginModal(this.dataset.u, this.dataset.p)">Test this login</button></div>`;
     if (currentView === 'users') viewListUsers();
   } else {
     toast(res.error || 'Failed', 'error');

@@ -243,6 +243,73 @@ def api_connect(body):
     return {"ok": True, "host": cfg["host"], "user": out.strip() or user}
 
 
+def api_test_login(body):
+    """Connect AS a given user (their own credentials) and probe what they can
+    do. Stateless: never touches the admin session. Read-only checks only."""
+    cfg, err = get_config(body)
+    if err:
+        return {"error": err}
+    engine = body.get("engine", "documentdb")
+    fam = engine_family(engine)
+    if fam == "sqlite":
+        return {"error": "SQLite has no user accounts to test"}
+    require_fields(body, "test_user", "test_pass")
+    tu = body["test_user"]
+    tp = body["test_pass"]
+    test_db = body.get("test_db") or ""
+    if test_db:
+        test_db = validate_ident(test_db, "database")
+    checks = []
+
+    if fam == "documentdb":
+        data, err = docdb_eval(cfg, tu, tp, "db.runCommand({connectionStatus:1})")
+        if err or not data:
+            return {"ok": True, "auth": False, "error": _clean_mongosh_noise(err or "") or "Authentication failed"}
+        roles = ((data or {}).get("authInfo") or {}).get("authenticatedUserRoles") or []
+        role_strs = [f"{r.get('role')}@{r.get('db', '*')}" for r in roles]
+        dbs, e2 = docdb_eval(cfg, tu, tp, "db.adminCommand({listDatabases:1}).databases.map(d => d.name)")
+        checks.append({"name": "List all databases", "ok": e2 is None,
+                       "detail": (", ".join(dbs) if e2 is None and dbs else _clean_mongosh_noise(e2 or "") or "not permitted")})
+        if test_db:
+            names, e3 = docdb_eval(cfg, tu, tp, "db.getCollectionNames()", db=test_db)
+            checks.append({"name": f"Read '{test_db}'", "ok": e3 is None,
+                           "detail": (f"{len(names or [])} collection(s) visible" if e3 is None
+                                      else _clean_mongosh_noise(e3))})
+        return {"ok": True, "auth": True, "identity": tu, "roles": role_strs, "checks": checks}
+
+    if fam == "mysql":
+        code, out, err = my_query(cfg, tu, tp, "SELECT CURRENT_USER()")
+        if code != 0:
+            return {"ok": True, "auth": False, "error": (err or "").strip() or "Authentication failed"}
+        code2, out2, _ = my_query(cfg, tu, tp, "SHOW DATABASES")
+        checks.append({"name": "Databases visible", "ok": code2 == 0,
+                       "detail": ", ".join(out2.split()) if code2 == 0 and out2.strip() else "none"})
+        grants = []
+        code3, out3, _ = my_query(cfg, tu, tp, "SHOW GRANTS")
+        if code3 == 0:
+            grants = [l for l in out3.split("\n") if l.strip()]
+        if test_db:
+            code4, out4, err4 = my_query(cfg, tu, tp, "SHOW TABLES", db=test_db)
+            checks.append({"name": f"Access '{test_db}'", "ok": code4 == 0,
+                           "detail": (f"{len(out4.split())} table(s) visible" if code4 == 0 else (err4 or "").strip() or "denied")})
+        return {"ok": True, "auth": True, "identity": out.strip(), "grants": grants, "checks": checks}
+
+    # postgresql family
+    code, out, err = pg_query(cfg, tu, tp, "SELECT current_user")
+    if code != 0:
+        return {"ok": True, "auth": False, "error": (err or "").strip() or "Authentication failed"}
+    code2, out2, _ = pg_query(cfg, tu, tp,
+        "SELECT datname FROM pg_database WHERE datistemplate=false "
+        "AND has_database_privilege(datname, 'CONNECT') ORDER BY datname")
+    checks.append({"name": "Databases they can connect to", "ok": code2 == 0,
+                   "detail": ", ".join(out2.split()) if code2 == 0 and out2.strip() else "none"})
+    if test_db:
+        code3, out3, err3 = pg_query(cfg, tu, tp, "SELECT 1", db=test_db)
+        checks.append({"name": f"Connect to '{test_db}'", "ok": code3 == 0,
+                       "detail": "connected" if code3 == 0 else (err3 or "").strip() or "denied"})
+    return {"ok": True, "auth": True, "identity": out.strip(), "checks": checks}
+
+
 def api_list_users(body):
     cfg, err = get_config(body)
     if err:
@@ -1758,6 +1825,7 @@ REQUIRES_CREDS = {
 ROUTES = {
     "/api/config": api_config,
     "/api/connect": api_connect,
+    "/api/test-login": api_test_login,
     "/api/list-users": api_list_users,
     "/api/user-info": api_user_info,
     "/api/create-user": api_create_user,
