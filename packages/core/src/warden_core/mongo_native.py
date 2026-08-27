@@ -10,12 +10,14 @@ The free-form query console stays on mongosh (it evaluates arbitrary shell JS
 that a driver can't run).
 """
 
+import re
 import threading
 import uuid
 
 try:
     from pymongo import MongoClient
     from pymongo.errors import PyMongoError
+    from bson import ObjectId
     HAVE_PYMONGO = True
 except ImportError:  # pragma: no cover
     HAVE_PYMONGO = False
@@ -152,20 +154,61 @@ def collection_names(cfg, user, pwd, database):
     return _run(go)
 
 
+def id_repr(value):
+    """A JSON-encodable, type-preserving handle for an _id so the browser can
+    send it back and we target the exact document (ObjectId vs string vs int)."""
+    if isinstance(value, ObjectId):
+        return {"$oid": str(value)}
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return {"$oid": str(value)}
+
+
+def id_from_repr(rep):
+    """Rebuild a real _id from the handle id_repr() produced."""
+    if isinstance(rep, dict) and "$oid" in rep:
+        return ObjectId(rep["$oid"])
+    return rep
+
+
+def _search_filter(coll, term):
+    """A best-effort 'any field contains term' filter (case-insensitive regex
+    across sampled field names, plus an exact _id match when term is an oid).
+    This is a collection scan — bounded by the page limit — like SQL ILIKE."""
+    fields, seen = [], set()
+    for d in coll.find({}).limit(40):
+        for k in d.keys():
+            if k not in seen:
+                seen.add(k)
+                fields.append(k)
+    rx = {"$regex": re.escape(term), "$options": "i"}
+    ors = [{f: rx} for f in fields]
+    try:
+        ors.append({"_id": ObjectId(term)})
+    except Exception:
+        pass
+    return {"$or": ors} if ors else {}
+
+
 def find_page(cfg, user, pwd, database, collection, limit=50, skip=0,
-              sort_field=None, sort_dir=1):
+              sort_field=None, sort_dir=1, search=None):
     """A page of documents for the data browser. Returns (result, error) where
-    result = {columns, rows, total}. Columns are the union of top-level keys
-    across the page (_id first), rows align to columns, and nested values stay
-    structured (JSON-safe) so the grid can render/expand them."""
+    result = {columns, rows, ids, total, filtered}. Columns are the union of
+    top-level keys across the page (_id first); `ids` is a parallel array of
+    type-preserving _id handles for row-level CRUD. A search never counts (it
+    would scan), so total is None then."""
     def go():
         c = get_client(cfg, user, pwd)
         coll = c[database][collection]
-        cursor = coll.find({})
+        term = (search or "").strip()
+        filt = _search_filter(coll, term) if term else {}
+        cursor = coll.find(filt)
         if sort_field:
             cursor = cursor.sort(sort_field, -1 if int(sort_dir) < 0 else 1)
         cursor = cursor.skip(max(0, int(skip))).limit(max(1, int(limit)))
-        docs = [_jsonsafe(d) for d in cursor]
+        raw = list(cursor)
+        ids = [id_repr(d.get("_id")) for d in raw]
+        docs = [_jsonsafe(d) for d in raw]
         columns, seen = [], set()
         for d in docs:
             if isinstance(d, dict):
@@ -176,12 +219,80 @@ def find_page(cfg, user, pwd, database, collection, limit=50, skip=0,
         if "_id" in seen:
             columns = ["_id"] + [k for k in columns if k != "_id"]
         rows = [[d.get(k) if isinstance(d, dict) else None for k in columns] for d in docs]
-        try:
-            total = coll.estimated_document_count()
-        except PyMongoError:
-            total = None
-        return {"columns": columns, "rows": rows,
-                "total": int(total) if total is not None else None}
+        total = None
+        if not term:
+            try:
+                total = int(coll.estimated_document_count())
+            except PyMongoError:
+                total = None
+        return {"columns": columns, "rows": rows, "ids": ids,
+                "total": total, "filtered": bool(term)}
+    return _run(go)
+
+
+def collection_stats(cfg, user, pwd, database, collection):
+    """Header stats for the data browser: document count, data + storage size,
+    index count, average document size. Returns (stats, error)."""
+    def go():
+        c = get_client(cfg, user, pwd)
+        st = c[database].command("collStats", collection)
+        return {"rows": int(st.get("count", 0) or 0),
+                "size_bytes": int(st.get("size", 0) or 0),
+                "storage_bytes": int(st.get("storageSize", 0) or 0),
+                "indexes": int(st.get("nindexes", 0) or 0),
+                "avg_obj": int(st.get("avgObjSize", 0) or 0)}
+    return _run(go)
+
+
+def collection_meta(cfg, user, pwd, database, collection):
+    """What a MongoDB editor needs: the id field is always _id, docs are edited
+    as JSON. Returns (meta, error)."""
+    def go():
+        get_client(cfg, user, pwd)  # validate connectivity/auth
+        return {"id_field": "_id", "editable": True, "json_edit": True}
+    return _run(go)
+
+
+def insert_document(cfg, user, pwd, database, collection, doc):
+    """insertOne. Returns ({inserted_id}, error)."""
+    def go():
+        c = get_client(cfg, user, pwd)
+        res = c[database][collection].insert_one(dict(doc))
+        return {"inserted_id": _jsonsafe(res.inserted_id)}
+    return _run(go)
+
+
+def update_document(cfg, user, pwd, database, collection, rep, set_fields, unset_fields):
+    """updateOne targeting exactly one _id, applying only changed fields
+    ($set) and removed fields ($unset) so untouched fields keep their original
+    BSON types. Returns ({matched, modified}, error)."""
+    def go():
+        c = get_client(cfg, user, pwd)
+        _id = id_from_repr(rep)
+        update = {}
+        clean_set = {k: v for k, v in (set_fields or {}).items() if k != "_id"}
+        if clean_set:
+            update["$set"] = clean_set
+        if unset_fields:
+            update["$unset"] = {k: "" for k in unset_fields if k != "_id"}
+        if not update:
+            return {"matched": 1, "modified": 0}
+        res = c[database][collection].update_one({"_id": _id}, update)
+        if res.matched_count != 1:
+            raise LookupError(f"Expected to match 1 document, matched {res.matched_count}")
+        return {"matched": res.matched_count, "modified": res.modified_count}
+    return _run(go)
+
+
+def delete_document(cfg, user, pwd, database, collection, rep):
+    """deleteOne targeting exactly one _id. Returns ({deleted}, error)."""
+    def go():
+        c = get_client(cfg, user, pwd)
+        _id = id_from_repr(rep)
+        res = c[database][collection].delete_one({"_id": _id})
+        if res.deleted_count != 1:
+            raise LookupError(f"Expected to delete 1 document, deleted {res.deleted_count}")
+        return {"deleted": res.deleted_count}
     return _run(go)
 
 
