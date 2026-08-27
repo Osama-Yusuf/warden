@@ -62,6 +62,7 @@ build-desktop: $(PY)
 		--collect-submodules pymongo --collect-submodules bson \
 		--collect-submodules psycopg --collect-submodules psycopg_pool \
 		--collect-all psycopg_binary \
+		--collect-submodules redis --collect-submodules urllib3 \
 		packages/desktop/src/warden_desktop/main.py
 	@rm -f warden.spec
 	@echo "\nBundle: dist/warden.app (macOS) / dist/warden/ (other OS)"
