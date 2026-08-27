@@ -341,7 +341,7 @@ def api_list_users(body):
         return {"users": [], "note": "SQLite has no user accounts"}
 
     if fam == "documentdb":
-        data, err = docdb_read(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users")
+        data, err = docdb_eval(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users")
         if err:
             return {"error": err}
         users = []
@@ -412,7 +412,7 @@ def api_user_info(body):
         return {"error": "SQLite has no user accounts"}
 
     if fam == "documentdb":
-        data, err = docdb_read(cfg, user, pwd, f'db.adminCommand({{usersInfo: {js_string(target)}}}).users')
+        data, err = docdb_eval(cfg, user, pwd, f'db.adminCommand({{usersInfo: {js_string(target)}}}).users')
         if err:
             return {"error": err}
         if not data:
@@ -769,7 +769,7 @@ def api_list_databases(body):
                                "size_mb": round(size / 1048576, 1)}]}
 
     if fam == "documentdb":
-        data, err = docdb_read(cfg, adm_user, adm_pass, "db.adminCommand({listDatabases:1}).databases")
+        data, err = docdb_eval(cfg, adm_user, adm_pass, "db.adminCommand({listDatabases:1}).databases")
         if err:
             return {"error": err}
         dbs = []
@@ -848,7 +848,7 @@ def api_list_collections(body):
         return {"tables": tables}
 
     if fam == "documentdb":
-        data, err = docdb_read(cfg, adm_user, adm_pass, "db.getCollectionNames()", db=database)
+        data, err = docdb_eval(cfg, adm_user, adm_pass, "db.getCollectionNames()", db=database)
         if err:
             return {"error": err}
         return {"collections": sorted(data or [])}
@@ -1437,7 +1437,7 @@ def _plural(n, word, plural_form=None):
 
 
 def _docdb_users(cfg, user, pwd):
-    data, err = docdb_read(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users")
+    data, err = docdb_eval(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users")
     if err:
         return None, err
     return (data or []), None

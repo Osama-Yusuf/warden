@@ -1152,6 +1152,7 @@ function disconnected() {
   cachedDbs = [];
   collCache = {};
   collFetching = {};
+  if (typeof viewCache !== 'undefined') viewCache.clear();
   document.getElementById('userList').innerHTML = '';
   document.getElementById('dbList').innerHTML = '';
   document.getElementById('connDot').className = 'conn-dot';
@@ -1224,13 +1225,31 @@ function renderWelcome() {
 // ── Views ──
 
 let allUsers = [];
+// Stale-while-revalidate cache: show the last result instantly, refresh behind it.
+const viewCache = new Map();
+function cacheKey(kind) { return `${document.getElementById('envSelect')?.value}:${currentEngine}:${kind}`; }
+function invalidateCache(kind) { viewCache.delete(cacheKey(kind)); }
 
 async function viewListUsers() {
   if (!requireConnection()) return;
-  setContent(loading('Fetching users…'));
-  const res = await apiPost('/api/list-users');
-  if (res.error) { setContent(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`); return; }
+  const key = cacheKey('users');
+  const cached = viewCache.get(key);
+  allUsers = cached || [];
+  renderUsersShell(!!cached);
+  const res = await apiPost('/api/list-users').catch(() => ({ error: 'Request failed' }));
+  if (currentView !== 'users' || cacheKey('users') !== key) return;  // navigated away
+  if (res.error) {
+    if (!cached) setContent(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`);
+    else { const h = document.getElementById('usersRefreshing'); if (h) h.textContent = 'refresh failed'; }
+    return;
+  }
   allUsers = res.users || [];
+  viewCache.set(key, allUsers);
+  const h = document.getElementById('usersRefreshing'); if (h) h.style.display = 'none';
+  renderUserRows();
+}
+
+function renderUsersShell(fromCache) {
   const fam = engineFamily(currentEngine);
   const title = fam === 'mysql' ? 'MySQL Accounts' : fam === 'documentdb' ? 'DocumentDB Users' : 'PostgreSQL Users';
   const isDocdb = fam === 'documentdb';
@@ -1244,6 +1263,7 @@ async function viewListUsers() {
         <input id="userFilter" placeholder="filter users…" oninput="renderUserRows()" autocomplete="off">
       </div>
       <span id="userCount" style="font-size:12px; color:var(--text-muted)"></span>
+      <span id="usersRefreshing" style="font-size:11px; color:var(--text-muted); display:${fromCache ? 'inline' : 'none'}">refreshing…</span>
       <div style="flex:1"></div>
       <button class="btn btn-ghost" onclick="openLookupModal()">${ICONS.search} Look up user</button>
       <button class="btn btn-success" onclick="openCreateUserModal()">${ICONS.plus} Create user</button>
@@ -1602,7 +1622,7 @@ function confirmDropUser(username) {
       const typed = document.getElementById('confirmDrop')?.value;
       if (typed !== username) { toast('Username does not match', 'error'); return; }
       const res = await apiPost('/api/drop-user', { username });
-      if (res.ok) { toast(`User ${username} dropped`, 'success'); refreshCache(); navigate('users'); }
+      if (res.ok) { toast(`User ${username} dropped`, 'success'); invalidateCache('users'); refreshCache(); navigate('users'); }
       else { toast(res.error || 'Failed', 'error'); }
     }},
   ]);
@@ -1868,19 +1888,24 @@ function doDropUser() {
 let dbHealth = null;
 async function viewDatabases() {
   if (!requireConnection()) return;
-  setContent(loading('Listing databases…'));
+  const key = cacheKey('databases');
+  const cached = viewCache.get(key);
+  if (cached) { dbData = cached.dbData; dbHealth = cached.dbHealth; dbSort = { key: 'size', dir: -1 }; renderDatabases(true); }
+  else setContent(loading('Listing databases…'));
   const [health, res] = await Promise.all([
     apiPost('/api/health').catch(() => null),
     apiPost('/api/list-databases').catch(() => ({ error: 'Request failed' })),
   ]);
-  if (res.error) { setContent(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`); return; }
+  if (currentView !== 'databases' || cacheKey('databases') !== key) return;
+  if (res.error) { if (!cached) setContent(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`); return; }
   dbData = (res.databases || []).map(d => ({
     ...d,
     bytes: d.size_bytes != null ? Number(d.size_bytes) : Number(d.size_mb || 0) * 1048576,
   }));
   dbHealth = (health && !health.error) ? health : null;
   dbSort = { key: 'size', dir: -1 };
-  renderDatabases();
+  viewCache.set(key, { dbData, dbHealth });
+  renderDatabases(false);
 }
 
 function healthStripHtml() {
@@ -1925,7 +1950,7 @@ function sortDatabases(key) {
   renderDatabases();
 }
 
-function renderDatabases() {
+function renderDatabases(fromCache) {
   const arrow = k => dbSort.key === k ? `<span class="arrow">${dbSort.dir === 1 ? '▲' : '▼'}</span>` : '';
   const sorted = [...dbData].sort((a, b) => {
     const cmp = dbSort.key === 'size'
@@ -1946,7 +1971,7 @@ function renderDatabases() {
     </tr>`;
   }
   setContent(healthStripHtml() + `<div class="card"><h2>${ICONS.db} Databases</h2>
-    <p class="card-meta">${dbData.length} databases · ${fmtSize(totalBytes)} total · click a name to browse it</p>
+    <p class="card-meta">${dbData.length} databases · ${fmtSize(totalBytes)} total · click a name to browse it${fromCache ? ' · <span style="color:var(--text-muted)">refreshing…</span>' : ''}</p>
     <div class="table-wrap"><table>
       <thead><tr>
         <th class="sortable" onclick="sortDatabases('name')">Name${arrow('name')}</th>
