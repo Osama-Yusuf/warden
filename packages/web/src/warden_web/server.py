@@ -16,6 +16,8 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
 
+import csv
+import io
 import json
 import os
 
@@ -33,6 +35,7 @@ from warden_core import (
     my_query,
     sq_csv,
     sq_exec,
+    sq_json,
     sq_query,
     delete_profile,
     load_profile_environments,
@@ -51,6 +54,11 @@ from warden_core import (
     run_cmd,
     validate_ident,
 )
+from warden_core import mongo_native as mn
+from warden_core import pg_native as pn
+
+USE_NATIVE_MONGO = mn.available()
+USE_NATIVE_PG = pn.available()
 
 DEFAULT_HOST = os.environ.get("WARDEN_WEB_HOST", "127.0.0.1")
 DEFAULT_PORT = int(os.environ.get("WARDEN_WEB_PORT", "8642"))
@@ -218,6 +226,14 @@ def api_connect(body):
 
     fam = engine_family(engine)
     if fam == "documentdb":
+        if USE_NATIVE_MONGO:
+            whoami, err = mn.ping(cfg, user, pwd)
+            if err:
+                return {"ok": False, "error": err}
+            # Reads/writes go native now; the query console still uses mongosh,
+            # so warm its session in the background for a fast first query.
+            prewarm_docdb(cfg, user, pwd)
+            return {"ok": True, "host": cfg["host"], "user": whoami}
         data, err = docdb_eval(cfg, user, pwd, "db.runCommand({connectionStatus:1})")
         if err:
             return {"ok": False, "error": err}
@@ -263,6 +279,13 @@ def api_test_login(body):
     checks = []
 
     if fam == "documentdb":
+        if USE_NATIVE_MONGO:
+            r = mn.login_probe(cfg, tu, tp, test_db)
+            if not r.get("auth"):
+                return {"ok": True, "auth": False,
+                        "error": _clean_mongosh_noise(r.get("error") or "") or "Authentication failed"}
+            return {"ok": True, "auth": True, "identity": r.get("identity", tu),
+                    "roles": r.get("roles", []), "checks": r.get("checks", [])}
         data, err = docdb_eval(cfg, tu, tp, "db.runCommand({connectionStatus:1})")
         if err or not data:
             return {"ok": True, "auth": False, "error": _clean_mongosh_noise(err or "") or "Authentication failed"}
@@ -296,6 +319,13 @@ def api_test_login(body):
         return {"ok": True, "auth": True, "identity": out.strip(), "grants": grants, "checks": checks}
 
     # postgresql family
+    if USE_NATIVE_PG:
+        # Non-pooled probe: fails fast on a bad password (a pool would retry for
+        # its whole timeout) and never caches a pool for one-off test creds.
+        r = pn.login_probe(cfg, tu, tp, test_db)
+        if not r.get("auth"):
+            return {"ok": True, "auth": False, "error": (r.get("error") or "").strip() or "Authentication failed"}
+        return {"ok": True, "auth": True, "identity": r.get("identity", tu), "checks": r.get("checks", [])}
     code, out, err = pg_query(cfg, tu, tp, "SELECT current_user")
     if code != 0:
         return {"ok": True, "auth": False, "error": (err or "").strip() or "Authentication failed"}
@@ -341,7 +371,8 @@ def api_list_users(body):
         return {"users": [], "note": "SQLite has no user accounts"}
 
     if fam == "documentdb":
-        data, err = docdb_eval(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users")
+        data, err = (mn.users_info(cfg, user, pwd) if USE_NATIVE_MONGO
+                     else docdb_eval(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users"))
         if err:
             return {"error": err}
         users = []
@@ -412,12 +443,17 @@ def api_user_info(body):
         return {"error": "SQLite has no user accounts"}
 
     if fam == "documentdb":
-        data, err = docdb_eval(cfg, user, pwd, f'db.adminCommand({{usersInfo: {js_string(target)}}}).users')
-        if err:
-            return {"error": err}
-        if not data:
-            return {"error": f"User not found"}
-        u = data[0]
+        if USE_NATIVE_MONGO:
+            u, err = mn.user_info(cfg, user, pwd, target)
+            if err:
+                return {"error": err}
+        else:
+            data, err = docdb_eval(cfg, user, pwd, f'db.adminCommand({{usersInfo: {js_string(target)}}}).users')
+            if err:
+                return {"error": err}
+            if not data:
+                return {"error": "User not found"}
+            u = data[0]
         return {
             "user": u.get("user"),
             "db": u.get("db", "?"),
@@ -508,9 +544,12 @@ def api_create_user(body):
     if fam == "documentdb":
         roles = body.get("roles", [])
         validate_docdb_roles(roles)
-        role_docs = json.dumps(roles)
-        js = f'db.createUser({{user: {js_string(target)}, pwd: {js_string(password)}, roles: {role_docs}}})'
-        ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
+        if USE_NATIVE_MONGO:
+            ok, err = mn.create_user(cfg, adm_user, adm_pass, target, password, roles)
+        else:
+            role_docs = json.dumps(roles)
+            js = f'db.createUser({{user: {js_string(target)}, pwd: {js_string(password)}, roles: {role_docs}}})'
+            ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
         if ok:
             audit(env, "documentdb", "CREATE USER", f"{target} roles={roles}")
             return {"ok": True, "password": password}
@@ -550,8 +589,11 @@ def api_reset_password(body):
             return {"ok": True, "password": password}
         return {"error": err or out}
     if fam == "documentdb":
-        js = f'db.updateUser({js_string(target)}, {{pwd: {js_string(password)}}})'
-        ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
+        if USE_NATIVE_MONGO:
+            ok, err = mn.update_password(cfg, adm_user, adm_pass, target, password)
+        else:
+            js = f'db.updateUser({js_string(target)}, {{pwd: {js_string(password)}}})'
+            ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
         if ok:
             audit(env, "documentdb", "RESET PASSWORD", target)
             return {"ok": True, "password": password}
@@ -592,9 +634,12 @@ def api_grant(body):
     if fam == "documentdb":
         roles = body.get("roles", [])
         validate_docdb_roles(roles)
-        role_docs = json.dumps(roles)
-        js = f'db.grantRolesToUser({js_string(target)}, {role_docs})'
-        ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
+        if USE_NATIVE_MONGO:
+            ok, err = mn.grant_roles(cfg, adm_user, adm_pass, target, roles)
+        else:
+            role_docs = json.dumps(roles)
+            js = f'db.grantRolesToUser({js_string(target)}, {role_docs})'
+            ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
         if ok:
             audit(env, "documentdb", "GRANT", f"{target} += {roles}")
             return {"ok": True}
@@ -643,9 +688,12 @@ def api_revoke(body):
     if fam == "documentdb":
         roles = body.get("roles", [])
         validate_docdb_roles(roles)
-        role_docs = json.dumps(roles)
-        js = f'db.revokeRolesFromUser({js_string(target)}, {role_docs})'
-        ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
+        if USE_NATIVE_MONGO:
+            ok, err = mn.revoke_roles(cfg, adm_user, adm_pass, target, roles)
+        else:
+            role_docs = json.dumps(roles)
+            js = f'db.revokeRolesFromUser({js_string(target)}, {role_docs})'
+            ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
         if ok:
             audit(env, "documentdb", "REVOKE", f"{target} -= {roles}")
             return {"ok": True}
@@ -689,7 +737,10 @@ def api_drop_user(body):
             return {"ok": True}
         return {"error": err or out}
     if fam == "documentdb":
-        ok, out, err = docdb_exec(cfg, adm_user, adm_pass, f'db.dropUser({js_string(target)})')
+        if USE_NATIVE_MONGO:
+            ok, err = mn.drop_user(cfg, adm_user, adm_pass, target)
+        else:
+            ok, out, err = docdb_exec(cfg, adm_user, adm_pass, f'db.dropUser({js_string(target)})')
         if ok:
             audit(env, "documentdb", "DROP USER", target)
             return {"ok": True}
@@ -769,7 +820,8 @@ def api_list_databases(body):
                                "size_mb": round(size / 1048576, 1)}]}
 
     if fam == "documentdb":
-        data, err = docdb_eval(cfg, adm_user, adm_pass, "db.adminCommand({listDatabases:1}).databases")
+        data, err = (mn.list_databases(cfg, adm_user, adm_pass) if USE_NATIVE_MONGO
+                     else docdb_eval(cfg, adm_user, adm_pass, "db.adminCommand({listDatabases:1}).databases"))
         if err:
             return {"error": err}
         dbs = []
@@ -848,7 +900,8 @@ def api_list_collections(body):
         return {"tables": tables}
 
     if fam == "documentdb":
-        data, err = docdb_eval(cfg, adm_user, adm_pass, "db.getCollectionNames()", db=database)
+        data, err = (mn.collection_names(cfg, adm_user, adm_pass, database) if USE_NATIVE_MONGO
+                     else docdb_eval(cfg, adm_user, adm_pass, "db.getCollectionNames()", db=database))
         if err:
             return {"error": err}
         return {"collections": sorted(data or [])}
@@ -875,6 +928,101 @@ def api_list_collections(body):
             elif len(parts) >= 2:
                 tables.append({"schema": parts[0], "table": parts[1]})
         return {"tables": tables}
+
+
+BROWSE_MAX_LIMIT = 200
+
+
+def api_browse_data(body):
+    """A page of rows from one collection/table for the data browser. Uniform
+    shape across engines: {engine, columns, rows, total, offset, limit}."""
+    cfg, err = get_config(body)
+    if err:
+        return {"error": err}
+    require_creds(body)
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
+    engine = body.get("engine", "documentdb")
+    fam = engine_family(engine)
+    try:
+        limit = max(1, min(BROWSE_MAX_LIMIT, int(body.get("limit", 50))))
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        offset = max(0, int(body.get("offset", 0)))
+    except (TypeError, ValueError):
+        offset = 0
+
+    def shape(engine_name, res):
+        return {"engine": engine_name, "columns": res.get("columns", []),
+                "rows": res.get("rows", []), "total": res.get("total"),
+                "offset": offset, "limit": limit}
+
+    if fam == "documentdb":
+        database = validate_ident(body.get("database", ""), "database")
+        collection = str(body.get("collection", "")).strip()
+        if not collection or len(collection) > 128 or "\x00" in collection:
+            return {"error": "Invalid collection name"}
+        if not USE_NATIVE_MONGO:
+            return {"error": "Data browser needs the native MongoDB driver (pymongo)"}
+        res, err = mn.find_page(cfg, adm_user, adm_pass, database, collection, limit, offset)
+        if err:
+            return {"error": err}
+        return shape("documentdb", res)
+
+    if fam == "postgresql":
+        database = validate_ident(body.get("database", ""), "database")
+        schema = validate_ident(body.get("schema", "public"), "schema")
+        table = validate_ident(body.get("table", ""), "table")
+        if not USE_NATIVE_PG:
+            return {"error": "Data browser needs the native PostgreSQL driver (psycopg)"}
+        res, err = pn.select_page(cfg, adm_user, adm_pass, database, schema, table, limit, offset)
+        if err:
+            return {"error": err}
+        return shape("postgresql", res)
+
+    if fam == "mysql":
+        database = validate_ident(body.get("database", ""), "database")
+        table = validate_ident(body.get("table", ""), "table")
+        rel = f"`{database}`.`{table}`"
+        code, out, err = my_csv(cfg, adm_user, adm_pass,
+                                f"SELECT * FROM {rel} LIMIT {limit} OFFSET {offset}", db=database)
+        if code != 0:
+            return {"error": err or "Query failed"}
+        reader = list(csv.reader(io.StringIO(out)))
+        columns = reader[0] if reader else []
+        rows = [r for r in reader[1:]] if len(reader) > 1 else []
+        total = None
+        code2, out2, _ = my_query(cfg, adm_user, adm_pass, f"SELECT COUNT(*) FROM {rel}", db=database)
+        if code2 == 0 and out2.strip().isdigit():
+            total = int(out2.strip())
+        return shape("mysql", {"columns": columns, "rows": rows, "total": total})
+
+    if fam == "sqlite":
+        table = validate_ident(body.get("table", ""), "table")
+        db_path = Path(cfg["path"])
+        rel = '"' + table.replace('"', '""') + '"'
+        code, out, err = sq_json(db_path, f"SELECT * FROM {rel} LIMIT {limit} OFFSET {offset}")
+        if code != 0:
+            return {"error": err or "Query failed"}
+        try:
+            records = json.loads(out) if out.strip() else []
+        except (json.JSONDecodeError, ValueError):
+            records = []
+        columns, seen = [], set()
+        for rec in records:
+            for k in rec.keys():
+                if k not in seen:
+                    seen.add(k)
+                    columns.append(k)
+        rows = [[rec.get(k) for k in columns] for rec in records]
+        total = None
+        code2, out2, _ = sq_query(db_path, f"SELECT COUNT(*) FROM {rel}")
+        if code2 == 0 and out2.strip().isdigit():
+            total = int(out2.strip())
+        return shape("sqlite", {"columns": columns, "rows": rows, "total": total})
+
+    return {"error": f"Unsupported engine: {engine}"}
 
 
 MAX_QUERY_LEN = 20000
@@ -1131,43 +1279,6 @@ class MongoSession:
             msg = "\n".join(l for l in lines if l.strip() and "__WARDEN_" not in l).strip()
             return {"ok": False, "error": msg or "Query failed with no output"}
 
-    def run_json(self, query, db, timeout=45):
-        """Run a single-expression read, returning parsed JSON. Uses plain
-        JSON.stringify so the output matches the one-shot docdb_eval path
-        exactly (drop-in replacement, same downstream parsing)."""
-        import uuid
-        with self.lock:
-            self.last_used = time.time()
-            if not self.alive():
-                raise SessionError("session dead")
-            tag = uuid.uuid4().hex[:10]
-            ok_m = f"__WARDEN_JOK_{tag}__"
-            err_m = f"__WARDEN_JERR_{tag}__"
-            ok_expr = f'"__WARDEN_" + "JOK_{tag}" + "__"'
-            err_expr = f'"__WARDEN_" + "JERR_{tag}" + "__"'
-            one_line = " ".join(query.splitlines()).strip()
-            payload = (
-                f'db = db.getSiblingDB({js_string(db)}); '
-                f'try {{ print({ok_expr} + JSON.stringify(( {one_line} ))) }} '
-                f'catch (e) {{ print({err_expr} + (e && e.message || String(e))) }}'
-            )
-            lines = self._roundtrip(payload, timeout)
-            if lines is None:
-                self.close()
-                raise SessionTimeout(f"Query timed out after {timeout}s")
-            for idx, line in enumerate(lines):
-                if ok_m in line:
-                    raw = self._trim_to_json("\n".join([line.split(ok_m, 1)[1]] + lines[idx + 1:]))
-                    try:
-                        return {"ok": True, "data": json.loads(raw.strip())}
-                    except (json.JSONDecodeError, ValueError):
-                        return {"ok": False, "error": "Could not parse result"}
-                if err_m in line:
-                    msg = "\n".join([line.split(err_m, 1)[1]] + lines[idx + 1:])
-                    return {"ok": False, "error": msg.strip()}
-            msg = "\n".join(l for l in lines if l.strip() and "__WARDEN_" not in l).strip()
-            return {"ok": False, "error": msg or "Query failed with no output"}
-
     @staticmethod
     def _trim_to_json(raw):
         """Drop trailing REPL noise lines (e.g. a stray prompt) after the JSON."""
@@ -1220,21 +1331,9 @@ def get_mongo_session(cfg, admin_user, admin_pass):
         return sess
 
 
-def docdb_read(cfg, user, pwd, js, db="admin", timeout=30):
-    """Fast DocumentDB read through the warm session pool, with a transparent
-    one-shot fallback. Returns (data, error) exactly like docdb_eval."""
-    try:
-        sess = get_mongo_session(cfg, user, pwd)
-        r = sess.run_json(js, db, timeout=timeout)
-        if r["ok"]:
-            return r["data"], None
-        return None, _clean_mongosh_noise(r.get("error") or "") or "Query failed"
-    except (SessionError, SessionTimeout):
-        return docdb_eval(cfg, user, pwd, js, db=db, timeout=timeout)
-
-
 def prewarm_docdb(cfg, user, pwd):
-    """Open the warm session in the background so the first read is instant."""
+    """Open the warm session in the background so the first query-console run is
+    instant. Reads/writes use pymongo; only the console still needs mongosh."""
     def _go():
         try:
             get_mongo_session(cfg, user, pwd)
@@ -1437,6 +1536,8 @@ def _plural(n, word, plural_form=None):
 
 
 def _docdb_users(cfg, user, pwd):
+    if USE_NATIVE_MONGO:
+        return mn.users_info(cfg, user, pwd)
     data, err = docdb_eval(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users")
     if err:
         return None, err
@@ -1708,23 +1809,26 @@ def api_health(body):
             health[key] = out.strip() if code == 0 else None
         return {"engine": "sqlite", "health": health}
     if fam == "documentdb":
-        # DocumentDB returns these counters as BSON Longs. Coerce to plain
-        # numbers or JSON.stringify turns them into {low, high, unsigned} blobs.
-        js = ("(() => { const n = v => (v && typeof v.toNumber === 'function') ? v.toNumber()"
-              "   : (typeof v === 'number' ? v : Number(v));"
-              " const s = db.serverStatus();"
-              " const c = s.connections || {};"
-              " const out = {version: String(s.version || ''), uptime: n(s.uptime),"
-              "   connections: {current: n(c.current), available: n(c.available)},"
-              "   mem: s.mem ? {resident: n(s.mem.resident)} : null};"
-              " try { const cur = db.adminCommand({currentOp: 1, active: true});"
-              "   const prog = cur.inprog || [];"
-              "   out.active_ops = prog.length;"
-              "   out.slow_ops = prog.filter(o => n(o.secs_running) >= 5).slice(0, 10)"
-              "     .map(o => ({opid: String(o.opid), secs: n(o.secs_running), ns: String(o.ns || ''), op: String(o.op || '')}));"
-              " } catch (e) { out.active_ops = null; out.slow_ops = []; }"
-              " return out })()")
-        data, err = docdb_eval(cfg, adm_user, adm_pass, js, timeout=45)
+        if USE_NATIVE_MONGO:
+            data, err = mn.server_health(cfg, adm_user, adm_pass)
+        else:
+            # DocumentDB returns these counters as BSON Longs. Coerce to plain
+            # numbers or JSON.stringify turns them into {low, high, unsigned} blobs.
+            js = ("(() => { const n = v => (v && typeof v.toNumber === 'function') ? v.toNumber()"
+                  "   : (typeof v === 'number' ? v : Number(v));"
+                  " const s = db.serverStatus();"
+                  " const c = s.connections || {};"
+                  " const out = {version: String(s.version || ''), uptime: n(s.uptime),"
+                  "   connections: {current: n(c.current), available: n(c.available)},"
+                  "   mem: s.mem ? {resident: n(s.mem.resident)} : null};"
+                  " try { const cur = db.adminCommand({currentOp: 1, active: true});"
+                  "   const prog = cur.inprog || [];"
+                  "   out.active_ops = prog.length;"
+                  "   out.slow_ops = prog.filter(o => n(o.secs_running) >= 5).slice(0, 10)"
+                  "     .map(o => ({opid: String(o.opid), secs: n(o.secs_running), ns: String(o.ns || ''), op: String(o.op || '')}));"
+                  " } catch (e) { out.active_ops = null; out.slow_ops = []; }"
+                  " return out })()")
+            data, err = docdb_eval(cfg, adm_user, adm_pass, js, timeout=45)
         if err:
             return {"error": err}
         return {"engine": "documentdb", "health": data}
@@ -1878,7 +1982,7 @@ REQUIRES_CREDS = {
     "/api/connect", "/api/list-users", "/api/user-info",
     "/api/create-user", "/api/reset-password", "/api/grant",
     "/api/revoke", "/api/drop-user", "/api/toggle-login",
-    "/api/list-databases", "/api/list-collections",
+    "/api/list-databases", "/api/list-collections", "/api/browse-data",
     "/api/query", "/api/query-stream",
     "/api/audit-run", "/api/health",
 }
@@ -1897,6 +2001,7 @@ ROUTES = {
     "/api/toggle-login": api_toggle_login,
     "/api/list-databases": api_list_databases,
     "/api/list-collections": api_list_collections,
+    "/api/browse-data": api_browse_data,
     "/api/query": api_query,
     "/api/audit-run": api_audit_run,
     "/api/health": api_health,
