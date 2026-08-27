@@ -900,11 +900,15 @@ def api_list_collections(body):
         return {"tables": tables}
 
     if fam == "documentdb":
-        data, err = (mn.collection_names(cfg, adm_user, adm_pass, database) if USE_NATIVE_MONGO
-                     else docdb_eval(cfg, adm_user, adm_pass, "db.getCollectionNames()", db=database))
+        if USE_NATIVE_MONGO:
+            data, err = mn.list_collections(cfg, adm_user, adm_pass, database)
+            if err:
+                return {"error": err}
+            return {"collections": data}
+        data, err = docdb_eval(cfg, adm_user, adm_pass, "db.getCollectionNames()", db=database)
         if err:
             return {"error": err}
-        return {"collections": sorted(data or [])}
+        return {"collections": [{"name": n, "size_bytes": None} for n in sorted(data or [])]}
     else:
         sql = """
             SELECT n.nspname, c.relname, pg_total_relation_size(c.oid)::bigint

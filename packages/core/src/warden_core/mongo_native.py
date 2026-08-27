@@ -154,6 +154,32 @@ def collection_names(cfg, user, pwd, database):
     return _run(go)
 
 
+def list_collections(cfg, user, pwd, database):
+    """Collection names plus on-disk size (data + indexes), like the SQL table
+    list. collStats is metadata-cheap per collection; sizes are skipped when a
+    database has an unusually large number of collections to keep the list snappy."""
+    def go():
+        c = get_client(cfg, user, pwd)
+        db = c[database]
+        names = sorted(db.list_collection_names())
+        with_size = len(names) <= 250
+        out = []
+        for name in names:
+            size = None
+            if with_size:
+                try:
+                    st = db.command("collStats", name)
+                    size = st.get("totalSize")
+                    if size is None:
+                        size = int(st.get("storageSize", 0) or 0) + int(st.get("totalIndexSize", 0) or 0)
+                    size = int(size)
+                except PyMongoError:
+                    size = None
+            out.append({"name": name, "size_bytes": size})
+        return out
+    return _run(go)
+
+
 def id_repr(value):
     """A JSON-encodable, type-preserving handle for an _id so the browser can
     send it back and we target the exact document (ObjectId vs string vs int)."""

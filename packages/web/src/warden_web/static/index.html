@@ -2360,6 +2360,8 @@ function viewCollections(prefillDb = '') {
   }
 }
 
+let collList = null;  // {database, engine, items, sort}
+
 async function doListCollections() {
   const database = document.getElementById('collDb').value;
   if (!database) { toast('Database required', 'error'); return; }
@@ -2368,36 +2370,75 @@ async function doListCollections() {
   const target = document.getElementById('collResults');
   if (!target) return;
   if (res.error) { target.innerHTML = `<p style="color:var(--danger); margin-top:12px">${esc(res.error)}</p>`; return; }
+  let items = [], engine;
+  if (res.collections) {
+    engine = 'mongo';
+    items = res.collections.map(o => typeof o === 'string'
+      ? { name: o, size_bytes: null } : { name: o.name, size_bytes: o.size_bytes });
+  } else {
+    engine = 'sql';
+    items = (res.tables || []).map(t => ({ schema: t.schema, name: t.table, size_bytes: t.size_bytes }));
+  }
+  collList = { database, engine, items, sort: { key: 'size', dir: -1 } };
+  renderCollList();
+}
+
+function sortCollList(key) {
+  if (!collList) return;
+  if (collList.sort.key === key) collList.sort.dir = -collList.sort.dir;
+  else collList.sort = { key, dir: key === 'size' ? -1 : 1 };
+  renderCollList();
+}
+
+function renderCollList() {
+  const target = document.getElementById('collResults');
+  if (!target || !collList) return;
+  const { database, engine, items, sort } = collList;
   const act = (icon, cls, db, text, title) => `<button class="ibtn ${cls}" data-tip="${esc(title)}"
     data-db="${esc(db)}" data-q="${esc(text)}" onclick="openQueryWith(this.dataset.db, this.dataset.q)">${icon}</button>`;
   const view = (db, extra) => `<button class="ibtn accent" data-tip="Browse rows &amp; columns"
     data-db="${esc(db)}" ${extra} onclick="openDataGrid(dgSpecFrom(this.dataset))">${ICONS.grid}</button>`;
-  if (res.collections) {
-    const collRef = c => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(c) ? `db.${c}` : `db.getCollection(${JSON.stringify(c)})`;
-    const rows = res.collections.map(c => `<tr>
-      <td class="mono">${esc(c)}</td>
-      <td><div class="row-acts">
-        ${view(database, `data-coll="${esc(c)}"`)}
-        ${act(ICONS.term, 'teal', database, `${collRef(c)}.find({}).limit(5)`, 'Open in query console')}
-      </div></td></tr>`).join('');
-    target.innerHTML = rows
-      ? `<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Collection (${res.collections.length})</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
-      : `<div class="empty-state" style="margin-top:12px">No collections in this database</div>`;
-  } else if (res.tables) {
-    const rows = res.tables.map(t => {
-      const full = `"${t.schema}"."${t.table}"`;
-      return `<tr>
-      <td class="mono">${esc(t.schema)}</td><td class="mono">${esc(t.table)}</td>
-      <td style="white-space:nowrap">${t.size_bytes != null ? fmtSize(t.size_bytes) : '—'}</td>
-      <td><div class="row-acts">
-        ${view(database, `data-schema="${esc(t.schema)}" data-table="${esc(t.table)}"`)}
-        ${act(ICONS.term, 'teal', database, `SELECT * FROM ${full} LIMIT 5;`, 'Open in query console')}
-      </div></td></tr>`;
-    }).join('');
-    target.innerHTML = rows
-      ? `<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Schema</th><th>Table</th><th>Size</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
-      : `<div class="empty-state" style="margin-top:12px">No tables in this database</div>`;
+  const arrow = k => sort.key === k ? `<span class="arrow">${sort.dir === 1 ? '▲' : '▼'}</span>` : '';
+  const sizeCell = s => s != null ? fmtSize(s) : '<span style="color:var(--text-muted)">—</span>';
+  const sorted = [...items].sort((a, b) => {
+    let av, bv;
+    if (sort.key === 'size') { av = a.size_bytes ?? -1; bv = b.size_bytes ?? -1; }
+    else { av = (a.name || '').toLowerCase(); bv = (b.name || '').toLowerCase(); }
+    return av < bv ? -sort.dir : av > bv ? sort.dir : 0;
+  });
+  if (!sorted.length) {
+    target.innerHTML = `<div class="empty-state" style="margin-top:12px">No ${engine === 'mongo' ? 'collections' : 'tables'} in this database</div>`;
+    return;
   }
+  let head, rows;
+  if (engine === 'mongo') {
+    const collRef = c => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(c) ? `db.${c}` : `db.getCollection(${JSON.stringify(c)})`;
+    head = `<tr>
+      <th class="sortable" onclick="sortCollList('name')">Collection (${items.length})${arrow('name')}</th>
+      <th class="sortable" onclick="sortCollList('size')">Size${arrow('size')}</th><th></th></tr>`;
+    rows = sorted.map(o => `<tr>
+      <td class="mono">${esc(o.name)}</td>
+      <td style="white-space:nowrap">${sizeCell(o.size_bytes)}</td>
+      <td><div class="row-acts">
+        ${view(database, `data-coll="${esc(o.name)}"`)}
+        ${act(ICONS.term, 'teal', database, `${collRef(o.name)}.find({}).limit(5)`, 'Open in query console')}
+      </div></td></tr>`).join('');
+  } else {
+    head = `<tr><th>Schema</th>
+      <th class="sortable" onclick="sortCollList('name')">Table${arrow('name')}</th>
+      <th class="sortable" onclick="sortCollList('size')">Size${arrow('size')}</th><th></th></tr>`;
+    rows = sorted.map(t => {
+      const full = `"${t.schema}"."${t.name}"`;
+      return `<tr>
+        <td class="mono">${esc(t.schema)}</td><td class="mono">${esc(t.name)}</td>
+        <td style="white-space:nowrap">${sizeCell(t.size_bytes)}</td>
+        <td><div class="row-acts">
+          ${view(database, `data-schema="${esc(t.schema)}" data-table="${esc(t.name)}"`)}
+          ${act(ICONS.term, 'teal', database, `SELECT * FROM ${full} LIMIT 5;`, 'Open in query console')}
+        </div></td></tr>`;
+    }).join('');
+  }
+  target.innerHTML = `<div class="table-wrap" style="margin-top:12px"><table><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
 }
 
 // ── Data browser (rows & columns grid) ──
@@ -3183,7 +3224,7 @@ async function fetchColls(db) {
   collFetching[db] = true;
   try {
     const res = await apiPost('/api/list-collections', { database: db });
-    if (res.collections) collCache[db] = res.collections;
+    if (res.collections) collCache[db] = res.collections.map(c => typeof c === 'string' ? c : c.name);
     else if (res.tables) collCache[db] = res.tables.map(t => t.table);
     else collCache[db] = null;
   } catch { collCache[db] = null; }
