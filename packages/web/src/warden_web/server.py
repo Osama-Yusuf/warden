@@ -931,11 +931,22 @@ def api_list_collections(body):
 
 
 BROWSE_MAX_LIMIT = 200
+BROWSE_SEARCH_MAX = 200
+
+
+def _sql_like_pattern(term):
+    """A single-quote-safe, wildcard-escaped LIKE pattern literal for the
+    subprocess engines (mysql/sqlite), used with ESCAPE '\\'. Read-only search
+    only — the value is escaped, never trusted as SQL."""
+    body = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return "'%" + body.replace("'", "''") + "%'"
 
 
 def api_browse_data(body):
     """A page of rows from one collection/table for the data browser. Uniform
-    shape across engines: {engine, columns, rows, total, offset, limit}."""
+    shape across engines: {engine, columns, rows, ids?, total, estimated,
+    filtered, offset, limit}. Optional `search` filters server-side (bounded by
+    the page limit); it never runs a filtered count."""
     cfg, err = get_config(body)
     if err:
         return {"error": err}
@@ -952,11 +963,17 @@ def api_browse_data(body):
         offset = max(0, int(body.get("offset", 0)))
     except (TypeError, ValueError):
         offset = 0
+    search = str(body.get("search", "") or "").strip()[:BROWSE_SEARCH_MAX]
 
     def shape(engine_name, res):
-        return {"engine": engine_name, "columns": res.get("columns", []),
-                "rows": res.get("rows", []), "total": res.get("total"),
-                "offset": offset, "limit": limit}
+        out = {"engine": engine_name, "columns": res.get("columns", []),
+               "rows": res.get("rows", []), "total": res.get("total"),
+               "estimated": res.get("estimated", False),
+               "filtered": res.get("filtered", bool(search)),
+               "offset": offset, "limit": limit}
+        if "ids" in res:
+            out["ids"] = res["ids"]
+        return out
 
     if fam == "documentdb":
         database = validate_ident(body.get("database", ""), "database")
@@ -965,7 +982,8 @@ def api_browse_data(body):
             return {"error": "Invalid collection name"}
         if not USE_NATIVE_MONGO:
             return {"error": "Data browser needs the native MongoDB driver (pymongo)"}
-        res, err = mn.find_page(cfg, adm_user, adm_pass, database, collection, limit, offset)
+        res, err = mn.find_page(cfg, adm_user, adm_pass, database, collection,
+                                limit, offset, search=search)
         if err:
             return {"error": err}
         return shape("documentdb", res)
@@ -976,7 +994,8 @@ def api_browse_data(body):
         table = validate_ident(body.get("table", ""), "table")
         if not USE_NATIVE_PG:
             return {"error": "Data browser needs the native PostgreSQL driver (psycopg)"}
-        res, err = pn.select_page(cfg, adm_user, adm_pass, database, schema, table, limit, offset)
+        res, err = pn.select_page(cfg, adm_user, adm_pass, database, schema, table,
+                                  limit, offset, search=search)
         if err:
             return {"error": err}
         return shape("postgresql", res)
@@ -985,24 +1004,44 @@ def api_browse_data(body):
         database = validate_ident(body.get("database", ""), "database")
         table = validate_ident(body.get("table", ""), "table")
         rel = f"`{database}`.`{table}`"
+        where = ""
+        if search:
+            code0, out0, _ = my_query(cfg, adm_user, adm_pass,
+                f"SELECT column_name FROM information_schema.columns "
+                f"WHERE table_schema = '{database}' AND table_name = '{table}'", db=database)
+            colnames = [l.strip() for l in out0.strip().split("\n") if l.strip()] if code0 == 0 else []
+            pat = _sql_like_pattern(search)
+            if colnames:
+                ors = " OR ".join(f"CAST(`{c}` AS CHAR) LIKE {pat} ESCAPE '\\\\'" for c in colnames)
+                where = f" WHERE ({ors})"
         code, out, err = my_csv(cfg, adm_user, adm_pass,
-                                f"SELECT * FROM {rel} LIMIT {limit} OFFSET {offset}", db=database)
+                                f"SELECT * FROM {rel}{where} LIMIT {limit} OFFSET {offset}", db=database)
         if code != 0:
             return {"error": err or "Query failed"}
         reader = list(csv.reader(io.StringIO(out)))
         columns = reader[0] if reader else []
         rows = [r for r in reader[1:]] if len(reader) > 1 else []
         total = None
-        code2, out2, _ = my_query(cfg, adm_user, adm_pass, f"SELECT COUNT(*) FROM {rel}", db=database)
-        if code2 == 0 and out2.strip().isdigit():
-            total = int(out2.strip())
+        if not search:
+            code2, out2, _ = my_query(cfg, adm_user, adm_pass, f"SELECT COUNT(*) FROM {rel}", db=database)
+            if code2 == 0 and out2.strip().isdigit():
+                total = int(out2.strip())
         return shape("mysql", {"columns": columns, "rows": rows, "total": total})
 
     if fam == "sqlite":
         table = validate_ident(body.get("table", ""), "table")
         db_path = Path(cfg["path"])
         rel = '"' + table.replace('"', '""') + '"'
-        code, out, err = sq_json(db_path, f"SELECT * FROM {rel} LIMIT {limit} OFFSET {offset}")
+        where = ""
+        if search:
+            tlit = "'" + table.replace("'", "''") + "'"
+            code0, out0, _ = sq_query(db_path, f"SELECT name FROM pragma_table_info({tlit})")
+            colnames = [l.strip() for l in out0.strip().split("\n") if l.strip()] if code0 == 0 else []
+            pat = _sql_like_pattern(search)
+            if colnames:
+                ors = " OR ".join(f'CAST("{c}" AS TEXT) LIKE {pat} ESCAPE \'\\\'' for c in colnames)
+                where = f" WHERE ({ors})"
+        code, out, err = sq_json(db_path, f"SELECT * FROM {rel}{where} LIMIT {limit} OFFSET {offset}")
         if code != 0:
             return {"error": err or "Query failed"}
         try:
@@ -1017,12 +1056,277 @@ def api_browse_data(body):
                     columns.append(k)
         rows = [[rec.get(k) for k in columns] for rec in records]
         total = None
-        code2, out2, _ = sq_query(db_path, f"SELECT COUNT(*) FROM {rel}")
-        if code2 == 0 and out2.strip().isdigit():
-            total = int(out2.strip())
+        if not search:
+            code2, out2, _ = sq_query(db_path, f"SELECT COUNT(*) FROM {rel}")
+            if code2 == 0 and out2.strip().isdigit():
+                total = int(out2.strip())
         return shape("sqlite", {"columns": columns, "rows": rows, "total": total})
 
     return {"error": f"Unsupported engine: {engine}"}
+
+
+def api_table_meta(body):
+    """Metadata a safe editor needs — primary key + columns, plus whether the
+    object is editable. Only PostgreSQL and MongoDB are editable for now."""
+    cfg, err = get_config(body)
+    if err:
+        return {"error": err}
+    require_creds(body)
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
+    engine = body.get("engine", "documentdb")
+    fam = engine_family(engine)
+
+    if fam == "documentdb":
+        if not USE_NATIVE_MONGO:
+            return {"editable": False, "reason": "native MongoDB driver unavailable"}
+        database = validate_ident(body.get("database", ""), "database")
+        collection = str(body.get("collection", "")).strip()
+        meta, err = mn.collection_meta(cfg, adm_user, adm_pass, database, collection)
+        if err:
+            return {"error": err}
+        return {"engine": "documentdb", **meta}
+
+    if fam == "postgresql":
+        if not USE_NATIVE_PG:
+            return {"editable": False, "reason": "native PostgreSQL driver unavailable"}
+        database = validate_ident(body.get("database", ""), "database")
+        schema = validate_ident(body.get("schema", "public"), "schema")
+        table = validate_ident(body.get("table", ""), "table")
+        meta, err = pn.table_meta(cfg, adm_user, adm_pass, database, schema, table)
+        if err:
+            return {"error": err}
+        reason = None if meta.get("editable") else "table has no primary key"
+        return {"engine": "postgresql", "reason": reason, **meta}
+
+    label = "MySQL" if fam == "mysql" else "SQLite"
+    return {"engine": fam, "editable": False,
+            "reason": f"row editing isn't supported for {label} yet (view & search only)"}
+
+
+def api_object_stats(body):
+    """Header stats for the data browser (rows, size, columns, indexes), shaped
+    per engine. Best-effort — returns whatever is cheap to compute."""
+    cfg, err = get_config(body)
+    if err:
+        return {"error": err}
+    require_creds(body)
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
+    engine = body.get("engine", "documentdb")
+    fam = engine_family(engine)
+
+    if fam == "documentdb":
+        if not USE_NATIVE_MONGO:
+            return {"stats": {}}
+        database = validate_ident(body.get("database", ""), "database")
+        collection = str(body.get("collection", "")).strip()
+        st, err = mn.collection_stats(cfg, adm_user, adm_pass, database, collection)
+        if err:
+            return {"error": err}
+        return {"engine": "documentdb", "stats": st}
+
+    if fam == "postgresql":
+        if not USE_NATIVE_PG:
+            return {"stats": {}}
+        database = validate_ident(body.get("database", ""), "database")
+        schema = validate_ident(body.get("schema", "public"), "schema")
+        table = validate_ident(body.get("table", ""), "table")
+        st, err = pn.object_stats(cfg, adm_user, adm_pass, database, schema, table)
+        if err:
+            return {"error": err}
+        return {"engine": "postgresql", "stats": st}
+
+    if fam == "mysql":
+        database = validate_ident(body.get("database", ""), "database")
+        table = validate_ident(body.get("table", ""), "table")
+        st = {}
+        code, out, _ = my_query(cfg, adm_user, adm_pass,
+            f"SELECT table_rows, COALESCE(data_length+index_length,0) FROM information_schema.tables "
+            f"WHERE table_schema='{database}' AND table_name='{table}'", db=database)
+        if code == 0 and out.strip():
+            p = out.strip().split("\t")
+            if len(p) >= 2:
+                st["rows"] = int(p[0]) if p[0].isdigit() else None
+                st["estimated"] = True
+                st["size_bytes"] = int(p[1]) if p[1].isdigit() else None
+        code2, out2, _ = my_query(cfg, adm_user, adm_pass,
+            f"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='{database}' AND table_name='{table}'", db=database)
+        if code2 == 0 and out2.strip().isdigit():
+            st["columns"] = int(out2.strip())
+        return {"engine": "mysql", "stats": st}
+
+    if fam == "sqlite":
+        table = validate_ident(body.get("table", ""), "table")
+        db_path = Path(cfg["path"])
+        rel = '"' + table.replace('"', '""') + '"'
+        tlit = "'" + table.replace("'", "''") + "'"
+        st = {}
+        code, out, _ = sq_query(db_path, f"SELECT COUNT(*) FROM {rel}")
+        if code == 0 and out.strip().isdigit():
+            st["rows"] = int(out.strip())
+        code2, out2, _ = sq_query(db_path, f"SELECT COUNT(*) FROM pragma_table_info({tlit})")
+        if code2 == 0 and out2.strip().isdigit():
+            st["columns"] = int(out2.strip())
+        code3, out3, _ = sq_query(db_path, f"SELECT COALESCE(SUM(pgsize),0) FROM dbstat WHERE name={tlit}")
+        if code3 == 0 and out3.strip().isdigit():
+            st["size_bytes"] = int(out3.strip())
+        return {"engine": "sqlite", "stats": st}
+
+    return {"stats": {}}
+
+
+def _crud_supported(fam):
+    """Only the parameterized native engines may mutate rows."""
+    if fam == "documentdb" and USE_NATIVE_MONGO:
+        return None
+    if fam == "postgresql" and USE_NATIVE_PG:
+        return None
+    return {"error": "Row editing is only available for PostgreSQL and MongoDB"}
+
+
+def _clean_columns(mapping, label):
+    """Validate the column names in a {column: value} map; values are passed as
+    query parameters (never interpolated), so only the identifiers need checks."""
+    out = {}
+    for k, v in (mapping or {}).items():
+        out[validate_ident(str(k), label)] = v
+    return out
+
+
+def api_row_insert(body):
+    cfg, err = get_config(body)
+    if err:
+        return {"error": err}
+    require_creds(body)
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
+    engine = body.get("engine", "documentdb")
+    env = body.get("env", "custom")
+    fam = engine_family(engine)
+    blocked = _crud_supported(fam)
+    if blocked:
+        return blocked
+
+    if fam == "documentdb":
+        database = validate_ident(body.get("database", ""), "database")
+        collection = str(body.get("collection", "")).strip()
+        doc = body.get("document")
+        if not isinstance(doc, dict):
+            return {"error": "Document must be a JSON object"}
+        res, err = mn.insert_document(cfg, adm_user, adm_pass, database, collection, doc)
+        if err:
+            return {"error": err}
+        audit(env, "documentdb", "INSERT DOC", f"{database}.{collection} _id={res.get('inserted_id')}")
+        return {"ok": True, "inserted_id": res.get("inserted_id")}
+
+    database = validate_ident(body.get("database", ""), "database")
+    schema = validate_ident(body.get("schema", "public"), "schema")
+    table = validate_ident(body.get("table", ""), "table")
+    try:
+        values = _clean_columns(body.get("values"), "column")
+    except ValueError as e:
+        return {"error": str(e)}
+    if not values:
+        return {"error": "No values to insert"}
+    res, err = pn.insert_row(cfg, adm_user, adm_pass, database, schema, table, values)
+    if err:
+        return {"error": err}
+    audit(env, "postgresql", "INSERT ROW", f"{schema}.{table} ({', '.join(values)})")
+    return {"ok": True, "row": res}
+
+
+def api_row_update(body):
+    cfg, err = get_config(body)
+    if err:
+        return {"error": err}
+    require_creds(body)
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
+    engine = body.get("engine", "documentdb")
+    env = body.get("env", "custom")
+    fam = engine_family(engine)
+    blocked = _crud_supported(fam)
+    if blocked:
+        return blocked
+
+    if fam == "documentdb":
+        database = validate_ident(body.get("database", ""), "database")
+        collection = str(body.get("collection", "")).strip()
+        rep = body.get("id")
+        if rep is None:
+            return {"error": "Missing document _id"}
+        set_fields = body.get("set") or {}
+        unset_fields = body.get("unset") or []
+        if not isinstance(set_fields, dict) or not isinstance(unset_fields, list):
+            return {"error": "Invalid update payload"}
+        res, err = mn.update_document(cfg, adm_user, adm_pass, database, collection,
+                                      rep, set_fields, unset_fields)
+        if err:
+            return {"error": err}
+        audit(env, "documentdb", "UPDATE DOC", f"{database}.{collection} _id={rep}")
+        return {"ok": True, "modified": res.get("modified", 0)}
+
+    database = validate_ident(body.get("database", ""), "database")
+    schema = validate_ident(body.get("schema", "public"), "schema")
+    table = validate_ident(body.get("table", ""), "table")
+    try:
+        pk = _clean_columns(body.get("pk"), "primary key column")
+        changes = _clean_columns(body.get("changes"), "column")
+    except ValueError as e:
+        return {"error": str(e)}
+    if not pk:
+        return {"error": "Refusing to update without a primary key"}
+    if not changes:
+        return {"error": "No changes to apply"}
+    n, err = pn.update_row(cfg, adm_user, adm_pass, database, schema, table, pk, changes)
+    if err:
+        return {"error": err}
+    audit(env, "postgresql", "UPDATE ROW",
+          f"{schema}.{table} WHERE {pk} SET {', '.join(changes)}")
+    return {"ok": True, "updated": n}
+
+
+def api_row_delete(body):
+    cfg, err = get_config(body)
+    if err:
+        return {"error": err}
+    require_creds(body)
+    adm_user = body.get("admin_user", "")
+    adm_pass = body.get("admin_pass", "")
+    engine = body.get("engine", "documentdb")
+    env = body.get("env", "custom")
+    fam = engine_family(engine)
+    blocked = _crud_supported(fam)
+    if blocked:
+        return blocked
+
+    if fam == "documentdb":
+        database = validate_ident(body.get("database", ""), "database")
+        collection = str(body.get("collection", "")).strip()
+        rep = body.get("id")
+        if rep is None:
+            return {"error": "Missing document _id"}
+        res, err = mn.delete_document(cfg, adm_user, adm_pass, database, collection, rep)
+        if err:
+            return {"error": err}
+        audit(env, "documentdb", "DELETE DOC", f"{database}.{collection} _id={rep}")
+        return {"ok": True, "deleted": res.get("deleted", 0)}
+
+    database = validate_ident(body.get("database", ""), "database")
+    schema = validate_ident(body.get("schema", "public"), "schema")
+    table = validate_ident(body.get("table", ""), "table")
+    try:
+        pk = _clean_columns(body.get("pk"), "primary key column")
+    except ValueError as e:
+        return {"error": str(e)}
+    if not pk:
+        return {"error": "Refusing to delete without a primary key"}
+    n, err = pn.delete_row(cfg, adm_user, adm_pass, database, schema, table, pk)
+    if err:
+        return {"error": err}
+    audit(env, "postgresql", "DELETE ROW", f"{schema}.{table} WHERE {pk}")
+    return {"ok": True, "deleted": n}
 
 
 MAX_QUERY_LEN = 20000
@@ -1040,6 +1344,7 @@ CURSOR_CONSUMED_RE = re.compile(r'\.(toArray|forEach|itcount|explain|next|size|m
 RO_BLOCKED_ROUTES = {
     "/api/create-user", "/api/reset-password", "/api/grant",
     "/api/revoke", "/api/drop-user", "/api/toggle-login",
+    "/api/row-insert", "/api/row-update", "/api/row-delete",
 }
 
 RO_DOCDB_BLOCK = re.compile(
@@ -1983,6 +2288,7 @@ REQUIRES_CREDS = {
     "/api/create-user", "/api/reset-password", "/api/grant",
     "/api/revoke", "/api/drop-user", "/api/toggle-login",
     "/api/list-databases", "/api/list-collections", "/api/browse-data",
+    "/api/table-meta", "/api/object-stats", "/api/row-insert", "/api/row-update", "/api/row-delete",
     "/api/query", "/api/query-stream",
     "/api/audit-run", "/api/health",
 }
@@ -2002,6 +2308,11 @@ ROUTES = {
     "/api/list-databases": api_list_databases,
     "/api/list-collections": api_list_collections,
     "/api/browse-data": api_browse_data,
+    "/api/table-meta": api_table_meta,
+    "/api/object-stats": api_object_stats,
+    "/api/row-insert": api_row_insert,
+    "/api/row-update": api_row_update,
+    "/api/row-delete": api_row_delete,
     "/api/query": api_query,
     "/api/audit-run": api_audit_run,
     "/api/health": api_health,
