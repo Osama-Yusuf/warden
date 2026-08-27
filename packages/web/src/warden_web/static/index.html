@@ -1869,9 +1869,10 @@ let dbHealth = null;
 async function viewDatabases() {
   if (!requireConnection()) return;
   setContent(loading('Listing databases…'));
-  let health = null;
-  try { health = await apiPost('/api/health'); } catch {}
-  const res = await apiPost('/api/list-databases');
+  const [health, res] = await Promise.all([
+    apiPost('/api/health').catch(() => null),
+    apiPost('/api/list-databases').catch(() => ({ error: 'Request failed' })),
+  ]);
   if (res.error) { setContent(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`); return; }
   dbData = (res.databases || []).map(d => ({
     ...d,

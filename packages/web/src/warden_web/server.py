@@ -223,6 +223,7 @@ def api_connect(body):
             return {"ok": False, "error": err}
         authed = ((data or {}).get("authInfo") or {}).get("authenticatedUsers") or []
         whoami = authed[0].get("user") if authed else user
+        prewarm_docdb(cfg, user, pwd)
         return {"ok": True, "host": cfg["host"], "user": whoami}
     if fam == "mysql":
         code, out, err = my_query(cfg, user, pwd, "SELECT CURRENT_USER()")
@@ -340,7 +341,7 @@ def api_list_users(body):
         return {"users": [], "note": "SQLite has no user accounts"}
 
     if fam == "documentdb":
-        data, err = docdb_eval(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users")
+        data, err = docdb_read(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users")
         if err:
             return {"error": err}
         users = []
@@ -411,7 +412,7 @@ def api_user_info(body):
         return {"error": "SQLite has no user accounts"}
 
     if fam == "documentdb":
-        data, err = docdb_eval(cfg, user, pwd, f'db.adminCommand({{usersInfo: {js_string(target)}}}).users')
+        data, err = docdb_read(cfg, user, pwd, f'db.adminCommand({{usersInfo: {js_string(target)}}}).users')
         if err:
             return {"error": err}
         if not data:
@@ -768,7 +769,7 @@ def api_list_databases(body):
                                "size_mb": round(size / 1048576, 1)}]}
 
     if fam == "documentdb":
-        data, err = docdb_eval(cfg, adm_user, adm_pass, "db.adminCommand({listDatabases:1}).databases")
+        data, err = docdb_read(cfg, adm_user, adm_pass, "db.adminCommand({listDatabases:1}).databases")
         if err:
             return {"error": err}
         dbs = []
@@ -847,7 +848,7 @@ def api_list_collections(body):
         return {"tables": tables}
 
     if fam == "documentdb":
-        data, err = docdb_eval(cfg, adm_user, adm_pass, "db.getCollectionNames()", db=database)
+        data, err = docdb_read(cfg, adm_user, adm_pass, "db.getCollectionNames()", db=database)
         if err:
             return {"error": err}
         return {"collections": sorted(data or [])}
@@ -1130,6 +1131,43 @@ class MongoSession:
             msg = "\n".join(l for l in lines if l.strip() and "__WARDEN_" not in l).strip()
             return {"ok": False, "error": msg or "Query failed with no output"}
 
+    def run_json(self, query, db, timeout=45):
+        """Run a single-expression read, returning parsed JSON. Uses plain
+        JSON.stringify so the output matches the one-shot docdb_eval path
+        exactly (drop-in replacement, same downstream parsing)."""
+        import uuid
+        with self.lock:
+            self.last_used = time.time()
+            if not self.alive():
+                raise SessionError("session dead")
+            tag = uuid.uuid4().hex[:10]
+            ok_m = f"__WARDEN_JOK_{tag}__"
+            err_m = f"__WARDEN_JERR_{tag}__"
+            ok_expr = f'"__WARDEN_" + "JOK_{tag}" + "__"'
+            err_expr = f'"__WARDEN_" + "JERR_{tag}" + "__"'
+            one_line = " ".join(query.splitlines()).strip()
+            payload = (
+                f'db = db.getSiblingDB({js_string(db)}); '
+                f'try {{ print({ok_expr} + JSON.stringify(( {one_line} ))) }} '
+                f'catch (e) {{ print({err_expr} + (e && e.message || String(e))) }}'
+            )
+            lines = self._roundtrip(payload, timeout)
+            if lines is None:
+                self.close()
+                raise SessionTimeout(f"Query timed out after {timeout}s")
+            for idx, line in enumerate(lines):
+                if ok_m in line:
+                    raw = self._trim_to_json("\n".join([line.split(ok_m, 1)[1]] + lines[idx + 1:]))
+                    try:
+                        return {"ok": True, "data": json.loads(raw.strip())}
+                    except (json.JSONDecodeError, ValueError):
+                        return {"ok": False, "error": "Could not parse result"}
+                if err_m in line:
+                    msg = "\n".join([line.split(err_m, 1)[1]] + lines[idx + 1:])
+                    return {"ok": False, "error": msg.strip()}
+            msg = "\n".join(l for l in lines if l.strip() and "__WARDEN_" not in l).strip()
+            return {"ok": False, "error": msg or "Query failed with no output"}
+
     @staticmethod
     def _trim_to_json(raw):
         """Drop trailing REPL noise lines (e.g. a stray prompt) after the JSON."""
@@ -1180,6 +1218,29 @@ def get_mongo_session(cfg, admin_user, admin_pass):
             raise
         MONGO_SESSIONS[key] = sess
         return sess
+
+
+def docdb_read(cfg, user, pwd, js, db="admin", timeout=30):
+    """Fast DocumentDB read through the warm session pool, with a transparent
+    one-shot fallback. Returns (data, error) exactly like docdb_eval."""
+    try:
+        sess = get_mongo_session(cfg, user, pwd)
+        r = sess.run_json(js, db, timeout=timeout)
+        if r["ok"]:
+            return r["data"], None
+        return None, _clean_mongosh_noise(r.get("error") or "") or "Query failed"
+    except (SessionError, SessionTimeout):
+        return docdb_eval(cfg, user, pwd, js, db=db, timeout=timeout)
+
+
+def prewarm_docdb(cfg, user, pwd):
+    """Open the warm session in the background so the first read is instant."""
+    def _go():
+        try:
+            get_mongo_session(cfg, user, pwd)
+        except Exception:
+            pass
+    threading.Thread(target=_go, daemon=True).start()
 
 
 def api_query(body):
@@ -1376,7 +1437,7 @@ def _plural(n, word, plural_form=None):
 
 
 def _docdb_users(cfg, user, pwd):
-    data, err = docdb_eval(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users")
+    data, err = docdb_read(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users")
     if err:
         return None, err
     return (data or []), None
