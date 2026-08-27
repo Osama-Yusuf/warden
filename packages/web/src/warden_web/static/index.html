@@ -217,6 +217,51 @@ input[type="password"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe 
 .qf-hit:hover, .qf-hit.sel { background: var(--accent-soft); }
 .qf-hit svg { width: 12px; height: 12px; color: var(--text-muted); flex-shrink: 0; }
 .qf-hit .tag { margin-left: auto; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
+
+/* ── Smart filter ── */
+.sf { margin-bottom: 14px; }
+.sf-bar { display: flex; align-items: center; gap: 10px; }
+.sf-box { position: relative; flex: 1; min-width: 220px; max-width: 460px; }
+.sf-input {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+  padding: 0 8px 0 11px; height: 34px; transition: border-color .15s, box-shadow .15s;
+}
+.sf-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.sf-input svg.sf-ico { width: 13px; height: 13px; color: var(--text-muted); flex-shrink: 0; }
+.sf-input input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--text); font-size: 12.5px; font-family: inherit; }
+.sf-input input::placeholder { color: var(--text-muted); }
+.sf-clear { border: none; background: none; color: var(--text-muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 5px; border-radius: 5px; display: none; }
+.sf-clear:hover { color: var(--danger); background: var(--surface-hover); }
+.sf-count { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.sf-ac {
+  position: absolute; left: 0; right: 0; top: 40px; z-index: 60;
+  background: var(--surface-2); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden auto; max-height: 288px; display: none;
+}
+.sf-ac.open { display: block; }
+.sf-opt { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 11px; background: none; border: none; cursor: pointer; color: var(--text); font-size: 12.5px; text-align: left; }
+.sf-opt:hover, .sf-opt.sel { background: var(--accent-soft); }
+.sf-opt .k { font-family: var(--mono-font); color: var(--mono); }
+.sf-opt .sf-desc { margin-left: auto; font-size: 10.5px; color: var(--text-muted); }
+.sf-presets { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+.sf-preset {
+  font-size: 11.5px; padding: 4px 11px; border-radius: 999px; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-muted);
+  transition: background .13s, color .13s, border-color .13s;
+}
+.sf-preset:hover { color: var(--text); border-color: var(--border-strong); }
+.sf-preset.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.sf-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+.sf-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-family: var(--mono-font);
+  padding: 3px 3px 3px 9px; border-radius: 7px; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent);
+}
+.sf-chip b { font-weight: 600; }
+.sf-chip-x { border: none; background: none; color: inherit; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 3px; border-radius: 4px; opacity: .65; }
+.sf-chip-x:hover { opacity: 1; }
+.sf-clearall { font-size: 11px; color: var(--text-muted); cursor: pointer; background: none; border: none; padding: 2px 4px; }
+.sf-clearall:hover { color: var(--danger); text-decoration: underline; }
 .nav-sections { flex: 1; padding: 8px 10px 14px; }
 .group-label {
   display: flex; align-items: center; gap: 7px; width: 100%;
@@ -1596,6 +1641,216 @@ const viewCache = new Map();
 function cacheKey(kind) { return `${document.getElementById('envSelect')?.value}:${currentEngine}:${kind}`; }
 function invalidateCache(kind) { viewCache.delete(cacheKey(kind)); }
 
+// ── Smart filter ──────────────────────────────────────────────────────────
+// Config-driven, client-side. Views load their full list, so filtering runs
+// in memory (instant, no round-trips). A config declares fields (how to read a
+// value off a row + its type) and preset chips. The engine parses `field:value`
+// tokens with operators (size:>100mb), bare-text substring, an autocomplete
+// dropdown, active-filter chips, and a live "X of Y" count.
+const sfReg = {};                 // key -> config
+const sfAc = {};                  // key -> {sel, opts}
+
+function sfRegister(cfg) { sfReg[cfg.key] = cfg; sfAc[cfg.key] = { sel: -1, opts: [] }; }
+function sfInputVal(key) { return document.getElementById('sf-in-' + key)?.value || ''; }
+function sfTokens(str) { return str.match(/(?:[^\s"]+|"[^"]*")+/g) || []; }
+
+function sfParseSize(s) {
+  const m = String(s).trim().toLowerCase().match(/^([\d.]+)\s*(b|kb|k|mb|m|gb|g|tb|t)?$/);
+  if (!m) return null;
+  const mult = { b: 1, k: 1024, kb: 1024, m: 1048576, mb: 1048576, g: 1073741824, gb: 1073741824, t: 1099511627776, tb: 1099511627776 };
+  return parseFloat(m[1]) * (mult[m[2] || 'b']);
+}
+
+function sfParse(q, fields) {
+  const known = new Set(fields.map(f => f.key));
+  const tokens = [], textParts = [];
+  for (const p of sfTokens(q)) {
+    const m = p.match(/^(-?)([A-Za-z_]+):(.*)$/);
+    if (m && known.has(m[2].toLowerCase())) {
+      let val = m[3], op = '';
+      const om = val.match(/^(>=|<=|>|<|=)(.*)$/);
+      if (om) { op = om[1]; val = om[2]; }
+      tokens.push({ field: m[2].toLowerCase(), op, val: val.replace(/^"|"$/g, ''), neg: m[1] === '-', raw: p });
+    } else {
+      textParts.push(p.replace(/^"|"$/g, ''));
+    }
+  }
+  return { tokens, text: textParts.join(' ').trim().toLowerCase() };
+}
+
+function sfVals(f, row) {
+  const v = f.get(row);
+  if (v == null || v === '') return [];
+  return Array.isArray(v) ? v.map(String) : [String(v)];
+}
+
+function sfTokenMatch(f, tok, row) {
+  const raw = f.get(row);
+  if (f.type === 'bool') {
+    const truthy = ['on', 'true', 'yes', '1', 'active', 'enabled'].includes(tok.val.toLowerCase());
+    return Boolean(raw) === truthy;
+  }
+  if (f.type === 'size' || f.type === 'number') {
+    const n = Number(raw);
+    const target = f.type === 'size' ? sfParseSize(tok.val) : Number(tok.val);
+    if (raw == null || isNaN(n) || target == null || isNaN(target)) return false;
+    switch (tok.op) {
+      case '>': return n > target;  case '<': return n < target;
+      case '>=': return n >= target; case '<=': return n <= target;
+      default: return n === target;
+    }
+  }
+  const needle = tok.val.toLowerCase();
+  return sfVals(f, row).some(s => s.toLowerCase().includes(needle));
+}
+
+function sfMatches(row, parsed, cfg) {
+  if (parsed.text) {
+    const hit = cfg.textFields.some(k => {
+      const f = cfg.fields.find(x => x.key === k);
+      return f && sfVals(f, row).some(s => s.toLowerCase().includes(parsed.text));
+    });
+    if (!hit) return false;
+  }
+  for (const tok of parsed.tokens) {
+    const f = cfg.fields.find(x => x.key === tok.field);
+    if (!f) continue;
+    const m = sfTokenMatch(f, tok, row);
+    if (tok.neg ? m : !m) return false;
+  }
+  return true;
+}
+
+function sfBarHtml(cfg) {
+  const presets = (cfg.presets || []).map((p, i) =>
+    `<button class="sf-preset" data-i="${i}" onclick="sfPreset('${cfg.key}', ${i})">${esc(p.label)}</button>`).join('');
+  return `<div class="sf" id="sf-${cfg.key}">
+    <div class="sf-bar">
+      <div class="sf-box">
+        <div class="sf-input">
+          <svg class="sf-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.2"/><path d="M15.8 15.8L21 21"/></svg>
+          <input id="sf-in-${cfg.key}" placeholder="${esc(cfg.placeholder || 'filter…')}" autocomplete="off" spellcheck="false"
+            oninput="sfApply('${cfg.key}')" onkeydown="sfKey(event,'${cfg.key}')" onfocus="sfSuggest('${cfg.key}')" onblur="sfBlur('${cfg.key}')">
+          <button class="sf-clear" id="sf-x-${cfg.key}" data-tip="Clear filter" onclick="sfClearAll('${cfg.key}')">&times;</button>
+        </div>
+        <div class="sf-ac" id="sf-ac-${cfg.key}"></div>
+      </div>
+      <span class="sf-count" id="sf-cnt-${cfg.key}"></span>
+    </div>
+    ${presets ? `<div class="sf-presets">${presets}</div>` : ''}
+    <div class="sf-chips" id="sf-chips-${cfg.key}" style="display:none"></div>
+  </div>`;
+}
+
+function sfApply(key) {
+  const cfg = sfReg[key]; if (!cfg) return;
+  const val = sfInputVal(key);
+  const parsed = sfParse(val, cfg.fields);
+  const all = cfg.rows();
+  const list = all.filter(r => sfMatches(r, parsed, cfg));
+  cfg.render(list, parsed);
+  const active = parsed.tokens.length || parsed.text;
+  const cnt = document.getElementById('sf-cnt-' + key);
+  if (cnt) cnt.textContent = cfg.countText
+    ? cfg.countText(list, parsed, all.length)
+    : (active ? `${list.length} of ${all.length}` : `${all.length} total`);
+  const x = document.getElementById('sf-x-' + key); if (x) x.style.display = val ? 'block' : 'none';
+  document.querySelectorAll(`#sf-${key} .sf-preset`).forEach((el, i) =>
+    el.classList.toggle('on', cfg.presets[i] && val.includes(cfg.presets[i].q)));
+  sfRenderChips(key, parsed);
+  sfSuggest(key);
+}
+
+function sfRenderChips(key, parsed) {
+  const box = document.getElementById('sf-chips-' + key); if (!box) return;
+  const chips = parsed.tokens.map(t =>
+    `<span class="sf-chip"><b>${esc(t.field)}${esc(t.op || ':')}</b>${esc(t.val) || '·'}<button class="sf-chip-x" data-raw="${esc(t.raw)}" data-tip="Remove" onclick="sfRemove('${key}', this.dataset.raw)">&times;</button></span>`);
+  if (chips.length) chips.push(`<button class="sf-clearall" onclick="sfClearAll('${key}')">clear all</button>`);
+  box.innerHTML = chips.join('');
+  box.style.display = chips.length ? 'flex' : 'none';
+}
+
+function sfPreset(key, i) {
+  const cfg = sfReg[key], p = cfg.presets[i], inp = document.getElementById('sf-in-' + key);
+  let val = inp.value.trim();
+  val = val.includes(p.q) ? val.replace(p.q, '').replace(/\s+/g, ' ').trim() : (val + ' ' + p.q).trim();
+  inp.value = val; sfApply(key); inp.focus();
+}
+
+function sfRemove(key, raw) {
+  const inp = document.getElementById('sf-in-' + key);
+  inp.value = sfTokens(inp.value).filter(p => p !== raw).join(' ');
+  sfApply(key); inp.focus();
+}
+
+function sfClearAll(key) {
+  const inp = document.getElementById('sf-in-' + key);
+  inp.value = ''; sfApply(key); inp.focus();
+}
+
+function sfDistinct(cfg, f) {
+  const set = new Set();
+  for (const r of cfg.rows()) for (const v of sfVals(f, r)) set.add(v);
+  return [...set].sort().slice(0, 60);
+}
+
+function sfSuggest(key) {
+  const cfg = sfReg[key], inp = document.getElementById('sf-in-' + key), ac = document.getElementById('sf-ac-' + key);
+  if (!cfg || !inp || !ac || document.activeElement !== inp) { if (ac) ac.classList.remove('open'); return; }
+  const caret = inp.selectionStart ?? inp.value.length;
+  const cur = (inp.value.slice(0, caret).match(/(\S+)$/) || ['', ''])[1];
+  const colon = cur.indexOf(':');
+  let opts = [];
+  if (colon === -1) {
+    const pre = cur.toLowerCase();
+    opts = cfg.fields.filter(f => f.suggest !== false && f.key !== 'name' && f.key.startsWith(pre))
+      .map(f => ({ text: f.key + ':', hint: f.label }));
+  } else {
+    const f = cfg.fields.find(x => x.key === cur.slice(0, colon).toLowerCase());
+    if (f && f.type !== 'size' && f.type !== 'number') {
+      const typed = cur.slice(colon + 1).toLowerCase();
+      const vals = f.values || sfDistinct(cfg, f);
+      opts = vals.filter(v => String(v).toLowerCase().includes(typed)).slice(0, 12)
+        .map(v => ({ text: f.key + ':' + v, hint: f.label }));
+    }
+  }
+  const st = sfAc[key]; st.opts = opts; st.sel = opts.length ? 0 : -1;
+  if (!opts.length) { ac.classList.remove('open'); return; }
+  ac.innerHTML = opts.map((o, i) =>
+    `<button class="sf-opt${i === st.sel ? ' sel' : ''}" data-i="${i}" onmousedown="event.preventDefault()" onclick="sfPick('${key}', ${i})">
+      <span class="k">${esc(o.text)}</span>${o.hint ? `<span class="sf-desc">${esc(o.hint)}</span>` : ''}</button>`).join('');
+  ac.classList.add('open');
+}
+
+function sfPick(key, i) {
+  const o = sfAc[key].opts[i]; if (!o) return;
+  const inp = document.getElementById('sf-in-' + key);
+  const caret = inp.selectionStart ?? inp.value.length;
+  const before = inp.value.slice(0, caret).replace(/(\S+)$/, '');
+  const after = inp.value.slice(caret);
+  const insert = o.text + (o.text.endsWith(':') ? '' : ' ');
+  inp.value = before + insert + after;
+  const pos = (before + insert).length;
+  inp.focus(); inp.setSelectionRange(pos, pos);
+  sfApply(key);
+  if (o.text.endsWith(':')) sfSuggest(key);
+}
+
+function sfAcHi(key) {
+  document.querySelectorAll('#sf-ac-' + key + ' .sf-opt').forEach((el, i) => el.classList.toggle('sel', i === sfAc[key].sel));
+}
+
+function sfKey(e, key) {
+  const st = sfAc[key], ac = document.getElementById('sf-ac-' + key);
+  const open = ac && ac.classList.contains('open') && st.opts.length;
+  if (e.key === 'ArrowDown' && open) { e.preventDefault(); st.sel = (st.sel + 1) % st.opts.length; sfAcHi(key); }
+  else if (e.key === 'ArrowUp' && open) { e.preventDefault(); st.sel = (st.sel - 1 + st.opts.length) % st.opts.length; sfAcHi(key); }
+  else if ((e.key === 'Enter' || e.key === 'Tab') && open && st.sel >= 0) { e.preventDefault(); sfPick(key, st.sel); }
+  else if (e.key === 'Escape' && open) { e.preventDefault(); ac.classList.remove('open'); }
+}
+
+function sfBlur(key) { setTimeout(() => { const ac = document.getElementById('sf-ac-' + key); if (ac) ac.classList.remove('open'); }, 120); }
+
 async function viewListUsers() {
   if (!requireConnection()) return;
   const key = cacheKey('users');
@@ -1629,16 +1884,15 @@ function renderUsersShell(fromCache) {
     redis: '<th>Username</th><th>Status</th><th>Commands</th><th>Keys</th>',
   };
   const cols = colsByFam[fam] || '<th>Username</th><th>Status</th><th>Flags</th><th>Expires</th>';
+  const cfg = usersFilterCfg(fam);
+  sfRegister(cfg);
   setContent(`<div class="card"><h2>${ICONS.users} ${title}</h2>
-    <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap">
-      <div class="qf" style="width:260px; height:34px">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.2"/><path d="M15.8 15.8L21 21"/></svg>
-        <input id="userFilter" placeholder="filter users…" oninput="renderUserRows()" autocomplete="off">
+    <div style="display:flex; gap:14px; align-items:flex-start; margin-bottom:6px; flex-wrap:wrap">
+      <div style="flex:1; min-width:240px">${sfBarHtml(cfg)}</div>
+      <div style="display:flex; align-items:center; gap:10px; padding-top:1px">
+        <span id="usersRefreshing" style="font-size:11px; color:var(--text-muted); display:${fromCache ? 'inline' : 'none'}">refreshing…</span>
+        <button class="btn btn-success" onclick="openCreateUserModal()">${ICONS.plus} Create user</button>
       </div>
-      <span id="userCount" style="font-size:12px; color:var(--text-muted)"></span>
-      <span id="usersRefreshing" style="font-size:11px; color:var(--text-muted); display:${fromCache ? 'inline' : 'none'}">refreshing…</span>
-      <div style="flex:1"></div>
-      <button class="btn btn-success" onclick="openCreateUserModal()">${ICONS.plus} Create user</button>
     </div>
     <div class="table-wrap"><table>
       <thead><tr>${cols}</tr></thead>
@@ -1647,13 +1901,8 @@ function renderUsersShell(fromCache) {
   renderUserRows();
 }
 
-function renderUserRows() {
-  const tbody = document.getElementById('userRows');
-  if (!tbody) return;
-  const fam = engineFamily(currentEngine);
+function userRowsHtml(list, fam) {
   const isDocdb = fam === 'documentdb';
-  const q = (document.getElementById('userFilter')?.value || '').trim().toLowerCase();
-  const list = q ? allUsers.filter(u => u.user.toLowerCase().includes(q)) : allUsers;
   const tr = u => `<tr class="urow" data-user="${esc(u.user)}" onclick="viewUserInfoFor(this.dataset.user)">`;
   let rows = '';
   for (const u of list) {
@@ -1682,18 +1931,82 @@ function renderUserRows() {
         <td style="color:var(--text-muted)">${u.valid_until === 'never' ? '—' : esc(u.valid_until)}</td></tr>`;
     }
   }
-  if (!rows && usersLoading) {
-    const ncols = (fam === 'documentdb' || fam === 'elasticsearch') ? 3 : 4;
-    const cell = `<td><div class="skel" style="width:${60 + Math.floor(Math.random()*30)}%"></div></td>`;
-    rows = Array.from({ length: 4 }, () =>
-      `<tr>${cell.repeat(ncols)}</tr>`).join('');
-    tbody.innerHTML = rows;
+  return rows;
+}
+
+function userSkelRows(fam) {
+  const ncols = (fam === 'documentdb' || fam === 'elasticsearch') ? 3 : 4;
+  const cell = `<td><div class="skel" style="width:${60 + Math.floor(Math.random() * 30)}%"></div></td>`;
+  return Array.from({ length: 4 }, () => `<tr>${cell.repeat(ncols)}</tr>`).join('');
+}
+
+// thin wrapper so post-CRUD refreshers keep working; re-runs the smart filter
+function renderUserRows() { if (sfReg.users) sfApply('users'); }
+
+function usersFilterCfg(fam) {
+  const cfg = {
+    key: 'users',
+    placeholder: 'filter users… try status:disabled',
+    rows: () => allUsers,
+    textFields: ['name'],
+    fields: [{ key: 'name', label: 'username', type: 'text', get: u => u.user }],
+    presets: [],
+    countText: (list, parsed, total) => usersLoading ? 'loading…'
+      : ((parsed.tokens.length || parsed.text) ? `${list.length} of ${total}` : `${total} total`),
+    render: (list, parsed) => {
+      const tb = document.getElementById('userRows'); if (!tb) return;
+      if (!allUsers.length && usersLoading) { tb.innerHTML = userSkelRows(fam); return; }
+      if (!list.length) {
+        const active = parsed.tokens.length || parsed.text;
+        const msg = active ? 'No users match your filter.' : (usersNote || 'No users on this connection yet.');
+        tb.innerHTML = `<tr><td colspan="6" style="color:var(--text-muted)">${esc(msg)}</td></tr>`;
+        return;
+      }
+      tb.innerHTML = userRowsHtml(list, fam);
+    },
+  };
+  if (fam === 'elasticsearch') {
+    cfg.placeholder = 'filter users… try role:kibana_admin or status:disabled';
+    cfg.fields.push(
+      { key: 'status', label: 'enabled / disabled', type: 'bool', get: u => u.enabled, values: ['enabled', 'disabled'] },
+      { key: 'role', label: 'role', type: 'enum', get: u => u.roles || [] },
+      { key: 'builtin', label: 'built-in', type: 'bool', get: u => u.reserved, values: ['yes', 'no'] },
+    );
+    cfg.presets = [{ label: 'Disabled', q: 'status:disabled' }, { label: 'Built-in', q: 'builtin:yes' }, { label: 'Custom', q: 'builtin:no' }];
+  } else if (fam === 'redis') {
+    cfg.placeholder = 'filter users… try command:+@write or keys:cache';
+    cfg.fields.push(
+      { key: 'status', label: 'on / off', type: 'bool', get: u => u.enabled, values: ['on', 'off'] },
+      { key: 'command', label: 'command rule', type: 'text', get: u => u.commands },
+      { key: 'keys', label: 'key pattern', type: 'text', get: u => u.keys },
+      { key: 'default', label: 'default user', type: 'bool', get: u => u.reserved, values: ['yes', 'no'] },
+    );
+    // command rules carry +/- signs (+@all grants, -@all revokes) — match the grant prefix so a revoked rule doesn't count
+    cfg.presets = [{ label: 'Disabled', q: 'status:off' }, { label: 'Write grant', q: 'command:+@write' }, { label: 'Full access', q: 'command:+@all' }, { label: 'All keys', q: 'keys:~*' }];
+  } else if (fam === 'documentdb') {
+    cfg.placeholder = 'filter users… try role:readWrite or db:admin';
+    cfg.fields.push(
+      { key: 'role', label: 'role', type: 'enum', get: u => u.roles || [] },
+      { key: 'db', label: 'auth db', type: 'text', get: u => u.db },
+      { key: 'hasrole', label: 'has roles', type: 'bool', get: u => (u.roles || []).length > 0, values: ['yes', 'no'] },
+    );
+    cfg.presets = [{ label: 'No roles', q: 'hasrole:no' }];
+  } else if (fam === 'mysql') {
+    cfg.placeholder = 'filter accounts… try status:disabled';
+    cfg.fields.push({ key: 'status', label: 'active / disabled', type: 'bool', get: u => u.can_login, values: ['active', 'disabled'] });
+    cfg.presets = [{ label: 'Active', q: 'status:active' }, { label: 'Locked', q: 'status:disabled' }];
   } else {
-    const empty = q ? 'No users match your filter.' : (usersNote || 'No users on this connection yet.');
-    tbody.innerHTML = rows || `<tr><td colspan="5" style="color:var(--text-muted)">${empty}</td></tr>`;
+    cfg.placeholder = 'filter users… try superuser:yes or status:disabled';
+    cfg.fields.push(
+      { key: 'status', label: 'active / disabled', type: 'bool', get: u => u.can_login, values: ['active', 'disabled'] },
+      { key: 'superuser', label: 'superuser', type: 'bool', get: u => u.superuser, values: ['yes', 'no'] },
+      { key: 'createdb', label: 'can create db', type: 'bool', get: u => u.createdb, values: ['yes', 'no'] },
+      { key: 'createrole', label: 'can create roles', type: 'bool', get: u => u.createrole, values: ['yes', 'no'] },
+      { key: 'expires', label: 'has expiry', type: 'bool', get: u => u.valid_until && u.valid_until !== 'never', values: ['yes', 'no'] },
+    );
+    cfg.presets = [{ label: 'Superusers', q: 'superuser:yes' }, { label: 'Can log in', q: 'status:active' }, { label: "Can't log in", q: 'status:disabled' }, { label: 'Can create DB', q: 'createdb:yes' }, { label: 'Expiring', q: 'expires:yes' }];
   }
-  const c = document.getElementById('userCount');
-  if (c) c.textContent = usersLoading ? 'loading…' : (q ? `${list.length} of ${allUsers.length}` : `${allUsers.length} total`);
+  return cfg;
 }
 
 async function viewUserInfoFor(username) {
@@ -2418,19 +2731,56 @@ function healthStripHtml() {
 function sortDatabases(key) {
   if (dbSort.key === key) dbSort.dir = -dbSort.dir;
   else dbSort = { key, dir: key === 'size' ? -1 : 1 };
-  renderDatabases();
+  sfApply('dbs');
+}
+
+function dbFilterCfg() {
+  const fam = engineFamily(currentEngine);
+  const cfg = {
+    key: 'dbs',
+    placeholder: 'filter databases… try size:>100mb',
+    rows: () => dbData,
+    textFields: ['name'],
+    fields: [
+      { key: 'name', label: 'name', type: 'text', get: d => d.name },
+      { key: 'size', label: 'size, e.g. >100mb', type: 'size', get: d => d.bytes },
+    ],
+    presets: [],
+    render: (list) => renderDbTable(list),
+  };
+  if (fam === 'documentdb') {
+    cfg.fields.push({ key: 'empty', label: 'empty', type: 'bool', get: d => d.empty, values: ['yes', 'no'] });
+    cfg.presets = [{ label: 'Non-empty', q: 'empty:no' }, { label: 'Empty', q: 'empty:yes' }, { label: '≥ 100 MB', q: 'size:>100mb' }];
+  } else if (fam === 'redis') {
+    cfg.fields.push({ key: 'keys', label: 'key count', type: 'number', get: d => d.keys });
+    cfg.presets = [{ label: 'Has keys', q: 'keys:>0' }];
+  } else {
+    cfg.presets = [{ label: '≥ 100 MB', q: 'size:>100mb' }, { label: '≥ 1 GB', q: 'size:>1gb' }];
+  }
+  return cfg;
 }
 
 function renderDatabases(fromCache) {
+  const cfg = dbFilterCfg();
+  sfRegister(cfg);
+  const totalBytes = dbData.reduce((s, d) => s + d.bytes, 0);
+  setContent(healthStripHtml() + `<div class="card"><h2>${ICONS.db} Databases</h2>
+    <p class="card-meta">${dbData.length} databases · ${fmtSize(totalBytes)} total · click a name to browse it${fromCache ? ' · <span style="color:var(--text-muted)">refreshing…</span>' : ''}</p>
+    ${sfBarHtml(cfg)}
+    <div id="dbTable"></div></div>`);
+  sfApply('dbs');
+}
+
+function renderDbTable(list) {
+  const target = document.getElementById('dbTable'); if (!target) return;
   const arrow = k => dbSort.key === k ? `<span class="arrow">${dbSort.dir === 1 ? '▲' : '▼'}</span>` : '';
-  const sorted = [...dbData].sort((a, b) => {
+  const sorted = [...list].sort((a, b) => {
     const cmp = dbSort.key === 'size'
       ? a.bytes - b.bytes
       : a.name.toLowerCase().localeCompare(b.name.toLowerCase());
     return cmp * dbSort.dir;
   });
-  const maxBytes = Math.max(1, ...dbData.map(d => d.bytes));
-  const totalBytes = dbData.reduce((s, d) => s + d.bytes, 0);
+  const maxBytes = Math.max(1, ...list.map(d => d.bytes));
   let rows = '';
   for (const d of sorted) {
     const empty = d.empty ? '<span class="pill pill-muted">empty</span>' : '';
@@ -2441,16 +2791,15 @@ function renderDatabases(fromCache) {
       <td>${empty}</td>
     </tr>`;
   }
-  setContent(healthStripHtml() + `<div class="card"><h2>${ICONS.db} Databases</h2>
-    <p class="card-meta">${dbData.length} databases · ${fmtSize(totalBytes)} total · click a name to browse it${fromCache ? ' · <span style="color:var(--text-muted)">refreshing…</span>' : ''}</p>
-    <div class="table-wrap"><table>
-      <thead><tr>
-        <th class="sortable" onclick="sortDatabases('name')">Name${arrow('name')}</th>
-        <th class="sortable" onclick="sortDatabases('size')">Size${arrow('size')}</th>
-        <th></th>
-      </tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div></div>`);
+  if (!rows) { target.innerHTML = `<div class="empty-state" style="margin-top:14px">No databases match your filter.</div>`; return; }
+  target.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr>
+      <th class="sortable" onclick="sortDatabases('name')">Name${arrow('name')}</th>
+      <th class="sortable" onclick="sortDatabases('size')">Size${arrow('size')}</th>
+      <th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
 }
 
 function viewCollections(prefillDb = '') {
@@ -2483,7 +2832,8 @@ async function doListCollections() {
   if (res.collections) {
     engine = 'mongo';
     items = res.collections.map(o => typeof o === 'string'
-      ? { name: o, size_bytes: null } : { name: o.name, size_bytes: o.size_bytes });
+      ? { name: o, size_bytes: null }
+      : { name: o.name, size_bytes: o.size_bytes, docs: o.docs, keys: o.keys });
   } else {
     engine = 'sql';
     items = (res.tables || []).map(t => ({ schema: t.schema, name: t.table, size_bytes: t.size_bytes }));
@@ -2496,13 +2846,51 @@ function sortCollList(key) {
   if (!collList) return;
   if (collList.sort.key === key) collList.sort.dir = -collList.sort.dir;
   else collList.sort = { key, dir: key === 'size' ? -1 : 1 };
-  renderCollList();
+  sfApply('coll');
+}
+
+function collFilterCfg() {
+  const { engine, fam } = collList;
+  const cfg = {
+    key: 'coll',
+    placeholder: fam === 'redis' ? 'filter namespaces… try keys:>100' : 'filter… try size:>10mb',
+    rows: () => collList.items,
+    textFields: engine === 'sql' ? ['name', 'schema'] : ['name'],
+    fields: [
+      { key: 'name', label: 'name', type: 'text', get: o => o.name },
+      { key: 'size', label: 'size, e.g. >10mb', type: 'size', get: o => o.size_bytes },
+    ],
+    presets: [{ label: 'Non-empty', q: 'size:>0' }, { label: '≥ 10 MB', q: 'size:>10mb' }],
+    render: (list) => renderCollTable(list),
+  };
+  if (engine === 'sql') cfg.fields.splice(1, 0, { key: 'schema', label: 'schema', type: 'text', get: o => o.schema });
+  if (fam === 'elasticsearch') {
+    cfg.fields.push({ key: 'docs', label: 'document count', type: 'number', get: o => o.docs });
+    cfg.presets = [{ label: 'Non-empty', q: 'docs:>0' }, { label: '≥ 10 MB', q: 'size:>10mb' }];
+  } else if (fam === 'redis') {
+    cfg.fields.push({ key: 'keys', label: 'key count', type: 'number', get: o => o.keys });
+    cfg.presets = [{ label: 'Has keys', q: 'keys:>0' }];
+  }
+  return cfg;
 }
 
 function renderCollList() {
   const target = document.getElementById('collResults');
   if (!target || !collList) return;
-  const { database, engine, fam, items, sort } = collList;
+  if (!collList.items.length) {
+    target.innerHTML = `<div class="empty-state" style="margin-top:12px">Nothing to show here yet</div>`;
+    return;
+  }
+  const cfg = collFilterCfg();
+  sfRegister(cfg);
+  target.innerHTML = `<div style="margin-top:12px">${sfBarHtml(cfg)}</div><div id="collTable"></div>`;
+  sfApply('coll');
+}
+
+function renderCollTable(list) {
+  const target = document.getElementById('collTable');
+  if (!target || !collList) return;
+  const { database, engine, fam, sort } = collList;
   const label = fam === 'elasticsearch' ? 'Index' : fam === 'redis' ? 'Key namespace' : 'Collection';
   const qPrefill = (name) => {
     if (fam === 'elasticsearch') return { db: name, q: '{\n  "query": { "match_all": {} },\n  "size": 5\n}' };
@@ -2516,20 +2904,20 @@ function renderCollList() {
     data-db="${esc(db)}" ${extra} onclick="openDataGrid(dgSpecFrom(this.dataset))">${ICONS.grid}</button>`;
   const arrow = k => sort.key === k ? `<span class="arrow">${sort.dir === 1 ? '▲' : '▼'}</span>` : '';
   const sizeCell = s => s != null ? fmtSize(s) : '<span style="color:var(--text-muted)">—</span>';
-  const sorted = [...items].sort((a, b) => {
+  const sorted = [...list].sort((a, b) => {
     let av, bv;
     if (sort.key === 'size') { av = a.size_bytes ?? -1; bv = b.size_bytes ?? -1; }
     else { av = (a.name || '').toLowerCase(); bv = (b.name || '').toLowerCase(); }
     return av < bv ? -sort.dir : av > bv ? sort.dir : 0;
   });
   if (!sorted.length) {
-    target.innerHTML = `<div class="empty-state" style="margin-top:12px">Nothing to show here yet</div>`;
+    target.innerHTML = `<div class="empty-state" style="margin-top:12px">No ${label.toLowerCase()}s match your filter.</div>`;
     return;
   }
   let head, rows;
   if (engine === 'mongo') {
     head = `<tr>
-      <th class="sortable" onclick="sortCollList('name')">${label} (${items.length})${arrow('name')}</th>
+      <th class="sortable" onclick="sortCollList('name')">${label}${arrow('name')}</th>
       <th class="sortable" onclick="sortCollList('size')">Size${arrow('size')}</th><th></th></tr>`;
     rows = sorted.map(o => {
       const qp = qPrefill(o.name);
