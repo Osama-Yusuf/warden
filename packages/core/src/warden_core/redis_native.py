@@ -1,0 +1,224 @@
+"""Native Redis / ElastiCache / Valkey access via redis-py (pooled).
+
+Redis has no tables/rows: data is keys with typed values (string/hash/list/set/
+zset/stream) in numbered logical DBs (0..N). So a numbered DB maps to a
+"database", a key namespace (prefix before ':') to a "collection", and each key
+to a "row" of {key, type, ttl, memory, value}. SCAN is used everywhere so a big
+keyspace is never blocked. The free-form console runs raw Redis commands.
+"""
+
+import shlex
+import threading
+
+try:
+    import redis as _redis
+    from redis.exceptions import RedisError
+    HAVE_REDIS = True
+except ImportError:  # pragma: no cover
+    HAVE_REDIS = False
+
+
+_clients = {}
+_clients_lock = threading.Lock()
+_VALUE_CAP = 2000
+_ITEM_CAP = 200
+
+
+def available():
+    return HAVE_REDIS
+
+
+def _client(cfg, user, pwd, db=0):
+    key = (cfg["host"], int(cfg["port"]), bool(cfg.get("tls")), user, pwd, int(db))
+    with _clients_lock:
+        c = _clients.get(key)
+        if c is not None:
+            return c
+        kwargs = dict(host=cfg["host"], port=int(cfg["port"]), db=int(db),
+                      socket_connect_timeout=6, socket_timeout=30,
+                      decode_responses=True, max_connections=8)
+        if pwd:
+            kwargs["password"] = pwd
+        if user:
+            kwargs["username"] = user
+        if cfg.get("tls"):
+            kwargs["ssl"] = True
+            kwargs["ssl_cert_reqs"] = None
+        c = _redis.Redis(**kwargs)
+        _clients[key] = c
+        return c
+
+
+def _run(fn):
+    try:
+        return fn(), None
+    except RedisError as e:
+        return None, str(e)
+    except Exception as e:
+        return None, str(e)
+
+
+def ping(cfg, user, pwd):
+    def go():
+        c = _client(cfg, user, pwd, 0)
+        c.ping()
+        info = c.info("server")
+        return f"redis {info.get('redis_version', '')} @ {cfg['host']}"
+    return _run(go)
+
+
+def list_databases(cfg, user, pwd):
+    """Numbered logical DBs with key counts. Stops early on cluster/restricted
+    setups (ElastiCache cluster mode) where only db0 exists."""
+    def go():
+        c0 = _client(cfg, user, pwd, 0)
+        try:
+            n = int((c0.config_get("databases") or {}).get("databases", 16))
+        except Exception:
+            n = 16
+        out = [{"name": "db0", "size_bytes": None, "keys": int(c0.dbsize())}]
+        for i in range(1, max(1, n)):
+            try:
+                cnt = int(_client(cfg, user, pwd, i).dbsize())
+            except Exception:
+                break
+            if cnt:
+                out.append({"name": f"db{i}", "size_bytes": None, "keys": cnt})
+        return out
+    return _run(go)
+
+
+def _db_num(name):
+    s = str(name or "db0")
+    return int(s[2:]) if s.startswith("db") and s[2:].isdigit() else 0
+
+
+def list_namespaces(cfg, user, pwd, database):
+    """Group keys by prefix before ':' (a common Redis namespacing convention),
+    sampled via SCAN so it never blocks. Always offers '*' (all keys)."""
+    def go():
+        c = _client(cfg, user, pwd, _db_num(database))
+        counts, seen, cursor = {}, 0, 0
+        while True:
+            cursor, keys = c.scan(cursor=cursor, count=500)
+            for k in keys:
+                ns = k.split(":", 1)[0] if ":" in k else "(no prefix)"
+                counts[ns] = counts.get(ns, 0) + 1
+            seen += len(keys)
+            if cursor == 0 or seen >= 20000:
+                break
+        out = [{"name": "*", "size_bytes": None, "keys": int(c.dbsize())}]
+        for ns, cnt in sorted(counts.items(), key=lambda x: -x[1]):
+            out.append({"name": ns, "size_bytes": None, "keys": cnt})
+        return out
+    return _run(go)
+
+
+def _read_value(c, key, ktype):
+    try:
+        if ktype == "string":
+            v = c.get(key)
+            return v if v is None or len(v) <= _VALUE_CAP else v[:_VALUE_CAP] + "…"
+        if ktype == "hash":
+            return c.hgetall(key)
+        if ktype == "list":
+            return c.lrange(key, 0, _ITEM_CAP)
+        if ktype == "set":
+            return sorted(c.sscan_iter(key, count=_ITEM_CAP))[:_ITEM_CAP]
+        if ktype == "zset":
+            return [[m, s] for m, s in c.zrange(key, 0, _ITEM_CAP, withscores=True)]
+        if ktype == "stream":
+            return {"length": c.xlen(key)}
+        return None
+    except RedisError:
+        return None
+
+
+def scan_keys(cfg, user, pwd, database, namespace="*", limit=50, offset=0, search=None):
+    """A page of keys with type / ttl / memory / value. SCAN collects up to
+    offset+limit matching keys (bounded) then slices; value/meta come from one
+    pipeline so a page is a single round trip."""
+    def go():
+        c = _client(cfg, user, pwd, _db_num(database))
+        ns = namespace or "*"
+        term = (search or "").strip()
+        if term:
+            match = f"*{term}*"
+        elif ns and ns != "*":
+            match = f"{ns}:*" if ns != "(no prefix)" else "*"
+        else:
+            match = "*"
+        need, collected, cursor, guard = int(offset) + int(limit), [], 0, 0
+        while len(collected) < need and guard < 500:
+            cursor, keys = c.scan(cursor=cursor, match=match, count=max(int(limit) * 2, 200))
+            collected.extend(keys)
+            guard += 1
+            if cursor == 0:
+                break
+        page = collected[int(offset):int(offset) + int(limit)]
+        pipe = c.pipeline(transaction=False)
+        for k in page:
+            pipe.type(k)
+            pipe.ttl(k)
+            pipe.memory_usage(k)
+        meta = pipe.execute() if page else []
+        rows, ids = [], []
+        for i, k in enumerate(page):
+            ktype = meta[i * 3]
+            ttl = meta[i * 3 + 1]
+            mem = meta[i * 3 + 2]
+            rows.append([k, ktype, (ttl if isinstance(ttl, int) and ttl >= 0 else None),
+                         mem, _read_value(c, k, ktype)])
+            ids.append(k)
+        return {"columns": ["key", "type", "ttl", "memory", "value"],
+                "rows": rows, "ids": ids, "total": None, "filtered": bool(term)}
+    return _run(go)
+
+
+def db_stats(cfg, user, pwd, database):
+    """Header stats for a Redis DB: total keys + memory footprint estimate."""
+    def go():
+        c = _client(cfg, user, pwd, _db_num(database))
+        keys = int(c.dbsize())
+        mem = None
+        try:
+            mem = int((c.info("memory") or {}).get("used_memory", 0)) or None
+        except RedisError:
+            mem = None
+        return {"rows": keys, "size_bytes": mem, "estimated": mem is not None}
+    return _run(go)
+
+
+def info_health(cfg, user, pwd):
+    def go():
+        c = _client(cfg, user, pwd, 0)
+        info = c.info()
+        total_keys = sum(v.get("keys", 0) for k, v in info.items()
+                         if isinstance(v, dict) and k.startswith("db"))
+        return {
+            "version": info.get("redis_version"),
+            "uptime": info.get("uptime_in_seconds"),
+            "role": info.get("role"),
+            "connected_clients": info.get("connected_clients"),
+            "maxclients": info.get("maxclients"),
+            "used_memory": info.get("used_memory"),
+            "used_memory_peak": info.get("used_memory_peak"),
+            "maxmemory": info.get("maxmemory"),
+            "keyspace_hits": info.get("keyspace_hits"),
+            "keyspace_misses": info.get("keyspace_misses"),
+            "ops_per_sec": info.get("instantaneous_ops_per_sec"),
+            "evicted_keys": info.get("evicted_keys"),
+            "total_keys": total_keys,
+        }
+    return _run(go)
+
+
+def run_command(cfg, user, pwd, database, command_str):
+    """Query console: run one raw Redis command line."""
+    def go():
+        parts = shlex.split(command_str)
+        if not parts:
+            raise ValueError("empty command")
+        c = _client(cfg, user, pwd, _db_num(database))
+        return c.execute_command(*parts)
+    return _run(go)

@@ -92,4 +92,9 @@ def engine_family(engine):
         return "mysql"
     if "sqlite" in e:
         return "sqlite"
+    # redis family (check before elasticsearch: "elasticache" contains "elastic")
+    if "redis" in e or "valkey" in e or "elasticache" in e or "memorydb" in e:
+        return "redis"
+    if "elastic" in e or "opensearch" in e:
+        return "elasticsearch"
     return "postgresql"
