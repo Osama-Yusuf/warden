@@ -281,3 +281,79 @@ def set_ttl(cfg, user, pwd, database, key, ttl):
             ok = c.persist(key)
         return {"ok": bool(ok)}
     return _run(go)
+
+
+# ---------------------------------------------------------------------------
+# ACL user management (Redis 6+, Valkey; ElastiCache RBAC may restrict ACL)
+# ---------------------------------------------------------------------------
+
+def _acl_getuser(c, name):
+    raw = c.execute_command("ACL", "GETUSER", name)
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        d = raw
+    else:  # RESP2 flat list [k, v, k, v, ...]
+        d, it = {}, iter(raw)
+        for k in it:
+            d[k] = next(it, None)
+    flags = d.get("flags") or []
+    if isinstance(flags, str):
+        flags = [flags]
+    keys = d.get("keys", "")
+    if isinstance(keys, list):
+        keys = " ".join(keys)
+    channels = d.get("channels", "")
+    if isinstance(channels, list):
+        channels = " ".join(channels)
+    return {
+        "name": name,
+        "enabled": "on" in flags,
+        "commands": d.get("commands", ""),
+        "keys": keys,
+        "channels": channels,
+        "has_password": bool(d.get("passwords")) or "nopass" not in flags,
+        "nopass": "nopass" in flags,
+    }
+
+
+def list_acl_users(cfg, user, pwd):
+    def go():
+        c = _client(cfg, user, pwd, 0)
+        names = c.execute_command("ACL", "USERS") or []
+        out = []
+        for n in names:
+            info = _acl_getuser(c, n)
+            if info:
+                out.append(info)
+        return out
+    return _run(go)
+
+
+def acl_getuser(cfg, user, pwd, name):
+    def go():
+        c = _client(cfg, user, pwd, 0)
+        info = _acl_getuser(c, name)
+        if info is None:
+            raise LookupError("User not found")
+        return info
+    data, err = _run(go)
+    if isinstance(err, str) and "User not found" in err:
+        return None, "User not found"
+    return data, err
+
+
+def acl_setuser(cfg, user, pwd, name, rules):
+    """ACL SETUSER with a list of rule tokens (e.g. ['on', '>pw', '~cache:*', '+@read'])."""
+    def go():
+        c = _client(cfg, user, pwd, 0)
+        c.execute_command("ACL", "SETUSER", name, *rules)
+        return {"ok": True}
+    return _run(go)
+
+
+def acl_deluser(cfg, user, pwd, name):
+    def go():
+        c = _client(cfg, user, pwd, 0)
+        return {"deleted": int(c.execute_command("ACL", "DELUSER", name))}
+    return _run(go)

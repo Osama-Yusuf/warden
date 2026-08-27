@@ -216,3 +216,107 @@ def delete_document(cfg, user, pwd, index, doc_id):
     if err:
         return None, err
     return {"result": (data or {}).get("result")}, None
+
+
+# ---------------------------------------------------------------------------
+# User & role management. Elasticsearch uses the X-Pack _security API;
+# OpenSearch uses the security-plugin _plugins/_security API (different shapes),
+# so we detect the distribution and route accordingly.
+# ---------------------------------------------------------------------------
+
+def _is_opensearch(cfg, user, pwd):
+    data, _ = _req(cfg, user, pwd, "GET", "/")
+    return ((data or {}).get("version") or {}).get("distribution", "").lower() == "opensearch"
+
+
+def list_users(cfg, user, pwd):
+    if _is_opensearch(cfg, user, pwd):
+        data, err = _req(cfg, user, pwd, "GET", "/_plugins/_security/api/internalusers")
+        if err:
+            return None, err
+        return [{"user": n, "roles": (i.get("opendistro_security_roles") or []) + (i.get("backend_roles") or []),
+                 "enabled": True, "reserved": bool(i.get("reserved"))}
+                for n, i in (data or {}).items()], None
+    data, err = _req(cfg, user, pwd, "GET", "/_security/user")
+    if err:
+        return None, err
+    out = []
+    for name, info in (data or {}).items():
+        out.append({"user": name, "roles": info.get("roles", []),
+                    "enabled": info.get("enabled", True),
+                    "full_name": info.get("full_name"), "email": info.get("email"),
+                    "reserved": bool((info.get("metadata") or {}).get("_reserved"))})
+    return out, None
+
+
+def user_info(cfg, user, pwd, name):
+    if _is_opensearch(cfg, user, pwd):
+        data, err = _req(cfg, user, pwd, "GET", f"/_plugins/_security/api/internalusers/{name}")
+        if err:
+            return None, ("User not found" if "404" in err else err)
+        info = (data or {}).get(name) or {}
+        return {"user": name, "roles": (info.get("opendistro_security_roles") or []) + (info.get("backend_roles") or []),
+                "enabled": True, "reserved": bool(info.get("reserved"))}, None
+    data, err = _req(cfg, user, pwd, "GET", f"/_security/user/{name}")
+    if err:
+        return None, ("User not found" if "404" in err else err)
+    info = (data or {}).get(name)
+    if not info:
+        return None, "User not found"
+    return {"user": name, "roles": info.get("roles", []), "enabled": info.get("enabled", True),
+            "full_name": info.get("full_name"), "email": info.get("email"),
+            "reserved": bool((info.get("metadata") or {}).get("_reserved"))}, None
+
+
+def list_roles(cfg, user, pwd):
+    if _is_opensearch(cfg, user, pwd):
+        data, err = _req(cfg, user, pwd, "GET", "/_plugins/_security/api/roles")
+        return (sorted((data or {}).keys()) if not err else None), err
+    data, err = _req(cfg, user, pwd, "GET", "/_security/role")
+    return (sorted((data or {}).keys()) if not err else None), err
+
+
+def create_user(cfg, user, pwd, name, password, roles):
+    if _is_opensearch(cfg, user, pwd):
+        body = {"password": password, "backend_roles": roles or []}
+        data, err = _req(cfg, user, pwd, "PUT", f"/_plugins/_security/api/internalusers/{name}", body)
+        return (bool(not err), err)
+    body = {"password": password, "roles": roles or []}
+    data, err = _req(cfg, user, pwd, "POST", f"/_security/user/{name}", body)
+    return (bool(not err), err)
+
+
+def set_password(cfg, user, pwd, name, password):
+    if _is_opensearch(cfg, user, pwd):
+        body = [{"op": "replace", "path": "/password", "value": password}]
+        _d, err = _req(cfg, user, pwd, "PATCH", f"/_plugins/_security/api/internalusers/{name}", body)
+        return (bool(not err), err)
+    _d, err = _req(cfg, user, pwd, "POST", f"/_security/user/{name}/_password", {"password": password})
+    return (bool(not err), err)
+
+
+def set_roles(cfg, user, pwd, name, roles):
+    """Replace a user's role set (used to grant/revoke by computing the new set)."""
+    if _is_opensearch(cfg, user, pwd):
+        body = [{"op": "replace", "path": "/backend_roles", "value": roles}]
+        _d, err = _req(cfg, user, pwd, "PATCH", f"/_plugins/_security/api/internalusers/{name}", body)
+        return (bool(not err), err)
+    # X-Pack has no partial user update; re-PUT the user preserving other fields.
+    cur, err = user_info(cfg, user, pwd, name)
+    if err:
+        return False, err
+    body = {"roles": roles}
+    if cur.get("full_name"):
+        body["full_name"] = cur["full_name"]
+    if cur.get("email"):
+        body["email"] = cur["email"]
+    _d, err = _req(cfg, user, pwd, "PUT", f"/_security/user/{name}", body)
+    return (bool(not err), err)
+
+
+def delete_user(cfg, user, pwd, name):
+    if _is_opensearch(cfg, user, pwd):
+        _d, err = _req(cfg, user, pwd, "DELETE", f"/_plugins/_security/api/internalusers/{name}")
+        return (bool(not err), err)
+    _d, err = _req(cfg, user, pwd, "DELETE", f"/_security/user/{name}")
+    return (bool(not err), err)
