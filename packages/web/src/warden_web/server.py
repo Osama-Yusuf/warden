@@ -124,6 +124,19 @@ def mysql_account(target):
     return f"'{name}'@'{host}'"
 
 
+# MySQL keeps account-lock state in mysql.user.account_locked; MariaDB drops
+# that column from the mysql.user view and stores the flag in mysql.global_priv
+# (JSON). Detect the flavour once per host so the right query is used.
+_MARIADB_CACHE = {}
+
+def is_mariadb(cfg, user, pwd):
+    key = (cfg.get("host"), cfg.get("port"))
+    if key not in _MARIADB_CACHE:
+        code, out, _ = my_query(cfg, user, pwd, "SELECT VERSION()")
+        _MARIADB_CACHE[key] = (code == 0 and "mariadb" in out.lower())
+    return _MARIADB_CACHE[key]
+
+
 def validate_mysql_privilege(priv):
     upper = str(priv).strip().upper()
     if upper not in {p.upper() for p in MYSQL_PRIVILEGES}:
@@ -389,9 +402,16 @@ def api_list_users(body):
                            "reserved": u["name"] == "default"} for u in (data or [])]}
 
     if fam == "mysql":
-        sql = ("SELECT user, host, account_locked FROM mysql.user "
-               "WHERE user NOT IN ('mysql.sys','mysql.session','mysql.infoschema',"
-               "'rdsadmin','rdsrepladmin') ORDER BY user, host")
+        excl = ("'mysql.sys','mysql.session','mysql.infoschema','mariadb.sys',"
+                "'rdsadmin','rdsrepladmin'")
+        if is_mariadb(cfg, user, pwd):
+            sql = ("SELECT User, Host, IF(JSON_VALUE(Priv,'$.account_locked')=1,'Y','N') "
+                   "FROM mysql.global_priv "
+                   f"WHERE User NOT IN ({excl}) AND JSON_VALUE(Priv,'$.is_role') IS NULL "
+                   "ORDER BY User, Host")
+        else:
+            sql = (f"SELECT user, host, account_locked FROM mysql.user "
+                   f"WHERE user NOT IN ({excl}) ORDER BY user, host")
         code, out, err = my_query(cfg, user, pwd, sql)
         if code != 0:
             return {"error": err}
@@ -483,10 +503,13 @@ def api_user_info(body):
             return {"error": err.strip() or "User not found"}
         grants = [l for l in out.strip().split("\n") if l.strip()]
         name, _, host = target.partition("@")
-        code2, out2, _ = my_query(
-            cfg, user, pwd,
-            "SELECT account_locked FROM mysql.user WHERE user = '%s' AND host = '%s'"
-            % (name.replace("'", "''"), (host or '%').replace("'", "''")))
+        nm, ht = name.replace("'", "''"), (host or '%').replace("'", "''")
+        if is_mariadb(cfg, user, pwd):
+            lock_sql = ("SELECT IF(JSON_VALUE(Priv,'$.account_locked')=1,'Y','N') "
+                        f"FROM mysql.global_priv WHERE User = '{nm}' AND Host = '{ht}'")
+        else:
+            lock_sql = f"SELECT account_locked FROM mysql.user WHERE user = '{nm}' AND host = '{ht}'"
+        code2, out2, _ = my_query(cfg, user, pwd, lock_sql)
         locked = out2.strip() == "Y"
         return {"user": target, "engine_family": "mysql", "locked": locked,
                 "can_login": not locked, "grant_statements": grants}
@@ -2295,9 +2318,18 @@ def api_audit_run(body):
     if fam in ("elasticsearch", "redis"):
         return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
     if fam == "mysql":
-        sql = ("SELECT user, host, account_locked, Super_priv, Grant_priv, Create_user_priv, "
-               "Insert_priv, Update_priv, Delete_priv, Drop_priv FROM mysql.user "
-               "WHERE user NOT IN ('mysql.sys','mysql.session','mysql.infoschema','rdsadmin','rdsrepladmin')")
+        excl = ("'mysql.sys','mysql.session','mysql.infoschema','mariadb.sys',"
+                "'rdsadmin','rdsrepladmin'")
+        if is_mariadb(cfg, adm_user, adm_pass):
+            sql = ("SELECT u.user, u.host, IF(JSON_VALUE(g.Priv,'$.account_locked')=1,'Y','N'), "
+                   "u.Super_priv, u.Grant_priv, u.Create_user_priv, u.Insert_priv, u.Update_priv, "
+                   "u.Delete_priv, u.Drop_priv "
+                   "FROM mysql.user u JOIN mysql.global_priv g ON u.user=g.User AND u.host=g.Host "
+                   f"WHERE u.user NOT IN ({excl})")
+        else:
+            sql = ("SELECT user, host, account_locked, Super_priv, Grant_priv, Create_user_priv, "
+                   "Insert_priv, Update_priv, Delete_priv, Drop_priv FROM mysql.user "
+                   f"WHERE user NOT IN ({excl})")
         code, out, err = my_query(cfg, adm_user, adm_pass, sql)
         if code != 0:
             return {"error": err}
