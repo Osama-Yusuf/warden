@@ -2,9 +2,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%230d1117"/><ellipse cx="32" cy="19" rx="16" ry="7" fill="none" stroke="%2358a6ff" stroke-width="4.5"/><path d="M16 19v26c0 3.9 7.2 7 16 7s16-3.1 16-7V19" fill="none" stroke="%2358a6ff" stroke-width="4.5"/><path d="M16 32c0 3.9 7.2 7 16 7s16-3.1 16-7" fill="none" stroke="%2358a6ff" stroke-width="4.5" opacity="0.55"/></svg>'>
-<link rel="preconnect" href="https://fonts.googleapis.com">
+<!-- Fonts load non-blocking: the app paints instantly with system fonts and
+     upgrades to IBM Plex only when (and if) the webfont arrives. Never blocks
+     startup, works fully offline. -->
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" media="print" onload="this.media='all'; this.onload=null"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
 :root {
   --bg: #0b0e14;
@@ -297,6 +301,29 @@ input[type="password"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe 
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
   background: linear-gradient(160deg, var(--accent-soft), transparent 60%), var(--surface);
 }
+.onboard-hero { padding: 30px 28px; text-align: center; }
+.onboard-logo {
+  width: 54px; height: 54px; margin: 0 auto 14px; border-radius: 14px;
+  display: flex; align-items: center; justify-content: center; color: var(--accent);
+  background: linear-gradient(145deg, var(--accent-soft), transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.onboard-logo svg { width: 28px; height: 28px; }
+.onboard-title { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; color: var(--text-strong); margin-bottom: 8px; }
+.onboard-lead { font-size: 14px; line-height: 1.6; color: var(--text-muted); max-width: 620px; margin: 0 auto 22px; }
+.onboard-steps { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.ob-step {
+  display: flex; align-items: flex-start; gap: 10px; text-align: left;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; width: 210px;
+}
+.ob-num {
+  flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--accent-bg); color: #fff; font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.ob-step b { display: block; font-size: 13px; color: var(--text-strong); font-weight: 600; }
+.ob-step span { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; }
 .card-meta { font-size: 12px; color: var(--text-muted); margin: -6px 0 12px; }
 .table-wrap { overflow: auto; max-height: 68vh; border: 1px solid var(--border); border-radius: var(--radius); }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
@@ -2684,10 +2711,17 @@ function viewEnvs() {
   const banner = connected ? '' : hasAny
     ? `<div class="card onboard"><h2>${ICONS.bolt} Ready when you are</h2>
         <p style="color:var(--text-muted); line-height:1.6; margin:0">Pick a connection and engine in the top bar, drop in your admin login, and hit <strong>Connect</strong>. warden takes it from there.</p></div>`
-    : `<div class="card onboard"><h2>${ICONS.bolt} Welcome to warden</h2>
-        <p style="color:var(--text-muted); line-height:1.7; margin:0 0 14px">It stands at the door of your databases: who gets in, what they can touch, and a note in the logbook for every change. Point it at your first database to begin.</p>
-        <div style="display:flex; gap:8px; flex-wrap:wrap">
-          <button class="btn btn-primary" onclick="document.getElementById('ceName').focus()">Add a connection</button>
+    : `<div class="card onboard onboard-hero">
+        <div class="onboard-logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="7" ry="2.8"/><path d="M5 5.5v13c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-13"/><path d="M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8"/></svg></div>
+        <h1 class="onboard-title">Welcome to warden</h1>
+        <p class="onboard-lead">It stands at the door of your databases. Who gets in, what they can touch, and a note in the logbook for every change. Works with MongoDB, PostgreSQL, MySQL and SQLite.</p>
+        <div class="onboard-steps">
+          <div class="ob-step"><span class="ob-num">1</span><div><b>Add a connection</b><span>Host and admin login, or just a SQLite file</span></div></div>
+          <div class="ob-step"><span class="ob-num">2</span><div><b>Connect</b><span>Pick it in the top bar and hit Connect</span></div></div>
+          <div class="ob-step"><span class="ob-num">3</span><div><b>Take the wheel</b><span>Manage users, run queries, audit access</span></div></div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:18px">
+          <button class="btn btn-primary" onclick="document.getElementById('ceName').scrollIntoView({behavior:'smooth',block:'center'}); document.getElementById('ceName').focus()">Add my first connection</button>
           <button class="btn btn-ghost" onclick="document.getElementById('beoFile').click()">Import a backup</button>
         </div></div>`;
   setContent(banner + `<div class="card"><h2>${ICONS.sliders} Connections</h2>
