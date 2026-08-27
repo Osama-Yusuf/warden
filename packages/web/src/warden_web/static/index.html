@@ -107,6 +107,8 @@ body {
 }
 .icon-btn:hover { background: var(--surface-hover); border-color: var(--border-strong); }
 .icon-btn svg { width: 17px; height: 17px; display: block; }
+.ni { width: 15px; height: 15px; flex-shrink: 0; }
+.btn .ni { width: 15px; height: 15px; }
 .icon-btn.on { border-color: var(--warning); color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
 .brand-logo {
   width: 30px; height: 30px; border-radius: 8px;
@@ -381,11 +383,24 @@ tbody tr:hover td { background: var(--surface-hover); }
   z-index: 100; align-items: center; justify-content: center;
 }
 .modal-overlay.open { display: flex; }
+#panelModal { z-index: 95; }
+#modal { z-index: 120; }
 .modal {
   background: var(--surface); border: 1px solid var(--border-strong);
   border-radius: 12px; padding: 24px; max-width: 480px; width: 90%;
   box-shadow: var(--shadow); animation: pop 0.16s ease;
 }
+.modal-wide { max-width: 780px; max-height: 86vh; overflow-y: auto; position: relative; padding: 24px 26px; }
+.modal-x {
+  position: absolute; top: 14px; right: 16px; width: 30px; height: 30px;
+  border: none; background: transparent; color: var(--text-muted);
+  font-size: 22px; line-height: 1; cursor: pointer; border-radius: 7px; z-index: 2;
+}
+.modal-x:hover { background: var(--surface-hover); color: var(--text); }
+.modal-wide .card { border: none; padding: 0; margin: 0; background: none; animation: none; }
+.modal-wide h2:first-child { margin-top: 0; padding-right: 34px; }
+.stat-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.stat-strip .chip { flex: 1; min-width: 120px; }
 @keyframes pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
 .modal h3 { font-size: 16px; font-weight: 600; color: var(--text-strong); margin-bottom: 12px; }
 .modal p { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; line-height: 1.55; }
@@ -559,6 +574,14 @@ th.sortable .arrow { font-size: 8px; margin-left: 3px; }
     <h3 id="modalTitle"></h3>
     <div id="modalBody"></div>
     <div class="actions" id="modalActions"></div>
+  </div>
+</div>
+
+<!-- Wide panel modal (user management, etc.) -->
+<div class="modal-overlay" id="panelModal">
+  <div class="modal modal-wide">
+    <button class="modal-x" onclick="closePanel()" title="Close">&times;</button>
+    <div id="panelBody"></div>
   </div>
 </div>
 
@@ -856,80 +879,30 @@ function updateEngines(restoring = false) {
 // ── Sidebar: data-driven nav ──
 function navModel() {
   const fam = engineFamily(currentEngine);
-  const isDocdb = fam === 'documentdb';
   if (fam === 'sqlite') {
     return [
-      { label: 'Query & data', items: [
-        { id: 'query', icon: ICONS.term, label: 'Run query' },
-        { id: 'databases', icon: ICONS.db, label: 'Database', badge: 'databases' },
-        { id: 'collections', icon: ICONS.grid, label: 'Tables' },
-        { id: 'health', icon: ICONS.pulse, label: 'Health' },
-      ]},
-      { label: 'Settings', items: [
-        { id: 'audit', icon: ICONS.scroll, label: 'Activity log', always: true },
-        { id: 'envs', icon: ICONS.sliders, label: 'Connections', always: true },
-      ]},
+      { id: 'databases', icon: ICONS.db, label: 'Databases', badge: 'databases' },
+      { id: 'query', icon: ICONS.term, label: 'Query' },
+      { id: 'audit', icon: ICONS.scroll, label: 'Activity', always: true },
+      { id: 'envs', icon: ICONS.sliders, label: 'Connections', always: true },
     ];
   }
   return [
-    { label: 'Users & access', items: [
-      { id: 'users', icon: ICONS.users, label: 'List users', badge: 'users' },
-      { id: 'userinfo', icon: ICONS.search, label: 'User info' },
-      { id: 'create', icon: ICONS.plus, label: 'Create user', mutating: true },
-      { id: 'reset', icon: ICONS.key, label: 'Reset password', mutating: true },
-      { id: 'grant', icon: ICONS.shield, label: isDocdb ? 'Grant roles' : 'Grant privileges', mutating: true },
-      { id: 'revoke', icon: ICONS.ban, label: isDocdb ? 'Revoke roles' : 'Revoke privileges', mutating: true },
-      ...(!isDocdb ? [{ id: 'toggle', icon: ICONS.lock, label: fam === 'mysql' ? 'Lock / unlock' : 'Enable / disable', mutating: true }] : []),
-      { id: 'drop', icon: ICONS.trash, label: 'Drop user', danger: true, mutating: true },
-    ]},
-    { label: 'Query & data', items: [
-      { id: 'query', icon: ICONS.term, label: 'Run query' },
-      { id: 'databases', icon: ICONS.db, label: 'Databases', badge: 'databases' },
-      { id: 'collections', icon: ICONS.grid, label: isDocdb ? 'Collections' : 'Tables' },
-      { id: 'health', icon: ICONS.pulse, label: 'Cluster health' },
-    ]},
-    { label: 'Security', items: [
-      { id: 'audits', icon: ICONS.shield, label: 'Access audits', badge: 'audits' },
-      { id: 'audit', icon: ICONS.scroll, label: 'Activity log', always: true },
-    ]},
-    { label: 'Settings', items: [
-      { id: 'envs', icon: ICONS.sliders, label: 'Connections', always: true },
-    ]},
+    { id: 'users', icon: ICONS.users, label: 'Users', badge: 'users' },
+    { id: 'databases', icon: ICONS.db, label: 'Databases', badge: 'databases' },
+    { id: 'query', icon: ICONS.term, label: 'Query' },
+    { id: 'audits', icon: ICONS.shield, label: 'Audits', badge: 'audits' },
+    { id: 'audit', icon: ICONS.scroll, label: 'Activity', always: true },
+    { id: 'envs', icon: ICONS.sliders, label: 'Connections', always: true },
   ];
-}
-
-// Groups start collapsed to keep the sidebar calm. The one holding the current
-// view always opens, and the user's manual toggles are remembered.
-function groupCollapsed(label) {
-  const st = prefs.navCollapsed || {};
-  if (label in st) return st[label];
-  return true;
-}
-function toggleGroup(gi) {
-  const header = document.querySelector(`.group-label[data-gi="${gi}"]`);
-  const group = document.querySelector(`.nav-group[data-gi="${gi}"]`);
-  if (!header || !group) return;
-  const willCollapse = !group.classList.contains('collapsed');
-  header.classList.toggle('collapsed', willCollapse);
-  group.classList.toggle('collapsed', willCollapse);
-  const st = { ...(prefs.navCollapsed || {}) };
-  st[header.dataset.g] = willCollapse;
-  savePrefs({ navCollapsed: st });
 }
 
 const VIEWS = {
   users: () => viewListUsers(),
-  userinfo: () => viewUserInfo(),
-  create: () => viewCreateUser(),
-  reset: () => viewResetPassword(),
-  grant: () => viewGrant(),
-  revoke: () => viewRevoke(),
-  toggle: () => viewToggleLogin(),
-  drop: () => viewDropUser(),
   databases: () => viewDatabases(),
   collections: () => viewCollections(),
-  query: () => viewQuery(),
   health: () => viewHealth(),
+  query: () => viewQuery(),
   audits: () => viewAudits(),
   audit: () => viewAuditLog(),
   envs: () => viewEnvs(),
@@ -938,24 +911,13 @@ const VIEWS = {
 function renderNav() {
   const box = document.getElementById('navSections');
   let html = '';
-  navModel().forEach((group, gi) => {
-    const hasActive = group.items.some(i => i.id === currentView);
-    const collapsed = groupCollapsed(group.label) && !hasActive;
-    html += `<button class="group-label${collapsed ? ' collapsed' : ''}" data-gi="${gi}" data-g="${esc(group.label)}" onclick="toggleGroup(${gi})">
-      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
-      <span>${esc(group.label)}</span><span class="g-count">${group.items.length}</span></button>`;
-    html += `<div class="nav-group${collapsed ? ' collapsed' : ''}" data-gi="${gi}"><div class="nav-group-inner">`;
-    for (const item of group.items) {
-      const roLocked = prefs.readOnly && item.mutating;
-      const dis = ((connected || item.always) && !roLocked) ? '' : 'disabled';
-      const badge = item.badge ? `<span class="nav-badge" id="badge-${item.badge}" style="display:none"></span>` : '';
-      const tip = roLocked ? 'Disabled while read-only mode is on'
-        : dis ? 'Connect to use this' : esc(item.label);
-      html += `<button id="nav-${item.id}" class="nav-item${item.danger ? ' danger' : ''}" ${dis} title="${tip}"
-        onclick="navigate('${item.id}')">${item.icon}<span>${esc(item.label)}</span>${roLocked ? '<span class="nav-badge">🛡</span>' : badge}</button>`;
-    }
-    html += `</div></div>`;
-  });
+  for (const item of navModel()) {
+    const dis = (connected || item.always) ? '' : 'disabled';
+    const badge = item.badge ? `<span class="nav-badge" id="badge-${item.badge}" style="display:none"></span>` : '';
+    const tip = dis ? 'Connect to use this' : esc(item.label);
+    html += `<button id="nav-${item.id}" class="nav-item" ${dis} title="${tip}"
+      onclick="navigate('${item.id}')">${item.icon}<span>${esc(item.label)}</span>${badge}</button>`;
+  }
   box.innerHTML = html;
   markActive(currentView);
   renderBadges();
@@ -1013,8 +975,8 @@ function qfGo(type, name) {
   const input = document.getElementById('qfInput');
   input.value = '';
   qfRender();
-  if (type === 'user') { markActive('userinfo'); viewUserInfoFor(name); }
-  else { markActive('collections'); viewCollections(name); }
+  if (type === 'user') { markActive('users'); viewUserInfoFor(name); }
+  else { markActive('databases'); viewCollections(name); }
 }
 document.addEventListener('DOMContentLoaded', () => {
   const qf = document.getElementById('qfInput');
@@ -1178,6 +1140,12 @@ function showModal(title, bodyHtml, actions) {
 }
 function closeModal() { document.getElementById('modal').classList.remove('open'); }
 
+function showPanel(bodyHtml) {
+  document.getElementById('panelBody').innerHTML = bodyHtml;
+  document.getElementById('panelModal').classList.add('open');
+}
+function closePanel() { document.getElementById('panelModal').classList.remove('open'); }
+
 function disconnected() {
   connected = false;
   cachedUsers = [];
@@ -1227,7 +1195,7 @@ async function testConnection() {
       renderNav();
       toast(`Connected · ${document.getElementById('envSelect').value} / ${currentEngine.replace(/_/g, ' ')}`, 'success');
       refreshCache();
-      const ids = navModel().flatMap(g => g.items.map(i => i.id));
+      const ids = navModel().map(i => i.id);
       const landing = (prefs.lastView && ids.includes(prefs.lastView)) ? prefs.lastView : ids[0];
       navigate(landing);
     } else {
@@ -1255,68 +1223,74 @@ function renderWelcome() {
 
 // ── Views ──
 
+let allUsers = [];
+
 async function viewListUsers() {
   if (!requireConnection()) return;
   setContent(loading('Fetching users…'));
   const res = await apiPost('/api/list-users');
   if (res.error) { setContent(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`); return; }
-  const isDocdb = currentEngine.startsWith('document');
+  allUsers = res.users || [];
+  const fam = engineFamily(currentEngine);
+  const title = fam === 'mysql' ? 'MySQL Accounts' : fam === 'documentdb' ? 'DocumentDB Users' : 'PostgreSQL Users';
+  const isDocdb = fam === 'documentdb';
+  const cols = isDocdb
+    ? '<th>Username</th><th>Auth DB</th><th>Roles</th><th></th>'
+    : '<th>Username</th><th>Status</th><th>Flags</th><th>Expires</th><th></th>';
+  setContent(`<div class="card"><h2>${ICONS.users} ${title}</h2>
+    <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap">
+      <div class="qf" style="width:260px; height:34px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.2"/><path d="M15.8 15.8L21 21"/></svg>
+        <input id="userFilter" placeholder="filter users…" oninput="renderUserRows()" autocomplete="off">
+      </div>
+      <span id="userCount" style="font-size:12px; color:var(--text-muted)"></span>
+      <div style="flex:1"></div>
+      <button class="btn btn-ghost" onclick="openLookupModal()">${ICONS.search} Look up user</button>
+      <button class="btn btn-success" onclick="openCreateUserModal()">${ICONS.plus} Create user</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr>${cols}</tr></thead>
+      <tbody id="userRows"></tbody>
+    </table></div></div>`);
+  renderUserRows();
+}
+
+function renderUserRows() {
+  const tbody = document.getElementById('userRows');
+  if (!tbody) return;
+  const fam = engineFamily(currentEngine);
+  const isDocdb = fam === 'documentdb';
+  const q = (document.getElementById('userFilter')?.value || '').trim().toLowerCase();
+  const list = q ? allUsers.filter(u => u.user.toLowerCase().includes(q)) : allUsers;
+  const manage = u => `<button class="btn btn-ghost btn-sm" data-user="${esc(u.user)}" onclick="viewUserInfoFor(this.dataset.user)">Manage</button>`;
   let rows = '';
-  if (isDocdb) {
-    for (const u of res.users) {
+  for (const u of list) {
+    if (isDocdb) {
       const roles = u.roles.map(r => `<span class="pill pill-ok">${esc(r)}</span>`).join(' ');
-      rows += `<tr>
-        <td class="mono">${esc(u.user)}</td>
-        <td>${esc(u.db)}</td>
+      rows += `<tr><td class="mono">${esc(u.user)}</td><td>${esc(u.db)}</td>
         <td>${roles || '<span class="pill pill-muted">none</span>'}</td>
-        <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-user="${esc(u.user)}" onclick="markActive('userinfo');viewUserInfoFor(this.dataset.user)">Manage</button></td>
-      </tr>`;
-    }
-    setContent(`<div class="card"><h2>${ICONS.users} DocumentDB Users</h2>
-      <p class="card-meta">${res.users.length} users · click Manage to grant, revoke, reset or drop</p>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Username</th><th>Auth DB</th><th>Roles</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div></div>`);
-  } else {
-    for (const u of res.users) {
-      const status = u.can_login
-        ? '<span class="pill pill-ok">active</span>'
-        : '<span class="pill pill-danger">disabled</span>';
+        <td style="text-align:right">${manage(u)}</td></tr>`;
+    } else {
+      const status = u.can_login ? '<span class="pill pill-ok">active</span>' : '<span class="pill pill-danger">disabled</span>';
       const flags = [];
       if (u.superuser) flags.push('superuser');
       if (u.createdb) flags.push('createdb');
       if (u.createrole) flags.push('createrole');
-      rows += `<tr>
-        <td class="mono">${esc(u.user)}</td>
-        <td>${status}</td>
+      rows += `<tr><td class="mono">${esc(u.user)}</td><td>${status}</td>
         <td>${flags.join(', ') || '—'}</td>
         <td style="color:var(--text-muted)">${u.valid_until === 'never' ? '—' : esc(u.valid_until)}</td>
-        <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-user="${esc(u.user)}" onclick="markActive('userinfo');viewUserInfoFor(this.dataset.user)">Manage</button></td>
-      </tr>`;
+        <td style="text-align:right">${manage(u)}</td></tr>`;
     }
-    setContent(`<div class="card"><h2>${ICONS.users} ${engineFamily(currentEngine) === 'mysql' ? 'MySQL Accounts' : 'PostgreSQL Users'}</h2>
-      <p class="card-meta">${res.users.length} roles · click Manage to grant, revoke, reset or drop</p>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Username</th><th>Status</th><th>Flags</th><th>Expires</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div></div>`);
   }
-}
-
-function viewUserInfo() {
-  if (!requireConnection()) return;
-  setContent(`<div class="card"><h2>${ICONS.search} User Info</h2>
-    <div class="form-row">
-      <div class="form-field"><label>Username</label><input id="infoUser" list="userList" placeholder="type to search users…"></div>
-      <button class="btn btn-primary" onclick="viewUserInfoFor(document.getElementById('infoUser').value)">Look up</button>
-    </div></div>`);
+  tbody.innerHTML = rows || `<tr><td colspan="5" style="color:var(--text-muted)">No matching users.</td></tr>`;
+  const c = document.getElementById('userCount');
+  if (c) c.textContent = q ? `${list.length} of ${allUsers.length}` : `${allUsers.length} total`;
 }
 
 async function viewUserInfoFor(username) {
-  setContent(loading('Looking up user…'));
+  showPanel(loading('Looking up user…'));
   const res = await apiPost('/api/user-info', { username });
-  if (res.error) { setContent(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`); return; }
+  if (res.error) { showPanel(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`); return; }
   const isDocdb = currentEngine.startsWith('document');
   const uAttr = esc(res.user);
   let html = `<div class="card"><h2>${ICONS.users} User: <span class="mono" style="font-size:14px">${uAttr}</span></h2>`;
@@ -1337,11 +1311,11 @@ async function viewUserInfoFor(username) {
       ? `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, false)">Lock account</button>`
       : `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, true)">Unlock account</button>`;
     html += `<div class="user-toolbar">
-      <button class="btn btn-primary" data-user="${uAttr}" onclick="markActive('reset');viewResetPassword(this.dataset.user)">Reset password</button>
+      <button class="btn btn-primary" data-user="${uAttr}" onclick="openResetModal(this.dataset.user)">Reset password</button>
       ${lockBtn}
       <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">Drop user</button>
     </div></div>`;
-    setContent(html);
+    showPanel(html);
     return;
   }
   if (isDocdb) {
@@ -1402,12 +1376,93 @@ async function viewUserInfoFor(username) {
     ? `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, false)">🔒 Disable login</button>`
     : `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, true)">🔓 Enable login</button>`);
   html += `<div class="user-toolbar">
-    <button class="btn btn-primary" data-user="${uAttr}" onclick="markActive('reset');viewResetPassword(this.dataset.user)">🔑 Reset password</button>
+    <button class="btn btn-primary" data-user="${uAttr}" onclick="openResetModal(this.dataset.user)">🔑 Reset password</button>
     ${pgButtons}
     <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">🗑️ Drop user</button>
   </div>`;
   html += '</div>';
-  setContent(html);
+  showPanel(html);
+}
+
+// ── User action modals (the Users page is a hub) ──
+
+function openLookupModal() {
+  if (!requireConnection()) return;
+  showModal('Look up a user', `<div class="form-field" style="margin-bottom:0"><label>Username</label>
+    <input id="luUser" list="userList" placeholder="type to search users…" style="width:100%"></div>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Open', cls: 'btn-primary', fn: () => { const u = document.getElementById('luUser')?.value.trim(); if (u) viewUserInfoFor(u); } },
+  ]);
+  setTimeout(() => document.getElementById('luUser')?.focus(), 40);
+}
+
+function openResetModal(username) {
+  showModal(`Reset password: ${esc(username)}`, `<div class="form-field" style="margin-bottom:0"><label>New password (blank = auto-generate)</label>
+    <input id="rmPass" type="password" placeholder="auto-generate" style="width:100%"></div>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Reset password', cls: 'btn-primary', fn: async () => {
+      const password = document.getElementById('rmPass')?.value || '';
+      const res = await apiPost('/api/reset-password', { username, password });
+      if (res.ok) showModal('Password reset', `<p>New password for <strong>${esc(username)}</strong>. Save it, it won't show again:</p>${passwordHtml(res.password)}`, [{ label: 'Done', cls: 'btn-primary' }]);
+      else toast(res.error || 'Failed', 'error');
+    }},
+  ]);
+}
+
+function openCreateUserModal() {
+  if (!requireConnection()) return;
+  const fam = engineFamily(currentEngine);
+  const isDocdb = fam === 'documentdb';
+  let extra = '';
+  if (fam === 'documentdb') {
+    const roleOpts = (config.docdb_roles || []).map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
+    extra = `<div class="form-field"><label>Initial role</label><select id="cmRole">${roleOpts}</select></div>
+      <div class="form-field"><label>On database</label><input id="cmRoleDb" list="dbList" placeholder="type to search databases…"></div>`;
+  } else if (fam !== 'mysql') {
+    extra = `<div class="form-field"><label>Allow login</label><select id="cmLogin"><option value="true">Yes</option><option value="false">No</option></select></div>`;
+  }
+  const userPh = fam === 'mysql' ? 'name@host (host defaults to %)' : 'username';
+  showPanel(`<div class="card"><h2>${ICONS.plus} Create user</h2>
+    <div class="form-row">
+      <div class="form-field"><label>Username</label><input id="cmUser" placeholder="${esc(userPh)}"></div>
+      <div class="form-field"><label>Password (blank = generate)</label><input id="cmPass" type="password" placeholder="auto-generate"></div>
+      ${extra}
+    </div>
+    ${isDocdb ? '<p class="card-meta">More roles can be granted afterwards from the user panel.</p>' : ''}
+    <div style="display:flex; gap:8px; margin-top:6px">
+      <button class="btn btn-success" onclick="doCreateFromModal()">Create user</button>
+      <button class="btn btn-ghost" onclick="closePanel()">Cancel</button>
+    </div>
+    <div id="cmResult"></div>
+  </div>`);
+  setTimeout(() => document.getElementById('cmUser')?.focus(), 40);
+}
+
+async function doCreateFromModal() {
+  const fam = engineFamily(currentEngine);
+  const username = document.getElementById('cmUser').value.trim();
+  if (!username) { toast('Username required', 'error'); return; }
+  const password = document.getElementById('cmPass')?.value || '';
+  const extra = {};
+  if (fam === 'documentdb') {
+    const role = document.getElementById('cmRole').value;
+    const db = document.getElementById('cmRoleDb').value.trim();
+    if (!db) { toast('Database required for the initial role', 'error'); return; }
+    extra.roles = [{ role, db }];
+  } else if (fam !== 'mysql') {
+    extra.can_login = document.getElementById('cmLogin').value === 'true';
+  }
+  const res = await apiPost('/api/create-user', { username, password, ...extra });
+  if (res.ok) {
+    refreshCache();
+    const box = document.getElementById('cmResult');
+    if (box) box.innerHTML = `<div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border)">
+      <p style="color:var(--warning); font-weight:600; margin-bottom:6px">Saved. Copy this password now, it won't show again:</p>
+      ${passwordHtml(res.password)}</div>`;
+    if (currentView === 'users') viewListUsers();
+  } else {
+    toast(res.error || 'Failed', 'error');
+  }
 }
 
 // ── Direct actions from the user info page ──
@@ -1753,17 +1808,57 @@ function doDropUser() {
   confirmDropUser(username);
 }
 
+let dbHealth = null;
 async function viewDatabases() {
   if (!requireConnection()) return;
   setContent(loading('Listing databases…'));
+  let health = null;
+  try { health = await apiPost('/api/health'); } catch {}
   const res = await apiPost('/api/list-databases');
   if (res.error) { setContent(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`); return; }
   dbData = (res.databases || []).map(d => ({
     ...d,
     bytes: d.size_bytes != null ? Number(d.size_bytes) : Number(d.size_mb || 0) * 1048576,
   }));
+  dbHealth = (health && !health.error) ? health : null;
   dbSort = { key: 'size', dir: -1 };
   renderDatabases();
+}
+
+function healthStripHtml() {
+  if (!dbHealth || !dbHealth.health) return '';
+  const h = dbHealth.health, eng = dbHealth.engine;
+  const num = v => (typeof v === 'number' && isFinite(v)) ? v : (v != null && v !== '' && !isNaN(v) ? Number(v) : null);
+  const chip = (k, v) => v == null || v === '' ? '' : `<div class="chip"><span class="k">${esc(k)}</span><span class="v">${v}</span></div>`;
+  let chips = '';
+  if (eng === 'documentdb') {
+    const c = h.connections || {};
+    chips += chip('version', esc(h.version || ''));
+    chips += chip('connections', num(c.current) != null ? String(num(c.current)) : '');
+    chips += chip('uptime', num(h.uptime) != null ? fmtUptime(h.uptime) : '');
+    chips += chip('active ops', num(h.active_ops) != null ? String(h.active_ops) : '');
+  } else if (eng === 'mysql') {
+    chips += chip('version', esc(h.version || ''));
+    chips += chip('connections', h.threads ? `${esc(h.threads)} / ${esc(h.max_connections || '?')}` : '');
+    if (h.total_size) chips += chip('size', fmtSize(Number(h.total_size)));
+    chips += chip('slow queries', String((h.slow_queries || []).length));
+  } else if (eng === 'sqlite') {
+    return '';
+  } else {
+    const conns = h.connections || [];
+    chips += chip('version', esc(h.version?.[0] || ''));
+    chips += chip('connections', conns.length >= 4 ? `${esc(conns[2])} / ${esc(conns[3])}` : '');
+    chips += chip('cache hit', h.cache_hit_pct?.[0] ? `${esc(h.cache_hit_pct[0])}%` : '');
+    if (h.total_size?.[0]) chips += chip('size', fmtSize(Number(h.total_size[0])));
+  }
+  if (!chips.trim()) return '';
+  return `<div class="card" style="padding:14px 16px; margin-bottom:14px">
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px">
+      <span style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-muted)">Cluster health</span>
+      <div style="flex:1"></div>
+      <button class="btn btn-ghost btn-sm" onclick="navigate('health')">Details</button>
+    </div>
+    <div class="stat-strip" style="margin:0">${chips}</div></div>`;
 }
 
 function sortDatabases(key) {
@@ -1787,12 +1882,12 @@ function renderDatabases() {
     const empty = d.empty ? '<span class="pill pill-muted">empty</span>' : '';
     const pct = Math.max(0.5, (d.bytes / maxBytes) * 100);
     rows += `<tr>
-      <td class="mono" style="cursor:pointer" data-db="${esc(d.name)}" onclick="markActive('collections');viewCollections(this.dataset.db)" title="List ${currentEngine.startsWith('document') ? 'collections' : 'tables'}">${esc(d.name)}</td>
+      <td class="mono" style="cursor:pointer" data-db="${esc(d.name)}" onclick="viewCollections(this.dataset.db)" title="List ${currentEngine.startsWith('document') ? 'collections' : 'tables'}">${esc(d.name)}</td>
       <td style="white-space:nowrap">${fmtSize(d.bytes)}<div class="sizebar"><div style="width:${pct.toFixed(1)}%"></div></div></td>
       <td>${empty}</td>
     </tr>`;
   }
-  setContent(`<div class="card"><h2>${ICONS.db} Databases</h2>
+  setContent(healthStripHtml() + `<div class="card"><h2>${ICONS.db} Databases</h2>
     <p class="card-meta">${dbData.length} databases · ${fmtSize(totalBytes)} total · click a name to browse it</p>
     <div class="table-wrap"><table>
       <thead><tr>
@@ -3151,7 +3246,7 @@ async function viewAuditDetail(id) {
   const findingRow = f => `<tr>
     <td><input type="checkbox" class="audit-sel" data-user="${esc(f.user)}" onchange="auditSelChanged()"></td>
     <td>${sevPill(f.severity)}</td>
-    <td class="mono" style="cursor:pointer" data-user="${esc(f.user)}" onclick="markActive('userinfo');viewUserInfoFor(this.dataset.user)" title="Open user page">${esc(f.user)}</td>
+    <td class="mono" style="cursor:pointer" data-user="${esc(f.user)}" onclick="viewUserInfoFor(this.dataset.user)" title="Open user page">${esc(f.user)}</td>
     <td>${esc(f.summary)}</td>
     <td class="mono" style="font-size:11px; color:var(--text-muted)">${esc(f.detail)}</td>
     <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-id="${esc(id)}" data-user="${esc(f.user)}"
@@ -3380,7 +3475,7 @@ function confirmImport(obj) {
 
 // ── Keyboard: Esc closes modal, ⌘K / Ctrl+K focuses quick-jump ──
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeModal();
+  if (e.key === 'Escape') { closeModal(); closePanel(); }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     document.getElementById('qfInput').focus();
