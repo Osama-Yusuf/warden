@@ -1633,6 +1633,33 @@ def api_profile_delete(body):
     return {"ok": True}
 
 
+def api_wipe(body):
+    """Delete server-side warden data for a clean slate. Browser storage is
+    cleared client-side; this removes what lives on the host."""
+    import shutil as _sh
+    base = Path.home() / ".warden"
+    removed = []
+    # Connection profiles shared across clients + the CLI
+    prof = base / "profiles.sqlite"
+    if prof.exists():
+        prof.unlink()
+        removed.append("connections")
+    # Uploaded SQLite files
+    up = base / "sqlite"
+    if up.is_dir():
+        _sh.rmtree(up, ignore_errors=True)
+        removed.append("uploaded databases")
+    # Audit trail, only if explicitly asked
+    if body.get("wipe_audit"):
+        for name in ("audit.log", ".dbctl_audit.log"):
+            f = base / name if name == "audit.log" else Path.home() / name
+            if f.exists():
+                f.unlink()
+                removed.append("activity log")
+    refresh_environments()
+    return {"ok": True, "removed": removed}
+
+
 KEYCHAIN_SERVICE = "warden"
 LEGACY_KEYCHAIN_SERVICE = "dbctl"  # pre-rename entries
 
@@ -1721,6 +1748,7 @@ ROUTES = {
     "/api/health": api_health,
     "/api/profile-save": api_profile_save,
     "/api/profile-delete": api_profile_delete,
+    "/api/wipe": api_wipe,
     "/api/keychain-save": api_keychain_save,
     "/api/keychain-get": api_keychain_get,
     "/api/keychain-delete": api_keychain_delete,

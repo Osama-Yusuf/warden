@@ -2678,7 +2678,33 @@ function viewEnvs() {
       <button class="btn btn-primary" onclick="doExportAll()">Export everything</button>
       <button class="btn btn-ghost" onclick="document.getElementById('beoFile').click()">Import…</button>
       <input type="file" id="beoFile" accept=".json,application/json" style="display:none" onchange="importBackupPicked(this)">
+    </div>
+    <h2 style="margin-top:26px; color:var(--danger)">${ICONS.trash} Reset warden</h2>
+    <p class="card-meta">Wipes everything and drops you back to a fresh start: connections, saved passwords, audit results and exclusions, pinned queries, history, preferences. Export a backup first if you might want it back.</p>
+    <div class="form-row" style="margin-bottom:0; align-items:center">
+      <label class="chk" style="height:32px" title="Also delete ~/.warden/audit.log. Off keeps the change history."><input type="checkbox" id="wipeAudit"> also clear the activity log</label>
+      <button class="btn btn-danger" onclick="wipeAllData()">Wipe all data</button>
     </div></div>`);
+}
+
+async function wipeAllData() {
+  const wipeAudit = document.getElementById('wipeAudit')?.checked;
+  showModal('Wipe all data?', `
+    <p style="color:var(--danger); font-weight:600; margin-bottom:8px">This erases everything and cannot be undone.</p>
+    <p style="margin-bottom:0">Connections, saved passwords, audit results${wipeAudit ? ', the activity log' : ''}, pinned queries, history and preferences all go. warden reopens like a fresh install.</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Wipe everything', cls: 'btn-danger', fn: async () => {
+      try { await apiPost('/api/wipe', { wipe_audit: !!wipeAudit }); } catch {}
+      // Browser-local state
+      for (const store of [localStorage, sessionStorage]) {
+        for (const k of Object.keys(store)) {
+          if (k.startsWith('warden.') || k.startsWith('dbctl.')) store.removeItem(k);
+        }
+      }
+      toast('Wiped. Restarting fresh…', 'success');
+      setTimeout(() => location.reload(), 700);
+    }},
+  ]);
 }
 
 async function reloadConfig() {
