@@ -339,6 +339,7 @@ td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px;
 tbody tr:last-child td { border-bottom: none; }
 tbody tr { transition: background 0.1s; }
 tbody tr:hover td { background: var(--surface-hover); }
+tbody tr.urow { cursor: pointer; }
 .mono { font-family: var(--mono-font); font-size: 12px; color: var(--mono); }
 .pill {
   display: inline-block; padding: 2px 8px; border-radius: 12px;
@@ -1623,11 +1624,11 @@ function renderUsersShell(fromCache) {
   const title = titles[fam] || 'PostgreSQL Users';
   const isDocdb = fam === 'documentdb';
   const colsByFam = {
-    documentdb: '<th>Username</th><th>Auth DB</th><th>Roles</th><th></th>',
-    elasticsearch: '<th>Username</th><th>Status</th><th>Roles</th><th></th>',
-    redis: '<th>Username</th><th>Status</th><th>Commands</th><th>Keys</th><th></th>',
+    documentdb: '<th>Username</th><th>Auth DB</th><th>Roles</th>',
+    elasticsearch: '<th>Username</th><th>Status</th><th>Roles</th>',
+    redis: '<th>Username</th><th>Status</th><th>Commands</th><th>Keys</th>',
   };
-  const cols = colsByFam[fam] || '<th>Username</th><th>Status</th><th>Flags</th><th>Expires</th><th></th>';
+  const cols = colsByFam[fam] || '<th>Username</th><th>Status</th><th>Flags</th><th>Expires</th>';
   setContent(`<div class="card"><h2>${ICONS.users} ${title}</h2>
     <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap">
       <div class="qf" style="width:260px; height:34px">
@@ -1654,40 +1655,36 @@ function renderUserRows() {
   const isDocdb = fam === 'documentdb';
   const q = (document.getElementById('userFilter')?.value || '').trim().toLowerCase();
   const list = q ? allUsers.filter(u => u.user.toLowerCase().includes(q)) : allUsers;
-  const manage = u => `<div class="row-acts"><button class="ibtn accent" data-tip="Manage user" data-user="${esc(u.user)}" onclick="viewUserInfoFor(this.dataset.user)">${ICONS.sliders}</button></div>`;
+  const tr = u => `<tr class="urow" data-user="${esc(u.user)}" onclick="viewUserInfoFor(this.dataset.user)">`;
   let rows = '';
   for (const u of list) {
     if (fam === 'elasticsearch') {
       const status = u.enabled ? '<span class="pill pill-ok">enabled</span>' : '<span class="pill pill-danger">disabled</span>';
       const roles = (u.roles || []).map(r => `<span class="pill pill-ok">${esc(r)}</span>`).join(' ');
-      rows += `<tr><td class="mono">${esc(u.user)}${u.reserved ? ' <span class="pill pill-muted">built-in</span>' : ''}</td><td>${status}</td>
-        <td>${roles || '<span class="pill pill-muted">none</span>'}</td>
-        <td style="text-align:right">${manage(u)}</td></tr>`;
+      rows += `${tr(u)}<td class="mono">${esc(u.user)}${u.reserved ? ' <span class="pill pill-muted">built-in</span>' : ''}</td><td>${status}</td>
+        <td>${roles || '<span class="pill pill-muted">none</span>'}</td></tr>`;
     } else if (fam === 'redis') {
       const status = u.enabled ? '<span class="pill pill-ok">on</span>' : '<span class="pill pill-danger">off</span>';
-      rows += `<tr><td class="mono">${esc(u.user)}${u.reserved ? ' <span class="pill pill-muted">default</span>' : ''}</td><td>${status}</td>
+      rows += `${tr(u)}<td class="mono">${esc(u.user)}${u.reserved ? ' <span class="pill pill-muted">default</span>' : ''}</td><td>${status}</td>
         <td class="mono" style="font-size:11px">${esc(u.commands || '—')}</td>
-        <td class="mono" style="font-size:11px">${esc(u.keys || '—')}</td>
-        <td style="text-align:right">${manage(u)}</td></tr>`;
+        <td class="mono" style="font-size:11px">${esc(u.keys || '—')}</td></tr>`;
     } else if (isDocdb) {
       const roles = u.roles.map(r => `<span class="pill pill-ok">${esc(r)}</span>`).join(' ');
-      rows += `<tr><td class="mono">${esc(u.user)}</td><td>${esc(u.db)}</td>
-        <td>${roles || '<span class="pill pill-muted">none</span>'}</td>
-        <td style="text-align:right">${manage(u)}</td></tr>`;
+      rows += `${tr(u)}<td class="mono">${esc(u.user)}</td><td>${esc(u.db)}</td>
+        <td>${roles || '<span class="pill pill-muted">none</span>'}</td></tr>`;
     } else {
       const status = u.can_login ? '<span class="pill pill-ok">active</span>' : '<span class="pill pill-danger">disabled</span>';
       const flags = [];
       if (u.superuser) flags.push('superuser');
       if (u.createdb) flags.push('createdb');
       if (u.createrole) flags.push('createrole');
-      rows += `<tr><td class="mono">${esc(u.user)}</td><td>${status}</td>
+      rows += `${tr(u)}<td class="mono">${esc(u.user)}</td><td>${status}</td>
         <td>${flags.join(', ') || '—'}</td>
-        <td style="color:var(--text-muted)">${u.valid_until === 'never' ? '—' : esc(u.valid_until)}</td>
-        <td style="text-align:right">${manage(u)}</td></tr>`;
+        <td style="color:var(--text-muted)">${u.valid_until === 'never' ? '—' : esc(u.valid_until)}</td></tr>`;
     }
   }
   if (!rows && usersLoading) {
-    const ncols = isDocdb ? 4 : 5;
+    const ncols = (fam === 'documentdb' || fam === 'elasticsearch') ? 3 : 4;
     const cell = `<td><div class="skel" style="width:${60 + Math.floor(Math.random()*30)}%"></div></td>`;
     rows = Array.from({ length: 4 }, () =>
       `<tr>${cell.repeat(ncols)}</tr>`).join('');
