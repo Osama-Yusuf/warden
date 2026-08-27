@@ -396,7 +396,7 @@ tbody tr:hover td { background: var(--surface-hover); }
   border: none; background: transparent; color: var(--text-muted);
   font-size: 22px; line-height: 1; cursor: pointer; border-radius: 7px; z-index: 2;
 }
-.modal-x:hover { background: var(--surface-hover); color: var(--text); }
+.modal-x:hover { background: rgba(248,81,73,0.12); color: var(--danger); }
 .modal-wide .card { border: none; padding: 0; margin: 0; background: none; animation: none; }
 .modal-wide h2:first-child { margin-top: 0; padding-right: 34px; }
 .stat-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
@@ -481,6 +481,13 @@ th.sortable .arrow { font-size: 8px; margin-left: 3px; }
   color: var(--accent); background: rgba(88,166,255,0.12); padding: 2px 7px; border-radius: 5px; flex-shrink: 0; }
 .dg-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
 .dg-tools select { height: 30px; }
+.dg-stats { display: flex; gap: 10px; padding: 12px 18px; flex-wrap: wrap; flex-shrink: 0;
+  border-bottom: 1px solid var(--border); background: var(--surface); }
+.dg-stats:empty { display: none; }
+.dg-stat { display: flex; flex-direction: column; gap: 3px; min-width: 96px;
+  padding: 8px 15px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; }
+.dg-stat .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+.dg-stat .v { font-size: 15px; font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; }
 .dg-body { flex: 1; overflow: auto; position: relative; background: var(--bg); }
 table.dgrid { border-collapse: separate; border-spacing: 0; font-size: 12.5px; width: max-content; min-width: 100%; }
 table.dgrid thead th {
@@ -525,6 +532,121 @@ table.dgrid tbody tr:hover .dg-rownum { background: var(--surface-hover); }
   padding: 12px 14px; font-family: var(--mono-font); font-size: 12.5px; line-height: 1.55;
   color: var(--mono); max-height: 60vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
 }
+
+/* search box in the grid toolbar */
+.dg-search { display: flex; align-items: center; gap: 5px; height: 30px; padding: 0 8px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 7px; }
+.dg-search svg { width: 13px; height: 13px; color: var(--text-muted); flex-shrink: 0; }
+.dg-search input { border: none; background: none; outline: none; color: var(--text);
+  font-size: 12.5px; width: 150px; }
+.dg-search-x { border: none; background: none; color: var(--text-muted); cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 0 2px; }
+.dg-search-x:hover { color: var(--text); }
+.dg-lockbtn { border-color: var(--border-strong); }
+.dg-editbtn { background: var(--warning); color: #1a1205; border: 1px solid var(--warning); font-weight: 600; }
+.dg-editbtn:hover { filter: brightness(1.08); }
+.dg-tag { display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 1px 6px; border-radius: 4px; background: var(--surface-hover); color: var(--text-muted); }
+.dg-tag.warn { background: rgba(210,153,34,0.16); color: var(--warning); }
+
+/* per-row action buttons (only when unlocked) */
+table.dgrid thead th.dg-actcol { position: sticky; left: 0; z-index: 4; width: 1%; }
+.dg-actions { position: sticky; left: 0; z-index: 2; background: var(--surface-2);
+  white-space: nowrap; padding: 0 10px; }
+table.dgrid tbody tr:hover .dg-actions { background: var(--surface-hover); }
+/* refined segmented action control — subtle by default, lifts on row hover */
+.dg-actwrap { display: inline-flex; align-items: center; padding: 2px;
+  border-radius: 9px; background: var(--bg); border: 1px solid var(--border);
+  opacity: 0.55; transition: opacity .14s ease, border-color .14s ease, box-shadow .14s ease; }
+table.dgrid tbody tr:hover .dg-actwrap {
+  opacity: 1; border-color: var(--border-strong);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.18); }
+.dg-actsep { width: 1px; height: 15px; background: var(--border); margin: 0 1px; }
+.dg-act { width: 27px; height: 23px; display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: none; cursor: pointer; color: var(--text-muted);
+  border-radius: 7px; transition: background .12s ease, color .12s ease; }
+.dg-act svg { width: 14px; height: 14px; }
+.dg-act:hover { background: var(--surface-hover); color: var(--accent); }
+.dg-act.danger:hover { color: var(--danger); background: rgba(248,81,73,0.14); }
+
+/* reusable icon button — square, tooltip via title, color by variant */
+.ibtn { display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0; flex-shrink: 0;
+  border: 1px solid transparent; background: transparent; color: var(--text-muted);
+  border-radius: 7px; cursor: pointer; transition: background .13s, color .13s, border-color .13s; }
+.ibtn svg { width: 16px; height: 16px; }
+.ibtn:hover { background: var(--surface-hover); color: var(--text-strong); }
+.ibtn:disabled { opacity: 0.4; cursor: default; }
+.ibtn:disabled:hover { background: transparent; color: var(--text-muted); }
+.ibtn.accent:hover { color: var(--accent); background: rgba(88,166,255,0.12); }
+.ibtn.success { color: var(--success); }
+.ibtn.success:hover { color: var(--success); background: rgba(63,185,80,0.15); }
+.ibtn.danger:hover { color: var(--danger); background: rgba(248,81,73,0.12); }
+.ibtn.warn { color: var(--warning); }
+.ibtn.warn:hover { color: var(--warning); background: rgba(210,153,34,0.16); }
+.ibtn.teal:hover { color: #17b8a6; background: rgba(23,184,166,0.15); }
+.ibtn.violet:hover { color: #a689f2; background: rgba(166,137,242,0.16); }
+/* "on" state: e.g. editing unlocked */
+.ibtn.on { color: var(--warning); background: rgba(210,153,34,0.15); border-color: rgba(210,153,34,0.35); }
+.ibtn.on:hover { background: rgba(210,153,34,0.22); }
+.row-acts { display: inline-flex; gap: 4px; justify-content: flex-end; width: 100%; }
+
+/* Custom tooltip — instant + styled (native title is slow and unthemed) */
+.tooltip { position: fixed; z-index: 9999; max-width: 300px; pointer-events: none;
+  background: var(--text-strong); color: var(--surface);
+  font-size: 11.5px; font-weight: 500; line-height: 1.4; padding: 4px 9px; border-radius: 6px;
+  white-space: nowrap; box-shadow: var(--shadow); opacity: 0;
+  transform: translate(-50%, calc(-100% - 7px)); transition: opacity .1s ease; }
+.tooltip.show { opacity: 1; }
+.tooltip.below { transform: translate(-50%, 7px); }
+
+/* add/edit form */
+#dgFormModal { z-index: 150; }
+.dg-form { max-width: 620px; width: 92%; max-height: 86vh; overflow-y: auto; position: relative; }
+.dgf-hint { color: var(--text-muted); font-size: 12.5px; margin: 0 0 12px; }
+.dgf-hint code { font-family: var(--mono-font); font-size: 11.5px; color: var(--mono); }
+.dgf-json { width: 100%; min-height: 260px; resize: vertical; font-family: var(--mono-font);
+  font-size: 12.5px; line-height: 1.55; background: var(--bg); color: var(--mono);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.dgf-json:focus { outline: none; border-color: var(--accent); }
+.dgf-grid { display: flex; flex-direction: column; gap: 12px; }
+.dgf-row label { display: flex; align-items: center; gap: 7px; font-size: 12px; margin-bottom: 4px; }
+.dgf-name { color: var(--text-strong); font-weight: 500; }
+.dgf-type { color: var(--text-muted); font-size: 10.5px; margin-left: auto; font-family: var(--mono-font); }
+.dgf-tag { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 5px; border-radius: 4px; }
+.dgf-tag.pk { background: rgba(88,166,255,0.14); color: var(--accent); }
+.dgf-tag.req { background: rgba(210,153,34,0.14); color: var(--warning); }
+.dgf-inputwrap { display: flex; gap: 6px; }
+.dgf-input { flex: 1; height: 34px; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 0 10px; font-size: 13px; }
+.dgf-input:focus { outline: none; border-color: var(--accent); }
+.dgf-input:read-only, .dgf-input:disabled { background: var(--surface-2); color: var(--text-muted); }
+.dgf-inputwrap.is-null .dgf-input { opacity: 0.4; }
+.dgf-nullbtn { width: 34px; flex-shrink: 0; border: 1px solid var(--border); background: var(--bg);
+  color: var(--text-muted); border-radius: var(--radius); cursor: pointer; font-size: 14px; }
+.dgf-nullbtn.on { background: var(--text-muted); color: var(--surface); border-color: var(--text-muted); }
+
+/* confirmation */
+#dgConfirmModal { z-index: 160; }
+.dg-confirm { max-width: 560px; width: 92%; max-height: 86vh; overflow-y: auto; }
+.dgc-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.dgc-badge { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; padding: 2px 9px; border-radius: 5px; }
+.dgc-badge.ok { background: rgba(63,185,80,0.16); color: var(--success); }
+.dgc-badge.warn { background: rgba(210,153,34,0.16); color: var(--warning); }
+.dgc-badge.danger { background: rgba(248,81,73,0.16); color: var(--danger); }
+.dgc-target { font-family: var(--mono-font); font-size: 12.5px; color: var(--text-strong); }
+.dgc-sql { background: var(--bg); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--radius); padding: 11px 13px; font-family: var(--mono-font); font-size: 12px;
+  line-height: 1.5; color: var(--mono); white-space: pre-wrap; word-break: break-word; overflow-x: auto; margin: 0 0 12px; }
+.dgc-changes { width: 100%; border-collapse: collapse; font-size: 12px; margin: 0 0 12px; }
+.dgc-changes th { text-align: left; color: var(--text-muted); font-weight: 500; padding: 4px 8px;
+  border-bottom: 1px solid var(--border); font-size: 11px; }
+.dgc-changes td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top;
+  max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.dgc-note { padding: 9px 12px; border-radius: var(--radius); font-size: 12.5px; }
+.dgc-note.ok { background: rgba(63,185,80,0.10); color: var(--success); }
+.dgc-note.warn { background: rgba(210,153,34,0.10); color: var(--warning); }
+.dgc-note.danger { background: var(--danger-soft, rgba(248,81,73,0.10)); color: var(--danger); font-weight: 500; }
 
 /* ── Query console ── */
 .query-input {
@@ -598,13 +720,13 @@ table.dgrid tbody tr:hover .dg-rownum { background: var(--surface-hover); }
     <div class="brand-logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="7" ry="2.8"/><path d="M5 5.5v13c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-13"/><path d="M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8"/></svg></div>
     <h1>war<span>den</span></h1>
   </div>
-  <select id="envSelect" class="tb-select" title="Environment"></select>
-  <select id="engineSelect" class="tb-select" title="Engine"></select>
+  <select id="envSelect" class="tb-select" data-tip="Environment"></select>
+  <select id="engineSelect" class="tb-select" data-tip="Engine"></select>
   <div class="creds-cluster" id="credsCluster">
     <input id="adminUser" class="tb-input" type="text" placeholder="admin user" autocomplete="username">
     <input id="adminPass" class="tb-input" type="password" placeholder="password" autocomplete="current-password">
-    <label class="chk" title="Keep the password saved in this browser so it survives restarts. Off: kept only until this window closes."><input type="checkbox" id="rememberChk"> remember</label>
-    <button class="icon-btn" id="keychainBtn" style="display:none" onclick="saveToKeychain()" title="Save this password to the macOS Keychain for this host + user, so it fills in next time.">🔑</button>
+    <label class="chk" data-tip="Keep the password saved in this browser so it survives restarts. Off: kept only until this window closes."><input type="checkbox" id="rememberChk"> remember</label>
+    <button class="icon-btn" id="keychainBtn" style="display:none" onclick="saveToKeychain()" data-tip="Save this password to the macOS Keychain for this host + user, so it fills in next time.">🔑</button>
   </div>
   <button class="btn btn-primary" id="connectBtn" onclick="testConnection()">Connect</button>
   <button class="btn btn-ghost" id="disconnBtn" style="display:none" onclick="doDisconnect()">Disconnect</button>
@@ -645,7 +767,7 @@ table.dgrid tbody tr:hover .dg-rownum { background: var(--surface-hover); }
 <!-- Wide panel modal (user management, etc.) -->
 <div class="modal-overlay" id="panelModal">
   <div class="modal modal-wide">
-    <button class="modal-x" onclick="closePanel()" title="Close">&times;</button>
+    <button class="modal-x" onclick="closePanel()" data-tip="Close">&times;</button>
     <div id="panelBody"></div>
   </div>
 </div>
@@ -656,8 +778,9 @@ table.dgrid tbody tr:hover .dg-rownum { background: var(--surface-hover); }
     <div class="dg-head">
       <div class="dg-title" id="dgTitle"></div>
       <div class="dg-tools" id="dgTools"></div>
-      <button class="btn btn-ghost btn-sm" onclick="closeDataModal()" title="Close (Esc)">&times; Close</button>
+      <button class="ibtn danger dg-close" onclick="closeDataModal()" data-tip="Close (Esc)"><svg class="ni" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
+    <div class="dg-stats" id="dgStats"></div>
     <div class="dg-body" id="dgBody"></div>
     <div class="dg-foot" id="dgFoot"></div>
   </div>
@@ -666,10 +789,35 @@ table.dgrid tbody tr:hover .dg-rownum { background: var(--surface-hover); }
 <!-- Single-cell detail viewer -->
 <div class="modal-overlay" id="cellModal">
   <div class="modal cell-view">
-    <button class="modal-x" onclick="document.getElementById('cellModal').classList.remove('open')" title="Close">&times;</button>
+    <button class="modal-x" onclick="document.getElementById('cellModal').classList.remove('open')" data-tip="Close">&times;</button>
     <h3 id="cellTitle" style="margin-top:0; padding-right:34px; font-family:var(--mono-font); font-size:13px"></h3>
     <pre id="cellBody"></pre>
-    <div class="actions"><button class="btn btn-ghost btn-sm" onclick="dgCopyCell()">Copy</button></div>
+    <div class="actions"><button class="ibtn" onclick="dgCopyCell()" data-tip="Copy to clipboard"><svg class="ni" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h8"/></svg></button></div>
+  </div>
+</div>
+
+<!-- Row add/edit form -->
+<div class="modal-overlay" id="dgFormModal">
+  <div class="modal dg-form">
+    <button class="modal-x" onclick="document.getElementById('dgFormModal').classList.remove('open')" data-tip="Close">&times;</button>
+    <h3 id="dgFormTitle" style="margin-top:0; padding-right:34px"></h3>
+    <div id="dgFormBody"></div>
+    <div class="actions">
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('dgFormModal').classList.remove('open')">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="dgFormSave" onclick="dgFormSubmit()">Review</button>
+    </div>
+  </div>
+</div>
+
+<!-- CRUD confirmation (shows exactly what will run) -->
+<div class="modal-overlay" id="dgConfirmModal">
+  <div class="modal dg-confirm">
+    <h3 style="margin-top:0">Confirm change</h3>
+    <div id="dgConfirmBody"></div>
+    <div class="actions">
+      <button class="btn btn-ghost btn-sm" onclick="dgConfirmCancel()">Cancel</button>
+      <button class="btn btn-success btn-sm" id="dgConfirmBtn" onclick="dgConfirmExecute()">Confirm</button>
+    </div>
   </div>
 </div>
 
@@ -691,6 +839,31 @@ let cachedDbs = [];
 let dbData = [];
 let dbSort = { key: 'name', dir: 1 };
 
+// ── Custom tooltip (instant, themed — native title is slow and unstyled) ──
+const tipEl = document.createElement('div');
+tipEl.className = 'tooltip';
+document.body.appendChild(tipEl);
+function showTip(el) {
+  const txt = el.getAttribute('data-tip');
+  if (!txt) return;
+  tipEl.textContent = txt;
+  const r = el.getBoundingClientRect();
+  const below = r.top < 46;
+  tipEl.classList.toggle('below', below);
+  const half = tipEl.offsetWidth / 2;
+  const cx = Math.max(half + 6, Math.min(window.innerWidth - half - 6, r.left + r.width / 2));
+  tipEl.style.left = cx + 'px';
+  tipEl.style.top = (below ? r.bottom : r.top) + 'px';
+  tipEl.classList.add('show');
+}
+function hideTip() { tipEl.classList.remove('show'); }
+document.addEventListener('mouseover', e => {
+  const el = e.target.closest && e.target.closest('[data-tip]');
+  if (el) showTip(el); else hideTip();   // moving onto anything without a tip clears it
+});
+document.addEventListener('mousedown', hideTip);
+document.addEventListener('scroll', hideTip, true);
+
 // ── Icons (inline SVG, stroke = currentColor) ──
 const I = p => `<svg class="ni" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
 const ICONS = {
@@ -709,6 +882,12 @@ const ICONS = {
   pulse: I('<path d="M3 12h4l2.5-7 4 14 2.5-7h5"/>'),
   term: I('<path d="M4 17l6-5-6-5M12 19h8"/>'),
   sliders: I('<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/>'),
+  unlock: I('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8.5 11V7.5a3.5 3.5 0 016.7-1.4"/>'),
+  close: I('<path d="M6 6l12 12M18 6L6 18"/>'),
+  refresh: I('<path d="M20 11.5a8 8 0 10-2.3 5.4"/><path d="M20 5.5v5h-5"/>'),
+  rows: I('<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 9.7h17M3.5 14.3h17"/>'),
+  copy: I('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h8"/>'),
+  pencil: I('<path d="M4 20l1-4L16 5a2 2 0 012.8 2.8L8 18.7z"/><path d="M14.5 6.5l3 3"/>'),
 };
 
 const TB_SVG = {
@@ -1012,7 +1191,7 @@ function renderNav() {
     const dis = (connected || item.always) ? '' : 'disabled';
     const badge = item.badge ? `<span class="nav-badge" id="badge-${item.badge}" style="display:none"></span>` : '';
     const tip = dis ? 'Connect to use this' : esc(item.label);
-    html += `<button id="nav-${item.id}" class="nav-item" ${dis} title="${tip}"
+    html += `<button id="nav-${item.id}" class="nav-item" ${dis} data-tip="${tip}"
       onclick="navigate('${item.id}')">${item.icon}<span>${esc(item.label)}</span>${badge}</button>`;
   }
   box.innerHTML = html;
@@ -1192,6 +1371,7 @@ function toast(msg, type = 'info') {
 
 function setContent(html) {
   if (window._viewTimer) { clearInterval(window._viewTimer); window._viewTimer = null; }
+  if (typeof hideTip === 'function') hideTip();   // clear any tooltip whose anchor is being replaced
   document.getElementById('content').innerHTML = html;
 }
 
@@ -1217,7 +1397,7 @@ function copyText(text) {
 function passwordHtml(pwd) {
   return `<div class="password-box">
     <code>${esc(pwd)}</code>
-    <button class="copy-btn" data-clip="${esc(pwd)}" onclick="copyText(this.dataset.clip)" title="Copy">📋</button>
+    <button class="copy-btn" data-clip="${esc(pwd)}" onclick="copyText(this.dataset.clip)" data-tip="Copy">📋</button>
   </div>`;
 }
 
@@ -1382,7 +1562,7 @@ function renderUserRows() {
   const isDocdb = fam === 'documentdb';
   const q = (document.getElementById('userFilter')?.value || '').trim().toLowerCase();
   const list = q ? allUsers.filter(u => u.user.toLowerCase().includes(q)) : allUsers;
-  const manage = u => `<button class="btn btn-ghost btn-sm" data-user="${esc(u.user)}" onclick="viewUserInfoFor(this.dataset.user)">Manage</button>`;
+  const manage = u => `<div class="row-acts"><button class="ibtn accent" data-tip="Manage user" data-user="${esc(u.user)}" onclick="viewUserInfoFor(this.dataset.user)">${ICONS.sliders}</button></div>`;
   let rows = '';
   for (const u of list) {
     if (isDocdb) {
@@ -2074,7 +2254,7 @@ function renderDatabases(fromCache) {
     const empty = d.empty ? '<span class="pill pill-muted">empty</span>' : '';
     const pct = Math.max(0.5, (d.bytes / maxBytes) * 100);
     rows += `<tr>
-      <td class="mono" style="cursor:pointer" data-db="${esc(d.name)}" onclick="viewCollections(this.dataset.db)" title="List ${currentEngine.startsWith('document') ? 'collections' : 'tables'}">${esc(d.name)}</td>
+      <td class="mono" style="cursor:pointer" data-db="${esc(d.name)}" onclick="viewCollections(this.dataset.db)" data-tip="List ${currentEngine.startsWith('document') ? 'collections' : 'tables'}">${esc(d.name)}</td>
       <td style="white-space:nowrap">${fmtSize(d.bytes)}<div class="sizebar"><div style="width:${pct.toFixed(1)}%"></div></div></td>
       <td>${empty}</td>
     </tr>`;
@@ -2113,19 +2293,18 @@ async function doListCollections() {
   const target = document.getElementById('collResults');
   if (!target) return;
   if (res.error) { target.innerHTML = `<p style="color:var(--danger); margin-top:12px">${esc(res.error)}</p>`; return; }
-  const act = (label, db, text, title) => `<button class="btn btn-ghost btn-sm" title="${esc(title)}"
-    data-db="${esc(db)}" data-q="${esc(text)}" onclick="openQueryWith(this.dataset.db, this.dataset.q)">${label}</button>`;
-  const view = (db, extra) => `<button class="btn btn-primary btn-sm" title="Browse rows &amp; columns"
-    data-db="${esc(db)}" ${extra} onclick="openDataGrid(dgSpecFrom(this.dataset))">${ICONS.grid} View data</button>`;
+  const act = (icon, cls, db, text, title) => `<button class="ibtn ${cls}" data-tip="${esc(title)}"
+    data-db="${esc(db)}" data-q="${esc(text)}" onclick="openQueryWith(this.dataset.db, this.dataset.q)">${icon}</button>`;
+  const view = (db, extra) => `<button class="ibtn accent" data-tip="Browse rows &amp; columns"
+    data-db="${esc(db)}" ${extra} onclick="openDataGrid(dgSpecFrom(this.dataset))">${ICONS.grid}</button>`;
   if (res.collections) {
     const collRef = c => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(c) ? `db.${c}` : `db.getCollection(${JSON.stringify(c)})`;
     const rows = res.collections.map(c => `<tr>
       <td class="mono">${esc(c)}</td>
-      <td style="text-align:right; white-space:nowrap">
+      <td><div class="row-acts">
         ${view(database, `data-coll="${esc(c)}"`)}
-        ${act('Query', database, `${collRef(c)}.find({}).limit(5)`, 'Open in query console')}
-        ${act('Count', database, `${collRef(c)}.estimatedDocumentCount()`, 'Fast document count')}
-      </td></tr>`).join('');
+        ${act(ICONS.term, 'teal', database, `${collRef(c)}.find({}).limit(5)`, 'Open in query console')}
+      </div></td></tr>`).join('');
     target.innerHTML = rows
       ? `<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Collection (${res.collections.length})</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
       : `<div class="empty-state" style="margin-top:12px">No collections in this database</div>`;
@@ -2135,11 +2314,10 @@ async function doListCollections() {
       return `<tr>
       <td class="mono">${esc(t.schema)}</td><td class="mono">${esc(t.table)}</td>
       <td style="white-space:nowrap">${t.size_bytes != null ? fmtSize(t.size_bytes) : '—'}</td>
-      <td style="text-align:right; white-space:nowrap">
+      <td><div class="row-acts">
         ${view(database, `data-schema="${esc(t.schema)}" data-table="${esc(t.table)}"`)}
-        ${act('Query', database, `SELECT * FROM ${full} LIMIT 5;`, 'Open in query console')}
-        ${act('Count', database, `SELECT reltuples::bigint AS estimated_rows FROM pg_class WHERE oid = '${full}'::regclass;`, 'Fast row estimate')}
-      </td></tr>`;
+        ${act(ICONS.term, 'teal', database, `SELECT * FROM ${full} LIMIT 5;`, 'Open in query console')}
+      </div></td></tr>`;
     }).join('');
     target.innerHTML = rows
       ? `<div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Schema</th><th>Table</th><th>Size</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
@@ -2161,16 +2339,54 @@ function openDataGrid(spec) {
   // spec: {database, collection} (mongo) or {database, schema?, table} (sql)
   if (!requireConnection()) return;
   const name = spec.collection || (spec.schema ? `${spec.schema}.${spec.table}` : spec.table);
-  dg = { ...spec, name, limit: 50, offset: 0, total: null, columns: [], rows: [], loading: true, error: null };
+  dg = { ...spec, name, limit: 50, offset: 0, total: null, columns: [], rows: [], ids: [],
+         loading: true, error: null, search: '', locked: true, meta: null, editable: false,
+         filtered: false, estimated: false };
   document.getElementById('dataModal').classList.add('open');
+  document.getElementById('dgStats').innerHTML = '';
   renderDgChrome();
   dgFetch();
+  dgLoadStats();
+}
+
+function dgRefresh() { dgFetch(); dgLoadStats(); }
+
+async function dgLoadStats() {
+  if (!dg) return;
+  const p = { database: dg.database };
+  if (dg.collection) p.collection = dg.collection;
+  if (dg.table) { p.table = dg.table; if (dg.schema) p.schema = dg.schema; }
+  const res = await apiPost('/api/object-stats', p).catch(() => null);
+  const el = document.getElementById('dgStats');
+  if (!dg || !el) return;
+  if (!res || res.error || !res.stats) { el.innerHTML = ''; return; }
+  dg.stats = res.stats;
+  el.innerHTML = dgStatCards(res.engine || (dg.collection ? 'documentdb' : 'postgresql'), res.stats);
+}
+
+function dgStatCards(engine, s) {
+  const card = (k, v) => `<div class="dg-stat"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+  const rows = s.rows == null ? '—' : (s.estimated ? '~' : '') + Number(s.rows).toLocaleString();
+  const out = [];
+  if (engine === 'documentdb') {
+    out.push(card('Documents', rows));
+    if (s.size_bytes != null) out.push(card('Data size', fmtSize(s.size_bytes)));
+    if (s.storage_bytes != null) out.push(card('Storage', fmtSize(s.storage_bytes)));
+    if (s.indexes != null) out.push(card('Indexes', s.indexes));
+    if (s.avg_obj) out.push(card('Avg document', fmtSize(s.avg_obj)));
+  } else {
+    out.push(card('Rows', rows));
+    if (s.columns != null) out.push(card('Columns', s.columns));
+    if (s.size_bytes != null) out.push(card('Size', fmtSize(s.size_bytes)));
+    if (s.indexes != null) out.push(card('Indexes', s.indexes));
+  }
+  return out.join('');
 }
 
 function closeDataModal() {
   document.getElementById('dataModal').classList.remove('open');
-  document.getElementById('cellModal').classList.remove('open');
-  dg = null;
+  ['cellModal', 'dgFormModal', 'dgConfirmModal'].forEach(id => document.getElementById(id).classList.remove('open'));
+  dg = null; dgPendingOp = null;
 }
 
 async function dgFetch() {
@@ -2178,27 +2394,74 @@ async function dgFetch() {
   dg.loading = true;
   renderDgBody(); renderDgFoot();
   const payload = { database: dg.database, limit: dg.limit, offset: dg.offset };
+  if (dg.search) payload.search = dg.search;
   if (dg.collection) payload.collection = dg.collection;
   if (dg.table) { payload.table = dg.table; if (dg.schema) payload.schema = dg.schema; }
   const res = await apiPost('/api/browse-data', payload).catch(() => ({ error: 'Request failed' }));
   if (!dg) return;  // closed mid-flight
   dg.loading = false;
   if (res.error) { dg.error = res.error; }
-  else { dg.error = null; dg.columns = res.columns || []; dg.rows = res.rows || []; dg.total = res.total; }
+  else {
+    dg.error = null; dg.columns = res.columns || []; dg.rows = res.rows || [];
+    dg.ids = res.ids || []; dg.total = res.total;
+    dg.filtered = !!res.filtered; dg.estimated = !!res.estimated;
+  }
   renderDgBody(); renderDgFoot();
+}
+
+async function dgToggleLock() {
+  if (!dg) return;
+  if (!dg.locked) { dg.locked = true; renderDgChrome(); renderDgBody(); return; }
+  if (prefs.readOnly) { toast('Read-only mode is on — turn it off in the top bar to edit', 'error'); return; }
+  // Unlocking: fetch metadata so we know the primary key + columns before editing.
+  const p = { database: dg.database };
+  if (dg.collection) p.collection = dg.collection;
+  if (dg.table) { p.table = dg.table; if (dg.schema) p.schema = dg.schema; }
+  const meta = await apiPost('/api/table-meta', p).catch(() => ({ error: 'Request failed' }));
+  if (!dg) return;
+  if (meta.error) { toast(meta.error, 'error'); return; }
+  if (!meta.editable) { toast(meta.reason || 'This object cannot be edited', 'error'); return; }
+  dg.meta = meta; dg.editable = true; dg.locked = false;
+  renderDgChrome(); renderDgBody();
+  toast('Editing unlocked — changes are confirmed before they run', 'info');
 }
 
 function renderDgChrome() {
   const kind = dg.collection ? 'collection' : 'table';
   const full = `${dg.database}.${dg.name}`;
   document.getElementById('dgTitle').innerHTML =
-    `<span class="badge">${kind}</span><span class="name" title="${esc(full)}">${esc(full)}</span>`;
+    `<span class="badge">${kind}</span><span class="name" data-tip="${esc(full)}">${esc(full)}</span>`;
+  const lockBtn = dg.locked
+    ? `<button class="ibtn" onclick="dgToggleLock()" data-tip="Read-only — click to enable editing">${ICONS.lock}</button>`
+    : `<button class="ibtn on" onclick="dgToggleLock()" data-tip="Editing enabled — click to lock (read-only)">${ICONS.unlock}</button>`;
+  const addBtn = (!dg.locked && dg.editable)
+    ? `<button class="ibtn success" onclick="dgAddRow()" data-tip="Add a row">${ICONS.plus}</button>` : '';
   document.getElementById('dgTools').innerHTML = `
-    <label style="font-size:12px; color:var(--text-muted)">page size</label>
-    <select class="tb-select" onchange="dgSetLimit(this.value)">
-      ${[25,50,100,200].map(n => `<option value="${n}" ${n===dg.limit?'selected':''}>${n}</option>`).join('')}
+    <div class="dg-search">
+      ${ICONS.search}
+      <input id="dgSearchInput" placeholder="search…" value="${esc(dg.search)}" autocomplete="off"
+        onkeydown="if(event.key==='Enter')dgSearchSubmit();else if(event.key==='Escape'){this.value='';dgClearSearch();}">
+      ${dg.search ? `<button class="dg-search-x" onclick="dgClearSearch()" data-tip="Clear search">&times;</button>` : ''}
+    </div>
+    ${addBtn}
+    ${lockBtn}
+    <select class="tb-select" onchange="dgSetLimit(this.value)" data-tip="Rows per page">
+      ${[25,50,100,200].map(n => `<option value="${n}" ${n===dg.limit?'selected':''}>${n} rows</option>`).join('')}
     </select>
-    <button class="btn btn-ghost btn-sm" onclick="dgFetch()" title="Refresh">↻</button>`;
+    <button class="ibtn teal" onclick="dgRefresh()" data-tip="Refresh">${ICONS.refresh}</button>`;
+}
+
+function dgSearchSubmit() {
+  if (!dg) return;
+  const v = (document.getElementById('dgSearchInput')?.value || '').trim();
+  if (v === dg.search) return;
+  dg.search = v; dg.offset = 0;
+  renderDgChrome(); dgFetch();
+  setTimeout(() => document.getElementById('dgSearchInput')?.focus(), 0);
+}
+function dgClearSearch() {
+  if (!dg || !dg.search) { const i = document.getElementById('dgSearchInput'); if (i) i.value=''; return; }
+  dg.search = ''; dg.offset = 0; renderDgChrome(); dgFetch();
 }
 
 function dgCellHtml(v) {
@@ -2215,26 +2478,36 @@ function renderDgBody() {
   if (!body || !dg) return;
   if (dg.error) { body.innerHTML = `<div style="padding:24px; color:var(--danger)">${esc(dg.error)}</div>`; return; }
   const cols = dg.columns;
+  const edit = !dg.locked && dg.editable;
+  const actH = edit ? '<th class="dg-actcol"></th>' : '';
   if (dg.loading) {
     const nc = cols.length || 5;
-    const head = `<thead><tr><th class="dg-corner"></th>${(cols.length ? cols.map(c=>`<th>${esc(c)}</th>`) : Array.from({length:nc},()=>'<th><div class="skel" style="width:80px"></div></th>')).join('')}</tr></thead>`;
-    const rows = Array.from({length:12}, () => `<tr class="dg-skelrow"><td class="dg-rownum"></td>${'<td><div class="skel" style="width:70%"></div></td>'.repeat(nc)}</tr>`).join('');
+    const head = `<thead><tr><th class="dg-corner"></th>${actH}${(cols.length ? cols.map(c=>`<th>${esc(c)}</th>`) : Array.from({length:nc},()=>'<th><div class="skel" style="width:80px"></div></th>')).join('')}</tr></thead>`;
+    const rows = Array.from({length:12}, () => `<tr class="dg-skelrow"><td class="dg-rownum"></td>${edit?'<td class="dg-actions"></td>':''}${'<td><div class="skel" style="width:70%"></div></td>'.repeat(nc)}</tr>`).join('');
     body.innerHTML = `<table class="dgrid">${head}<tbody>${rows}</tbody></table>`;
     return;
   }
   if (!dg.rows.length) {
-    body.innerHTML = `<div class="dg-empty" style="padding:24px">No rows in this ${dg.collection ? 'collection' : 'table'}.</div>`;
+    const what = dg.collection ? 'collection' : 'table';
+    body.innerHTML = `<div class="dg-empty" style="padding:24px">${dg.search ? `No rows match “${esc(dg.search)}”.` : `No rows in this ${what}.`}</div>`;
     return;
   }
-  const head = `<thead><tr><th class="dg-corner"></th>${cols.map(c => `<th title="${esc(c)}">${esc(c)}</th>`).join('')}</tr></thead>`;
-  const tbody = dg.rows.map((row, r) => `<tr>
-    <td class="dg-rownum">${dg.offset + r + 1}</td>
-    ${cols.map((c, ci) => {
-      const v = row[ci];
-      const big = v !== null && v !== undefined && (typeof v === 'object' || String(v).length > 40);
-      return `<td class="${big ? 'dg-cell' : ''}"${big ? ` onclick="dgShowCell(${r},${ci})"` : ''}>${dgCellHtml(v)}</td>`;
-    }).join('')}
-  </tr>`).join('');
+  const head = `<thead><tr><th class="dg-corner"></th>${actH}${cols.map(c => `<th data-tip="${esc(c)}">${esc(c)}</th>`).join('')}</tr></thead>`;
+  const tbody = dg.rows.map((row, r) => {
+    const actC = edit ? `<td class="dg-actions"><div class="dg-actwrap">
+      <button class="dg-act" data-tip="Edit row" onclick="dgEditRow(${r})">${ICONS.pencil}</button>
+      <span class="dg-actsep"></span>
+      <button class="dg-act danger" data-tip="Delete row" onclick="dgDeleteRow(${r})">${ICONS.trash}</button>
+    </div></td>` : '';
+    return `<tr>
+      <td class="dg-rownum">${dg.offset + r + 1}</td>${actC}
+      ${cols.map((c, ci) => {
+        const v = row[ci];
+        const big = v !== null && v !== undefined && (typeof v === 'object' || String(v).length > 40);
+        return `<td class="${big ? 'dg-cell' : ''}"${big ? ` onclick="dgShowCell(${r},${ci})"` : ''}>${dgCellHtml(v)}</td>`;
+      }).join('')}
+    </tr>`;
+  }).join('');
   body.innerHTML = `<table class="dgrid">${head}<tbody>${tbody}</tbody></table>`;
 }
 
@@ -2244,12 +2517,18 @@ function renderDgFoot() {
   const n = dg.rows.length;
   const from = n ? dg.offset + 1 : 0;
   const to = dg.offset + n;
-  const totalStr = dg.total != null ? dg.total.toLocaleString() : '?';
-  const atEnd = (dg.total != null && to >= dg.total) || (!dg.loading && n < dg.limit);
+  let range;
+  if (dg.filtered) {
+    range = `${from.toLocaleString()}–${to.toLocaleString()} <span class="dg-tag">filtered</span>`;
+  } else {
+    const totalStr = dg.total != null ? (dg.estimated ? '~' : '') + dg.total.toLocaleString() : '?';
+    range = `${from.toLocaleString()}–${to.toLocaleString()} of ${totalStr}`;
+  }
+  const atEnd = (n < dg.limit) || (!dg.filtered && !dg.estimated && dg.total != null && to >= dg.total);
   foot.innerHTML = `
-    <span class="count">${dg.loading ? 'loading…' : `${dg.columns.length} column${dg.columns.length===1?'':'s'}`}</span>
+    <span class="count">${dg.loading ? 'loading…' : `${dg.columns.length} column${dg.columns.length===1?'':'s'}`}${!dg.locked && dg.editable ? ' · <span class="dg-tag warn">editing</span>' : ''}</span>
     <div class="dg-pager">
-      <span class="range">${from.toLocaleString()}–${to.toLocaleString()} of ${totalStr}</span>
+      <span class="range">${range}</span>
       <button class="btn btn-ghost btn-sm" onclick="dgPage(-1)" ${dg.offset<=0?'disabled':''}>‹ Prev</button>
       <button class="btn btn-ghost btn-sm" onclick="dgPage(1)" ${atEnd?'disabled':''}>Next ›</button>
     </div>`;
@@ -2275,10 +2554,312 @@ function dgShowCell(r, c) {
 }
 function dgCopyCell() { navigator.clipboard?.writeText(dgCellValue).then(() => toast('Copied', 'success')).catch(() => {}); }
 
+// ── CRUD: type coercion + previews ──────────────────────────────────────────
+function dgPgCat(type) {
+  const t = (type || '').toLowerCase();
+  if (/\bserial\b|int|bigint|smallint/.test(t) && !/interval/.test(t)) return 'int';
+  if (/numeric|decimal|real|double|float|money/.test(t)) return 'float';
+  if (/bool/.test(t)) return 'bool';
+  if (/json/.test(t)) return 'json';
+  return 'text';
+}
+function dgCoerce(cat, raw) {
+  if (cat === 'int') { if (!/^-?\d+$/.test(raw.trim())) throw new Error('must be a whole number'); return parseInt(raw, 10); }
+  if (cat === 'float') { const n = Number(raw); if (!isFinite(n)) throw new Error('must be a number'); return n; }
+  if (cat === 'bool') { return raw === 'true'; }
+  if (cat === 'json') { try { return JSON.parse(raw); } catch { throw new Error('must be valid JSON'); } }
+  return raw;
+}
+function dgVal(v) {  // human-readable value for a preview statement
+  if (v === null || v === undefined) return 'NULL';
+  if (typeof v === 'number') return String(v);
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return `'${String(v).replace(/'/g, "''")}'`;
+}
+function dgMongoIdJs(rep) {
+  return (rep && typeof rep === 'object' && '$oid' in rep) ? `ObjectId('${rep.$oid}')` : JSON.stringify(rep);
+}
+function dgReconstructDoc(r) {
+  const o = {};
+  dg.columns.forEach((c, i) => { o[c] = dg.rows[r][i]; });
+  return o;
+}
+function dgPgPk(r) {
+  const pk = {};
+  for (const c of dg.meta.primary_key) pk[c] = dg.rows[r][dg.columns.indexOf(c)];
+  return pk;
+}
+
+// ── CRUD: forms ─────────────────────────────────────────────────────────────
+let dgForm = null;
+function dgAddRow() { dgOpenForm('insert', null); }
+function dgEditRow(r) { dgOpenForm('edit', r); }
+
+function dgOpenForm(mode, r) {
+  if (!dg || dg.locked || !dg.editable) return;
+  dgForm = { mode, r };
+  const isMongo = !!dg.collection;
+  const title = `${mode === 'insert' ? 'Add row to' : 'Edit row in'} ${esc(dg.database)}.${esc(dg.name)}`;
+  let bodyHtml;
+  if (isMongo) {
+    const initial = mode === 'edit' ? JSON.stringify(dgReconstructDoc(r), null, 2) : '{\n  \n}';
+    bodyHtml = `<p class="dgf-hint">Edit the document as JSON. ${mode === 'edit' ? 'Only changed fields are written; <code>_id</code> can\'t change.' : 'Leave out <code>_id</code> to let MongoDB assign one.'}</p>
+      <textarea id="dgJsonInput" class="dgf-json" spellcheck="false">${esc(initial)}</textarea>`;
+  } else {
+    bodyHtml = `<div class="dgf-grid">${dgPgFormFields(mode, r)}</div>`;
+  }
+  document.getElementById('dgFormTitle').textContent = title;
+  document.getElementById('dgFormBody').innerHTML = bodyHtml;
+  document.getElementById('dgFormSave').textContent = mode === 'insert' ? 'Review insert' : 'Review changes';
+  document.getElementById('dgFormModal').classList.add('open');
+}
+
+function dgPgFormFields(mode, r) {
+  const isEdit = mode === 'edit';
+  return dg.meta.columns.map(col => {
+    if (!isEdit && col.generated) return '';
+    const cat = dgPgCat(col.type);
+    const idx = dg.columns.indexOf(col.name);
+    const cur = (isEdit && idx >= 0) ? dg.rows[r][idx] : undefined;
+    const curNull = isEdit && (cur === null || cur === undefined);   // insert never starts NULL
+    const readonly = isEdit && col.is_pk;
+    const initStr = (!isEdit || cur === null || cur === undefined) ? '' : (typeof cur === 'object' ? JSON.stringify(cur) : String(cur));
+    let input;
+    if (cat === 'bool') {
+      const opts = [];
+      if (!isEdit && col.has_default) opts.push({ v: '', t: '(default)' });
+      opts.push({ v: 'true', t: 'true' }, { v: 'false', t: 'false' });
+      if (col.nullable) opts.push({ v: '__null__', t: '(null)' });
+      const sel = isEdit ? (curNull ? '__null__' : String(cur)) : (col.has_default ? '' : 'false');
+      input = `<select class="dgf-input" data-name="${esc(col.name)}" data-cat="bool" data-init="${esc(sel)}" ${readonly?'disabled':''}>
+        ${opts.map(o => `<option value="${o.v}" ${o.v===sel?'selected':''}>${o.t}</option>`).join('')}</select>`;
+    } else {
+      input = `<input class="dgf-input" data-name="${esc(col.name)}" data-cat="${cat}" data-init="${esc(initStr)}"
+        value="${esc(initStr)}" ${readonly?'readonly':''}
+        placeholder="${!isEdit&&col.has_default?'(default)':(col.nullable?'(empty = NULL)':'')}" autocomplete="off">`;
+    }
+    const nullToggle = (col.nullable && !readonly && cat !== 'bool')
+      ? `<button type="button" class="dgf-nullbtn ${curNull?'on':''}" onclick="dgToggleNull(this)" data-tip="Set NULL">∅</button>` : '';
+    const tags = `${col.is_pk?'<span class="dgf-tag pk">PK</span>':''}${(!col.nullable&&!col.has_default)?'<span class="dgf-tag req">required</span>':''}`;
+    return `<div class="dgf-row" data-field="${esc(col.name)}" data-null="${curNull?'1':'0'}" data-initnull="${curNull?'1':'0'}">
+      <label><span class="dgf-name">${esc(col.name)}</span>${tags}<span class="dgf-type">${esc(col.type)}</span></label>
+      <div class="dgf-inputwrap ${curNull?'is-null':''}">${input}${nullToggle}</div>
+    </div>`;
+  }).join('');
+}
+
+function dgToggleNull(btn) {
+  const row = btn.closest('.dgf-row');
+  const on = row.dataset.null === '1';
+  row.dataset.null = on ? '0' : '1';
+  btn.classList.toggle('on', !on);
+  row.querySelector('.dgf-inputwrap').classList.toggle('is-null', !on);
+  const inp = row.querySelector('.dgf-input');
+  if (inp && !inp.readOnly) inp.disabled = !on;
+}
+
+function dgFormSubmit() {
+  if (!dg || !dgForm) return;
+  if (dg.collection) return dgFormSubmitMongo();
+  return dgFormSubmitPg();
+}
+
+function dgFormSubmitPg() {
+  const isEdit = dgForm.mode === 'edit';
+  const rowEls = [...document.querySelectorAll('#dgFormBody .dgf-row')];
+  const out = {};      // insert: all provided; edit: only changed
+  const errors = [];
+  for (const el of rowEls) {
+    const name = el.dataset.field;
+    const col = dg.meta.columns.find(c => c.name === name);
+    const input = el.querySelector('.dgf-input');
+    if (!input) continue;
+    if (isEdit && col.is_pk) continue;  // pk is the identifier, never changed here
+    const isNull = el.dataset.null === '1';
+    const initNull = el.dataset.initnull === '1';
+    const cat = input.dataset.cat;
+    const raw = input.value;
+    const init = input.dataset.init ?? '';
+    if (isEdit && isNull === initNull && raw === init) continue;  // unchanged
+    let value, omit = false;
+    if (cat === 'bool') {
+      if (raw === '') omit = true;                       // (default)
+      else if (raw === '__null__') value = null;
+      else value = raw === 'true';
+    } else if (isNull) {
+      value = null;
+    } else if (raw === '') {
+      if (isEdit) {
+        if (cat === 'text') value = '';
+        else if (col.nullable) value = null;
+        else { errors.push(`${name} can't be empty`); continue; }
+      } else if (col.has_default || col.nullable) {
+        omit = true;                                     // let the DB default / NULL apply
+      } else { errors.push(`${name} is required`); continue; }
+    } else {
+      try { value = dgCoerce(cat, raw); }
+      catch (e) { errors.push(`${name}: ${e.message}`); continue; }
+    }
+    if (!omit) out[name] = value;
+  }
+  if (errors.length) { toast(errors[0], 'error'); return; }
+  if (!Object.keys(out).length) { toast(isEdit ? 'Nothing changed' : 'Nothing to insert', 'error'); return; }
+  const mode = dgForm.mode;
+
+  const rel = `${dg.schema || 'public'}.${dg.table}`;
+  if (mode === 'insert') {
+    const cols = Object.keys(out);
+    dgConfirm({
+      action: 'insert', danger: false,
+      endpoint: '/api/row-insert',
+      payload: { database: dg.database, schema: dg.schema, table: dg.table, values: out },
+      preview: `INSERT INTO ${rel}\n  (${cols.join(', ')})\nVALUES\n  (${cols.map(c => dgVal(out[c])).join(', ')})`,
+      summary: 'Inserts 1 new row.', changes: null, confirmLabel: 'Insert row', successMsg: 'Row inserted',
+    });
+  } else {
+    const pk = dgPgPk(dgForm.r);
+    const cols = Object.keys(out);
+    const setStr = cols.map(c => `${c} = ${dgVal(out[c])}`).join(',\n      ');
+    const whereStr = Object.entries(pk).map(([k, v]) => `${k} = ${dgVal(v)}`).join(' AND ');
+    const changeRows = cols.map(c => {
+      const idx = dg.columns.indexOf(c);
+      return { col: c, from: idx >= 0 ? dg.rows[dgForm.r][idx] : undefined, to: out[c] };
+    });
+    dgConfirm({
+      action: 'update', danger: false,
+      endpoint: '/api/row-update',
+      payload: { database: dg.database, schema: dg.schema, table: dg.table, pk, changes: out },
+      preview: `UPDATE ${rel}\nSET   ${setStr}\nWHERE ${whereStr}`,
+      summary: 'Updates exactly 1 row. Previous values are overwritten.',
+      changes: changeRows, confirmLabel: 'Save changes', successMsg: 'Row updated',
+    });
+  }
+}
+
+function dgFormSubmitMongo() {
+  const mode = dgForm.mode;
+  let edited;
+  try { edited = JSON.parse(document.getElementById('dgJsonInput').value); }
+  catch (e) { toast('Invalid JSON: ' + e.message, 'error'); return; }
+  if (typeof edited !== 'object' || Array.isArray(edited) || edited === null) { toast('Document must be a JSON object', 'error'); return; }
+  const coll = dg.collection;
+  if (mode === 'insert') {
+    dgConfirm({
+      action: 'insert', danger: false,
+      endpoint: '/api/row-insert',
+      payload: { database: dg.database, collection: coll, document: edited },
+      preview: `db.getCollection('${coll}').insertOne(\n${JSON.stringify(edited, null, 2)}\n)`,
+      summary: 'Inserts 1 new document.', changes: null, confirmLabel: 'Insert document', successMsg: 'Document inserted',
+    });
+  } else {
+    const orig = dgReconstructDoc(dgForm.r);
+    const set = {}, unset = [];
+    for (const k of Object.keys(edited)) {
+      if (k === '_id') continue;
+      if (JSON.stringify(edited[k]) !== JSON.stringify(orig[k])) set[k] = edited[k];
+    }
+    for (const k of Object.keys(orig)) { if (k !== '_id' && !(k in edited)) unset.push(k); }
+    if (!Object.keys(set).length && !unset.length) { toast('Nothing changed', 'error'); return; }
+    const rep = dg.ids[dgForm.r];
+    const parts = [];
+    if (Object.keys(set).length) parts.push(`$set: ${JSON.stringify(set)}`);
+    if (unset.length) parts.push(`$unset: ${JSON.stringify(Object.fromEntries(unset.map(k => [k, ''])))}`);
+    dgConfirm({
+      action: 'update', danger: false,
+      endpoint: '/api/row-update',
+      payload: { database: dg.database, collection: coll, id: rep, set, unset },
+      preview: `db.getCollection('${coll}').updateOne(\n  { _id: ${dgMongoIdJs(rep)} },\n  { ${parts.join(', ')} }\n)`,
+      summary: 'Updates exactly 1 document.',
+      changes: [...Object.keys(set).map(k => ({ col: k, from: orig[k], to: set[k] })),
+                ...unset.map(k => ({ col: k, from: orig[k], to: undefined, removed: true }))],
+      confirmLabel: 'Save changes', successMsg: 'Document updated',
+    });
+  }
+}
+
+function dgDeleteRow(r) {
+  if (!dg || dg.locked || !dg.editable) return;
+  if (dg.collection) {
+    const rep = dg.ids[r];
+    dgConfirm({
+      action: 'delete', danger: true,
+      endpoint: '/api/row-delete',
+      payload: { database: dg.database, collection: dg.collection, id: rep },
+      preview: `db.getCollection('${dg.collection}').deleteOne(\n  { _id: ${dgMongoIdJs(rep)} }\n)`,
+      summary: 'Permanently deletes 1 document. This cannot be undone.',
+      changes: null, rowPreview: dgReconstructDoc(r), confirmLabel: 'Delete document', successMsg: 'Document deleted',
+    });
+  } else {
+    const pk = dgPgPk(r);
+    const rel = `${dg.schema || 'public'}.${dg.table}`;
+    const whereStr = Object.entries(pk).map(([k, v]) => `${k} = ${dgVal(v)}`).join(' AND ');
+    dgConfirm({
+      action: 'delete', danger: true,
+      endpoint: '/api/row-delete',
+      payload: { database: dg.database, schema: dg.schema, table: dg.table, pk },
+      preview: `DELETE FROM ${rel}\nWHERE ${whereStr}`,
+      summary: 'Permanently deletes exactly 1 row. This cannot be undone.',
+      changes: null, rowPreview: dgReconstructDoc(r), confirmLabel: 'Delete row', successMsg: 'Row deleted',
+    });
+  }
+}
+
+// ── CRUD: confirmation ──────────────────────────────────────────────────────
+let dgPendingOp = null;
+function dgConfirm(op) {
+  dgPendingOp = op;
+  const badge = op.danger
+    ? '<span class="dgc-badge danger">DELETE</span>'
+    : `<span class="dgc-badge ${op.action==='insert'?'ok':'warn'}">${op.action.toUpperCase()}</span>`;
+  let extra = '';
+  if (op.changes && op.changes.length) {
+    extra = `<table class="dgc-changes"><thead><tr><th>column</th><th>from</th><th>to</th></tr></thead><tbody>${
+      op.changes.map(c => `<tr><td class="mono">${esc(c.col)}</td>
+        <td>${dgCellHtml(c.from)}</td>
+        <td>${c.removed ? '<span class="dg-null">removed</span>' : dgCellHtml(c.to)}</td></tr>`).join('')}</tbody></table>`;
+  } else if (op.rowPreview) {
+    extra = `<table class="dgc-changes"><tbody>${
+      Object.entries(op.rowPreview).map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td>${dgCellHtml(v)}</td></tr>`).join('')}</tbody></table>`;
+  }
+  document.getElementById('dgConfirmBody').innerHTML = `
+    <div class="dgc-head">${badge}<span class="dgc-target">${esc(dg.database)}.${esc(dg.name)}</span></div>
+    <pre class="dgc-sql">${esc(op.preview)}</pre>
+    ${extra}
+    <div class="dgc-note ${op.danger?'danger':(op.action==='insert'?'ok':'warn')}">${esc(op.summary)}</div>`;
+  const btn = document.getElementById('dgConfirmBtn');
+  btn.textContent = op.confirmLabel;
+  btn.className = 'btn btn-sm ' + (op.danger ? 'btn-danger' : 'btn-success');
+  btn.disabled = false;
+  document.getElementById('dgConfirmModal').classList.add('open');
+}
+
+async function dgConfirmExecute() {
+  const op = dgPendingOp;
+  if (!op || !dg) return;
+  const btn = document.getElementById('dgConfirmBtn');
+  btn.disabled = true; btn.textContent = 'Working…';
+  const res = await apiPost(op.endpoint, op.payload).catch(() => ({ error: 'Request failed' }));
+  if (!res || res.error) {
+    toast((res && res.error) || 'Failed', 'error');
+    btn.disabled = false; btn.textContent = op.confirmLabel;
+    return;
+  }
+  dgPendingOp = null;
+  document.getElementById('dgConfirmModal').classList.remove('open');
+  document.getElementById('dgFormModal').classList.remove('open');
+  toast(op.successMsg, 'success');
+  dgRefresh();  // reflect true DB state (rows + stats)
+}
+function dgConfirmCancel() { document.getElementById('dgConfirmModal').classList.remove('open'); dgPendingOp = null; }
+
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  const cell = document.getElementById('cellModal');
-  if (cell.classList.contains('open')) { cell.classList.remove('open'); return; }
+  const layers = ['dgConfirmModal', 'cellModal', 'dgFormModal'];
+  for (const id of layers) {
+    const el = document.getElementById(id);
+    if (el && el.classList.contains('open')) { el.classList.remove('open'); if (id==='dgConfirmModal') dgPendingOp=null; return; }
+  }
   if (document.getElementById('dataModal').classList.contains('open')) closeDataModal();
 });
 
@@ -2381,8 +2962,8 @@ function viewQuery() {
     <div id="qContext"></div>
     <div style="display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap">
       <button class="btn btn-primary" onclick="runQueryConfirm()">Run</button>
-      <button class="btn btn-ghost" onclick="runExplain()" title="Show the execution plan without modifying anything">Explain</button>
-      <label class="chk" title="Power mode: stream the engine's raw output live as it arrives, instead of the formatted table."><input type="checkbox" id="qLive"> live output</label>
+      <button class="btn btn-ghost" onclick="runExplain()" data-tip="Show the execution plan without modifying anything">Explain</button>
+      <label class="chk" data-tip="Power mode: stream the engine's raw output live as it arrives, instead of the formatted table."><input type="checkbox" id="qLive"> live output</label>
       <span id="qTiming" style="font-family:var(--mono-font); font-size:11px; color:var(--text-muted)"></span>
     </div>
     <div id="qHistory"></div>
@@ -2914,7 +3495,7 @@ function jsonCell(v) {
   if (v == null) return '<span style="color:var(--text-muted)">null</span>';
   if (typeof v === 'object') {
     const s = JSON.stringify(v);
-    return `<span title="${esc(s.slice(0, 500))}">${esc(s.length > 60 ? s.slice(0, 60) + '…' : s)}</span>`;
+    return `<span data-tip="${esc(s.slice(0, 500))}">${esc(s.length > 60 ? s.slice(0, 60) + '…' : s)}</span>`;
   }
   return esc(String(v).length > 120 ? String(v).slice(0, 120) + '…' : String(v));
 }
@@ -3059,7 +3640,7 @@ function renderQueryHistory() {
   const recent = loadList(historyKey()).filter(q => !pinned.includes(q));
   window._qHist = [...pinned, ...recent];
   const chip = (q, i, isPinned) => `<div style="display:flex; align-items:center; gap:4px">
-    <button class="copy-btn" data-i="${i}" onclick="togglePin(window._qHist[this.dataset.i])" title="${isPinned ? 'Unpin' : 'Pin this query'}" style="font-size:12px">${isPinned ? '★' : '☆'}</button>
+    <button class="copy-btn" data-i="${i}" onclick="togglePin(window._qHist[this.dataset.i])" data-tip="${isPinned ? 'Unpin' : 'Pin this query'}" style="font-size:12px">${isPinned ? '★' : '☆'}</button>
     <button class="hist-chip" data-i="${i}" onclick="recallQuery(this.dataset.i)"><code>${esc(q.length > 105 ? q.slice(0, 105) + '…' : q)}</code></button>
   </div>`;
   let html = '';
@@ -3084,9 +3665,9 @@ function viewEnvs() {
   const details = config.environment_details || {};
   const builtinNames = Object.keys(config.environments || {});
   let rows = '';
-  const actionBtn = (label, fn, env, eng, danger) =>
-    `<button class="btn btn-ghost btn-sm${danger ? '' : ''}" data-env="${esc(env)}" data-eng="${esc(eng)}"
-      onclick="${fn}(this.dataset.env, this.dataset.eng)">${label}</button>`;
+  const actionBtn = (icon, title, fn, env, eng, cls = '') =>
+    `<button class="ibtn ${cls}" data-tip="${esc(title)}" data-env="${esc(env)}" data-eng="${esc(eng)}"
+      onclick="${fn}(this.dataset.env, this.dataset.eng)">${icon}</button>`;
 
   const isServerProfile = (env, eng) => (config.profile_envs?.[env] || []).includes(eng);
   for (const env of builtinNames) {
@@ -3100,18 +3681,18 @@ function viewEnvs() {
         : server ? '<span class="pill pill-accent">server profile</span>'
         : '<span class="pill pill-muted">built-in</span>';
       const actions = hidden
-        ? actionBtn('Restore', 'restoreEnv', env, eng)
+        ? actionBtn(ICONS.refresh, 'Restore', 'restoreEnv', env, eng, 'teal')
         : server && !override
-          ? actionBtn('Edit', 'editEnv', env, eng) + ' ' + actionBtn('Delete', 'deleteServerProfile', env, eng)
-          : actionBtn('Edit', 'editEnv', env, eng)
-            + ' ' + (override ? actionBtn('Restore built-in', 'deleteCustomEnv', env, eng)
-                              : actionBtn('Hide', 'hideEnv', env, eng));
+          ? actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent') + actionBtn(ICONS.trash, 'Delete server profile', 'deleteServerProfile', env, eng, 'danger')
+          : actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent')
+            + (override ? actionBtn(ICONS.refresh, 'Restore built-in', 'deleteCustomEnv', env, eng, 'teal')
+                        : actionBtn(ICONS.ban, 'Hide', 'hideEnv', env, eng, 'warn'));
       rows += `<tr${hidden ? ' style="opacity:0.45"' : ''}>
         <td class="mono">${esc(env)}</td>
         <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
         <td class="mono" style="font-size:11px">${esc(cfg.host || '')}:${esc(cfg.port || '')}${cfg.tls ? ' · tls' : ''}</td>
         <td>${status}</td>
-        <td style="text-align:right; white-space:nowrap">${actions}</td></tr>`;
+        <td><div class="row-acts">${actions}</div></td></tr>`;
     }
     // engines added onto a built-in env
     for (const [eng, cfg] of Object.entries(customEnvs[env] || {})) {
@@ -3120,7 +3701,7 @@ function viewEnvs() {
         <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
         <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${cfg.tls ? ' · tls' : ''}</td>
         <td><span class="pill pill-warn">added</span></td>
-        <td style="text-align:right; white-space:nowrap">${actionBtn('Edit', 'editEnv', env, eng)} ${actionBtn('Delete', 'deleteCustomEnv', env, eng)}</td></tr>`;
+        <td><div class="row-acts">${actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent')}${actionBtn(ICONS.trash, 'Delete', 'deleteCustomEnv', env, eng, 'danger')}</div></td></tr>`;
     }
   }
   for (const [env, engines] of Object.entries(customEnvs)) {
@@ -3130,7 +3711,7 @@ function viewEnvs() {
         <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
         <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${cfg.tls ? ' · tls' : ''}</td>
         <td><span class="pill pill-ok">custom</span></td>
-        <td style="text-align:right; white-space:nowrap">${actionBtn('Edit', 'editEnv', env, eng)} ${actionBtn('Delete', 'deleteCustomEnv', env, eng)}</td></tr>`;
+        <td><div class="row-acts">${actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent')}${actionBtn(ICONS.trash, 'Delete', 'deleteCustomEnv', env, eng, 'danger')}</div></td></tr>`;
     }
   }
   const hasAny = rows.trim().length > 0;
@@ -3168,7 +3749,7 @@ function viewEnvs() {
       <button class="btn btn-ghost" id="ceUploadBtn" style="display:none; align-self:flex-end" onclick="document.getElementById('ceFile').click()">Upload .db file</button>
       <input type="file" id="ceFile" accept=".db,.sqlite,.sqlite3" style="display:none" onchange="uploadSqlite(this)">
       <label class="chk" id="ceTlsWrap" style="height:32px"><input type="checkbox" id="ceTls"> TLS</label>
-      <label class="chk" style="height:32px" title="Store on the server (SQLite at ~/.warden/profiles.sqlite) so it works in every browser and the CLI. Passwords are never stored there."><input type="checkbox" id="ceServer"> save on server</label>
+      <label class="chk" style="height:32px" data-tip="Store on the server (SQLite at ~/.warden/profiles.sqlite) so it works in every browser and the CLI. Passwords are never stored there."><input type="checkbox" id="ceServer"> save on server</label>
       <button class="btn btn-success" onclick="addCustomEnv()">Save</button>
     </div>
     <h2 style="margin-top:26px">${ICONS.db} Backup &amp; Transfer</h2>
@@ -3184,7 +3765,7 @@ function viewEnvs() {
     <h2 style="margin-top:26px; color:var(--danger)">${ICONS.trash} Reset warden</h2>
     <p class="card-meta">Wipes everything and drops you back to a fresh start: connections, saved passwords, audit results and exclusions, pinned queries, history, preferences. Export a backup first if you might want it back.</p>
     <div class="form-row" style="margin-bottom:0; align-items:center">
-      <label class="chk" style="height:32px" title="Also delete ~/.warden/audit.log. Off keeps the change history."><input type="checkbox" id="wipeAudit"> also clear the activity log</label>
+      <label class="chk" style="height:32px" data-tip="Also delete ~/.warden/audit.log. Off keeps the change history."><input type="checkbox" id="wipeAudit"> also clear the activity log</label>
       <button class="btn btn-danger" onclick="wipeAllData()">Wipe all data</button>
     </div></div>`);
 }
@@ -3577,7 +4158,7 @@ async function viewAuditDetail(id) {
   const findingRow = f => `<tr>
     <td><input type="checkbox" class="audit-sel" data-user="${esc(f.user)}" onchange="auditSelChanged()"></td>
     <td>${sevPill(f.severity)}</td>
-    <td class="mono" style="cursor:pointer" data-user="${esc(f.user)}" onclick="viewUserInfoFor(this.dataset.user)" title="Open user page">${esc(f.user)}</td>
+    <td class="mono" style="cursor:pointer" data-user="${esc(f.user)}" onclick="viewUserInfoFor(this.dataset.user)" data-tip="Open user page">${esc(f.user)}</td>
     <td>${esc(f.summary)}</td>
     <td class="mono" style="font-size:11px; color:var(--text-muted)">${esc(f.detail)}</td>
     <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-id="${esc(id)}" data-user="${esc(f.user)}"
@@ -3596,7 +4177,7 @@ async function viewAuditDetail(id) {
     </div>`;
   html += live.length
     ? `<div class="table-wrap"><table>
-        <thead><tr><th><input type="checkbox" id="auditSelAll" onchange="auditSelAll(this.checked)" title="Select all"></th><th>Severity</th><th>User</th><th>Finding</th><th>Detail</th><th></th></tr></thead>
+        <thead><tr><th><input type="checkbox" id="auditSelAll" onchange="auditSelAll(this.checked)" data-tip="Select all"></th><th>Severity</th><th>User</th><th>Finding</th><th>Detail</th><th></th></tr></thead>
         <tbody>${live.map(findingRow).join('')}</tbody></table></div>`
     : `<div class="empty-state">No findings${excludedFindings.length ? ' (everything is excluded)' : ', all clear'} ✓</div>`;
   if (exclusions.length) {
