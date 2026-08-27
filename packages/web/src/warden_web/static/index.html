@@ -1321,8 +1321,7 @@ function renderNav() {
   for (const item of navModel()) {
     const dis = (connected || item.always) ? '' : 'disabled';
     const badge = item.badge ? `<span class="nav-badge" id="badge-${item.badge}" style="display:none"></span>` : '';
-    const tip = dis ? 'Connect to use this' : esc(item.label);
-    html += `<button id="nav-${item.id}" class="nav-item" ${dis} data-tip="${tip}"
+    html += `<button id="nav-${item.id}" class="nav-item" ${dis}
       onclick="navigate('${item.id}')">${item.icon}<span>${esc(item.label)}</span>${badge}</button>`;
   }
   box.innerHTML = html;
