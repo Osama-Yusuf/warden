@@ -600,6 +600,52 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .tooltip.show { opacity: 1; }
 .tooltip.below { transform: translate(-50%, 7px); }
 
+/* Collapsible sections (Connections / Data) */
+.sect { border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+  margin-bottom: 14px; overflow: hidden; }
+.sect > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px;
+  padding: 15px 18px; user-select: none; transition: background .12s; }
+.sect > summary::-webkit-details-marker { display: none; }
+.sect > summary:hover { background: var(--surface-2); }
+.sect-ic { color: var(--accent); display: inline-flex; }
+.sect-ic svg { width: 17px; height: 17px; }
+.sect-title { font-size: 15px; font-weight: 600; color: var(--text-strong); }
+.sect-badge { font-size: 11px; color: var(--text-muted); background: var(--surface-2);
+  border: 1px solid var(--border); padding: 1px 8px; border-radius: 10px; font-variant-numeric: tabular-nums; }
+.sect-spacer { flex: 1; }
+.sect-add { margin-right: 2px; }
+.sect-chev { color: var(--text-muted); display: inline-flex; transition: transform .2s ease; }
+.sect-chev svg { width: 16px; height: 16px; }
+.sect[open] > summary .sect-chev { transform: rotate(90deg); }
+.sect-body { padding: 6px 18px 18px; border-top: 1px solid var(--border); }
+.subsect { padding: 16px 0; }
+.subsect:first-child { padding-top: 14px; }
+.subsect:last-child { padding-bottom: 2px; }
+.subsect + .subsect { border-top: 1px solid var(--border); }
+.subsect-title { font-size: 13.5px; font-weight: 600; margin: 0 0 6px; display: flex; align-items: center; gap: 8px; color: var(--text-strong); }
+.subsect-title svg { width: 15px; height: 15px; }
+.subsect-title.danger { color: var(--danger); }
+.conn-empty { text-align: center; padding: 34px 20px 30px; }
+.conn-empty-ic { color: var(--text-muted); opacity: 0.45; margin-bottom: 10px; }
+.conn-empty-ic svg { width: 34px; height: 34px; }
+.conn-empty p { color: var(--text-muted); margin: 0 0 14px; font-size: 13.5px; }
+
+/* Add/edit connection modal */
+#connModal { z-index: 150; }
+.conn-modal { max-width: 470px; width: 92%; max-height: 88vh; overflow-y: auto; position: relative; }
+.conn-form { display: flex; flex-direction: column; gap: 13px; }
+.conn-form .form-field { display: flex; flex-direction: column; gap: 5px; }
+.conn-form .form-field label { font-size: 12px; color: var(--text-muted); }
+.conn-form .form-field input, .conn-form select { height: 36px; width: 100%; box-sizing: border-box;
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 0 10px; font-size: 13px; }
+.conn-form .form-field input:focus, .conn-form select:focus { outline: none; border-color: var(--accent); }
+.conn-row { display: flex; gap: 12px; }
+.conn-row .form-field { flex: 1; }
+.conn-checks { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+.conn-checks .chk { white-space: nowrap; display: inline-flex; align-items: center; gap: 7px; margin: 0; cursor: pointer; }
+.conn-checks input[type=checkbox] { width: 15px; height: 15px; flex-shrink: 0; margin: 0; }
+
 /* add/edit form */
 #dgFormModal { z-index: 150; }
 .dg-form { max-width: 620px; width: 92%; max-height: 86vh; overflow-y: auto; position: relative; }
@@ -809,6 +855,34 @@ table.dgrid tbody tr:hover .dg-actwrap {
   </div>
 </div>
 
+<!-- Add / edit a connection -->
+<div class="modal-overlay" id="connModal">
+  <div class="modal conn-modal">
+    <button class="modal-x" onclick="closeConnModal()" data-tip="Close">&times;</button>
+    <h3 id="connFormTitle" style="margin-top:0; padding-right:34px"></h3>
+    <div class="conn-form">
+      <div class="form-field"><label>Name</label><input id="ceName" placeholder="e.g. production" autocomplete="off"></div>
+      <div class="form-field"><label>Engine</label><select id="ceEngine" onchange="ceEngineChanged()">
+        <option value="documentdb">MongoDB</option><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="sqlite">SQLite</option></select></div>
+      <div class="form-field"><label id="ceHostLabel">Host</label><input id="ceHost" placeholder="hostname or IP" autocomplete="off"></div>
+      <div class="conn-row">
+        <div class="form-field" id="cePortWrap"><label>Port</label><input id="cePort" type="number" placeholder="27017"></div>
+        <div class="form-field" id="ceDbWrap"><label id="ceDbLabel">Auth DB</label><input id="ceDb" placeholder="admin" autocomplete="off"></div>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="ceUploadBtn" style="display:none; align-self:flex-start" onclick="document.getElementById('ceFile').click()">Upload .db file</button>
+      <input type="file" id="ceFile" accept=".db,.sqlite,.sqlite3" style="display:none" onchange="uploadSqlite(this)">
+      <div class="conn-checks">
+        <label class="chk" id="ceTlsWrap"><input type="checkbox" id="ceTls"> TLS</label>
+        <label class="chk" data-tip="Store on the server (SQLite at ~/.warden/profiles.sqlite) so it works in every browser and the CLI. Passwords are never stored there."><input type="checkbox" id="ceServer"> save on server</label>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-ghost btn-sm" onclick="closeConnModal()">Cancel</button>
+      <button class="btn btn-success btn-sm" onclick="addCustomEnv()">Save connection</button>
+    </div>
+  </div>
+</div>
+
 <!-- CRUD confirmation (shows exactly what will run) -->
 <div class="modal-overlay" id="dgConfirmModal">
   <div class="modal dg-confirm">
@@ -888,6 +962,7 @@ const ICONS = {
   rows: I('<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 9.7h17M3.5 14.3h17"/>'),
   copy: I('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h8"/>'),
   pencil: I('<path d="M4 20l1-4L16 5a2 2 0 012.8 2.8L8 18.7z"/><path d="M14.5 6.5l3 3"/>'),
+  chevron: I('<path d="M9 6l6 6-6 6"/>'),
 };
 
 const TB_SVG = {
@@ -3728,47 +3803,82 @@ function viewEnvs() {
           <div class="ob-step"><span class="ob-num">3</span><div><b>Take the wheel</b><span>Manage users, run queries, audit access</span></div></div>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:18px">
-          <button class="btn btn-primary" onclick="document.getElementById('ceName').scrollIntoView({behavior:'smooth',block:'center'}); document.getElementById('ceName').focus()">Add my first connection</button>
+          <button class="btn btn-primary" onclick="openConnForm()">Add my first connection</button>
           <button class="btn btn-ghost" onclick="document.getElementById('beoFile').click()">Import a backup</button>
         </div></div>`;
-  setContent(banner + `<div class="card"><h2>${ICONS.sliders} Connections</h2>
-    <p class="card-meta">Everything here lives in this browser only (localStorage). The server is never touched, so any change is reversible.</p>
-    ${hasAny ? `<div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>Engine</th><th>Endpoint</th><th>Status</th><th></th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>` : `<div class="empty-state">No connections yet. Add one below.</div>`}
-    <h2 style="margin-top:22px" id="ceFormTitle">${ICONS.plus} Add a connection</h2>
-    <p class="card-meta">Give it a name and an engine, then the host details. SQLite just needs a file, or upload one.</p>
-    <div class="form-row">
-      <div class="form-field"><label>Name</label><input id="ceName" placeholder="name"></div>
-      <div class="form-field"><label>Engine</label><select id="ceEngine" onchange="ceEngineChanged()">
-        <option value="documentdb">MongoDB</option><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="sqlite">SQLite</option></select></div>
-      <div class="form-field"><label id="ceHostLabel">Host</label><input id="ceHost" placeholder="hostname or IP" style="min-width:300px"></div>
-      <div class="form-field" id="cePortWrap"><label>Port</label><input id="cePort" type="number" placeholder="27017" style="min-width:90px"></div>
-      <div class="form-field" id="ceDbWrap"><label id="ceDbLabel">Auth DB</label><input id="ceDb" placeholder="admin"></div>
-      <button class="btn btn-ghost" id="ceUploadBtn" style="display:none; align-self:flex-end" onclick="document.getElementById('ceFile').click()">Upload .db file</button>
-      <input type="file" id="ceFile" accept=".db,.sqlite,.sqlite3" style="display:none" onchange="uploadSqlite(this)">
-      <label class="chk" id="ceTlsWrap" style="height:32px"><input type="checkbox" id="ceTls"> TLS</label>
-      <label class="chk" style="height:32px" data-tip="Store on the server (SQLite at ~/.warden/profiles.sqlite) so it works in every browser and the CLI. Passwords are never stored there."><input type="checkbox" id="ceServer"> save on server</label>
-      <button class="btn btn-success" onclick="addCustomEnv()">Save</button>
-    </div>
-    <h2 style="margin-top:26px">${ICONS.db} Backup &amp; Transfer</h2>
-    <p class="card-meta">Move everything to the desktop app or another browser: saved credentials per environment, custom environments and overrides,
-      audit results and exclusions, pinned queries and history, preferences. Open this same page there and import the file.</p>
-    <div class="form-row">
-      <div class="form-field"><label>Passphrase (optional, encrypts the file)</label>
-        <input id="beoPass" type="password" placeholder="recommended, the file contains passwords" style="min-width:280px"></div>
-      <button class="btn btn-primary" onclick="doExportAll()">Export everything</button>
-      <button class="btn btn-ghost" onclick="document.getElementById('beoFile').click()">Import…</button>
-      <input type="file" id="beoFile" accept=".json,application/json" style="display:none" onchange="importBackupPicked(this)">
-    </div>
-    <h2 style="margin-top:26px; color:var(--danger)">${ICONS.trash} Reset warden</h2>
-    <p class="card-meta">Wipes everything and drops you back to a fresh start: connections, saved passwords, audit results and exclusions, pinned queries, history, preferences. Export a backup first if you might want it back.</p>
-    <div class="form-row" style="margin-bottom:0; align-items:center">
-      <label class="chk" style="height:32px" data-tip="Also delete ~/.warden/audit.log. Off keeps the change history."><input type="checkbox" id="wipeAudit"> also clear the activity log</label>
-      <button class="btn btn-danger" onclick="wipeAllData()">Wipe all data</button>
-    </div></div>`);
+  const connCount = (rows.match(/<tr/g) || []).length;
+  setContent(banner + `
+    <details class="sect" open>
+      <summary>
+        <span class="sect-ic">${ICONS.sliders}</span>
+        <span class="sect-title">Connections</span>
+        ${connCount ? `<span class="sect-badge">${connCount}</span>` : ''}
+        <span class="sect-spacer"></span>
+        <button class="ibtn accent sect-add" data-tip="Add a connection"
+          onclick="event.preventDefault();event.stopPropagation();openConnForm()">${ICONS.plus}</button>
+        <span class="sect-chev">${ICONS.chevron}</span>
+      </summary>
+      <div class="sect-body">
+        <p class="card-meta" style="margin-top:0">Everything here lives in this browser only (localStorage). The server is never touched, so any change is reversible.</p>
+        ${connCount ? `<div class="table-wrap"><table>
+          <thead><tr><th>Name</th><th>Engine</th><th>Endpoint</th><th>Status</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>` : `<div class="conn-empty">
+          <div class="conn-empty-ic">${ICONS.db}</div>
+          <p>No connections yet.</p>
+          <button class="btn btn-primary btn-sm" onclick="openConnForm()">${ICONS.plus} Add a connection</button>
+        </div>`}
+      </div>
+    </details>
+
+    <details class="sect">
+      <summary>
+        <span class="sect-ic">${ICONS.db}</span>
+        <span class="sect-title">Data</span>
+        <span class="sect-spacer"></span>
+        <span class="sect-chev">${ICONS.chevron}</span>
+      </summary>
+      <div class="sect-body">
+        <div class="subsect">
+          <h3 class="subsect-title">${ICONS.scroll} Backup &amp; Transfer</h3>
+          <p class="card-meta">Move everything to the desktop app or another browser: saved credentials per environment, custom environments and overrides, audit results and exclusions, pinned queries and history, preferences. Open this same page there and import the file.</p>
+          <div class="form-row" style="margin-bottom:0">
+            <div class="form-field"><label>Passphrase (optional, encrypts the file)</label>
+              <input id="beoPass" type="password" placeholder="recommended, the file contains passwords" style="min-width:280px"></div>
+            <button class="btn btn-primary btn-sm" onclick="doExportAll()">Export everything</button>
+            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('beoFile').click()">Import…</button>
+            <input type="file" id="beoFile" accept=".json,application/json" style="display:none" onchange="importBackupPicked(this)">
+          </div>
+        </div>
+        <div class="subsect">
+          <h3 class="subsect-title danger">${ICONS.trash} Reset</h3>
+          <p class="card-meta">Wipes everything and drops you back to a fresh start: connections, saved passwords, audit results and exclusions, pinned queries, history, preferences. Export a backup first if you might want it back.</p>
+          <div class="form-row" style="margin-bottom:0; align-items:center">
+            <label class="chk" data-tip="Also delete ~/.warden/audit.log. Off keeps the change history."><input type="checkbox" id="wipeAudit"> also clear the activity log</label>
+            <button class="btn btn-danger btn-sm" onclick="wipeAllData()">Wipe all data</button>
+          </div>
+        </div>
+      </div>
+    </details>`);
 }
+
+function openConnForm() {
+  document.getElementById('connFormTitle').innerHTML = `${ICONS.plus} Add a connection`;
+  document.getElementById('ceName').value = '';
+  document.getElementById('ceEngine').value = 'documentdb';
+  document.getElementById('ceHost').value = '';
+  document.getElementById('cePort').value = '';
+  document.getElementById('ceDb').value = '';
+  document.getElementById('ceTls').checked = false;
+  const srv = document.getElementById('ceServer'); if (srv) srv.checked = false;
+  ceEngineChanged();
+  document.getElementById('connModal').classList.add('open');
+  setTimeout(() => document.getElementById('ceName').focus(), 40);
+}
+function closeConnModal() { document.getElementById('connModal').classList.remove('open'); }
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.getElementById('connModal').classList.contains('open')) closeConnModal();
+});
 
 async function wipeAllData() {
   const wipeAudit = document.getElementById('wipeAudit')?.checked;
@@ -3810,17 +3920,18 @@ function deleteServerProfile(env, eng) {
 
 function editEnv(env, eng) {
   const cfg = customEnvs[env]?.[eng] || config.environment_details?.[env]?.[eng] || {};
+  document.getElementById('connFormTitle').innerHTML = `${ICONS.pencil} Edit ${esc(env)} / ${esc(engineLabel(eng))}`;
   document.getElementById('ceName').value = env;
   document.getElementById('ceEngine').value = eng;
   ceEngineChanged();
-  document.getElementById('ceHost').value = cfg.host || '';
+  document.getElementById('ceHost').value = cfg.host || cfg.path || '';
   document.getElementById('cePort').value = cfg.port || '';
   document.getElementById('ceDb').value = cfg.auth_db || cfg.default_db || '';
   document.getElementById('ceTls').checked = !!cfg.tls;
   const serverChk = document.getElementById('ceServer');
   if (serverChk) serverChk.checked = (config.profile_envs?.[env] || []).includes(eng);
-  document.getElementById('ceFormTitle').innerHTML = `${ICONS.sliders} Edit ${esc(env)} / ${esc(eng)}`;
-  document.getElementById('ceHost').focus();
+  document.getElementById('connModal').classList.add('open');
+  setTimeout(() => document.getElementById('ceHost').focus(), 40);
 }
 
 function hideEnv(env, eng) {
@@ -3907,6 +4018,7 @@ function addCustomEnv() {
       if (res.error) { toast(res.error, 'error'); return; }
       await reloadConfig();
       afterEnvChange(name);
+      closeConnModal();
       toast(`Server profile saved: ${name} / ${eng}`, 'success');
       viewEnvs();
     });
@@ -3917,6 +4029,7 @@ function addCustomEnv() {
   customEnvs[name][eng] = cfg;
   saveCustomEnvs();
   afterEnvChange(name);
+  closeConnModal();
   toast(isOverride ? `Override saved for ${name} / ${eng}` : `Saved ${name} / ${eng}`, 'success');
   viewEnvs();
 }
