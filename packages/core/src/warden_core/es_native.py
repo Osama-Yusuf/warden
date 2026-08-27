@@ -10,6 +10,7 @@ query console still speaks the native Query DSL.
 """
 
 import json as _json
+import re as _re
 import threading
 
 try:
@@ -18,6 +19,8 @@ try:
     HAVE_URLLIB3 = True
 except ImportError:  # pragma: no cover
     HAVE_URLLIB3 = False
+
+_ES_FIELD = _re.compile(r"^[A-Za-z0-9_.@\-]+$")
 
 
 _http = None
@@ -169,3 +172,47 @@ def cluster_health(cfg, user, pwd):
 def raw_search(cfg, user, pwd, index, body):
     """Query console: run a Query DSL body via _search against index (or _all)."""
     return _req(cfg, user, pwd, "POST", f"/{index or '_all'}/_search", body)
+
+
+# ---------------------------------------------------------------------------
+# Document CRUD (writes refresh so the browser reflects them immediately)
+# ---------------------------------------------------------------------------
+
+def insert_document(cfg, user, pwd, index, doc, doc_id=None):
+    if doc_id:
+        method, path = "PUT", f"/{index}/_doc/{doc_id}?refresh=true"
+    else:
+        method, path = "POST", f"/{index}/_doc?refresh=true"
+    data, err = _req(cfg, user, pwd, method, path, doc)
+    if err:
+        return None, err
+    return {"inserted_id": (data or {}).get("_id")}, None
+
+
+def update_document(cfg, user, pwd, index, doc_id, set_fields, unset_fields):
+    """Partial update by _id via a painless script. Field names are validated to
+    a safe charset (they're interpolated into the script); values ride in params
+    so they can't inject."""
+    for k in list((set_fields or {}).keys()) + list(unset_fields or []):
+        if not _ES_FIELD.match(str(k)):
+            return None, f"Field name can't be edited from the grid: {k}"
+    parts, params = [], {}
+    for k, v in (set_fields or {}).items():
+        parts.append(f"ctx._source['{k}'] = params['{k}']")
+        params[k] = v
+    for k in (unset_fields or []):
+        parts.append(f"ctx._source.remove('{k}')")
+    if not parts:
+        return {"result": "noop"}, None
+    body = {"script": {"source": "; ".join(parts), "lang": "painless", "params": params}}
+    data, err = _req(cfg, user, pwd, "POST", f"/{index}/_update/{doc_id}?refresh=true", body)
+    if err:
+        return None, err
+    return {"result": (data or {}).get("result")}, None
+
+
+def delete_document(cfg, user, pwd, index, doc_id):
+    data, err = _req(cfg, user, pwd, "DELETE", f"/{index}/_doc/{doc_id}?refresh=true")
+    if err:
+        return None, err
+    return {"result": (data or {}).get("result")}, None

@@ -1184,6 +1184,18 @@ def api_table_meta(body):
             return {"error": err}
         return {"engine": "documentdb", **meta}
 
+    if fam == "elasticsearch":
+        # Documents are edited as JSON, keyed by _id — same shape as MongoDB.
+        return {"engine": "elasticsearch", "editable": bool(USE_NATIVE_ES),
+                "id_field": "_id", "json_edit": True,
+                "reason": None if USE_NATIVE_ES else "native driver unavailable"}
+
+    if fam == "redis":
+        # Keys are edited with a key/type/ttl/value form, not a column grid.
+        return {"engine": "redis", "editable": bool(USE_NATIVE_REDIS),
+                "id_field": "key", "redis_edit": True,
+                "reason": None if USE_NATIVE_REDIS else "native driver unavailable"}
+
     if fam == "postgresql":
         if not USE_NATIVE_PG:
             return {"editable": False, "reason": "native PostgreSQL driver unavailable"}
@@ -1288,12 +1300,30 @@ def api_object_stats(body):
 
 
 def _crud_supported(fam):
-    """Only the parameterized native engines may mutate rows."""
+    """Only the native engines may mutate rows."""
     if fam == "documentdb" and USE_NATIVE_MONGO:
         return None
     if fam == "postgresql" and USE_NATIVE_PG:
         return None
-    return {"error": "Row editing is only available for PostgreSQL and MongoDB"}
+    if fam == "elasticsearch" and USE_NATIVE_ES:
+        return None
+    if fam == "redis" and USE_NATIVE_REDIS:
+        return None
+    return {"error": "Row editing isn't available for this engine"}
+
+
+def _es_index(body):
+    index = str(body.get("collection", "")).strip()
+    if not index or "\x00" in index or "," in index or index.startswith("_"):
+        raise ValueError("Invalid index name")
+    return index
+
+
+def _redis_key(body, field="id"):
+    key = body.get(field)
+    if not isinstance(key, str) or not key or "\x00" in key or len(key) > 512:
+        raise ValueError("Invalid key")
+    return key
 
 
 def _clean_columns(mapping, label):
@@ -1330,6 +1360,34 @@ def api_row_insert(body):
             return {"error": err}
         audit(env, "documentdb", "INSERT DOC", f"{database}.{collection} _id={res.get('inserted_id')}")
         return {"ok": True, "inserted_id": res.get("inserted_id")}
+
+    if fam == "elasticsearch":
+        try:
+            index = _es_index(body)
+        except ValueError as e:
+            return {"error": str(e)}
+        doc = body.get("document")
+        if not isinstance(doc, dict):
+            return {"error": "Document must be a JSON object"}
+        doc_id = body.get("id") if isinstance(body.get("id"), str) and body.get("id") else None
+        res, err = esn.insert_document(cfg, adm_user, adm_pass, index, doc, doc_id)
+        if err:
+            return {"error": err}
+        audit(env, "elasticsearch", "INDEX DOC", f"{index} _id={res.get('inserted_id')}")
+        return {"ok": True, "inserted_id": res.get("inserted_id")}
+
+    if fam == "redis":
+        database = validate_ident(body.get("database", "db0"), "database")
+        try:
+            key = _redis_key(body, "key")
+        except ValueError as e:
+            return {"error": str(e)}
+        res, err = rdn.set_key(cfg, adm_user, adm_pass, database, key,
+                               body.get("ktype", "string"), body.get("value"), body.get("ttl"))
+        if err:
+            return {"error": err}
+        audit(env, "redis", "SET KEY", f"{database} {key} ({body.get('ktype')})")
+        return {"ok": True, "key": key}
 
     database = validate_ident(body.get("database", ""), "database")
     schema = validate_ident(body.get("schema", "public"), "schema")
@@ -1378,6 +1436,37 @@ def api_row_update(body):
         audit(env, "documentdb", "UPDATE DOC", f"{database}.{collection} _id={rep}")
         return {"ok": True, "modified": res.get("modified", 0)}
 
+    if fam == "elasticsearch":
+        try:
+            index = _es_index(body)
+        except ValueError as e:
+            return {"error": str(e)}
+        rep = body.get("id")
+        if not isinstance(rep, str) or not rep:
+            return {"error": "Missing document _id"}
+        set_fields = body.get("set") or {}
+        unset_fields = body.get("unset") or []
+        if not isinstance(set_fields, dict) or not isinstance(unset_fields, list):
+            return {"error": "Invalid update payload"}
+        res, err = esn.update_document(cfg, adm_user, adm_pass, index, rep, set_fields, unset_fields)
+        if err:
+            return {"error": err}
+        audit(env, "elasticsearch", "UPDATE DOC", f"{index} _id={rep}")
+        return {"ok": True, "modified": 1 if (res or {}).get("result") == "updated" else 0}
+
+    if fam == "redis":
+        database = validate_ident(body.get("database", "db0"), "database")
+        try:
+            key = _redis_key(body, "id")
+        except ValueError as e:
+            return {"error": str(e)}
+        res, err = rdn.set_key(cfg, adm_user, adm_pass, database, key,
+                               body.get("ktype", "string"), body.get("value"), body.get("ttl"))
+        if err:
+            return {"error": err}
+        audit(env, "redis", "SET KEY", f"{database} {key} ({body.get('ktype')})")
+        return {"ok": True, "modified": 1}
+
     database = validate_ident(body.get("database", ""), "database")
     schema = validate_ident(body.get("schema", "public"), "schema")
     table = validate_ident(body.get("table", ""), "table")
@@ -1422,6 +1511,32 @@ def api_row_delete(body):
         if err:
             return {"error": err}
         audit(env, "documentdb", "DELETE DOC", f"{database}.{collection} _id={rep}")
+        return {"ok": True, "deleted": res.get("deleted", 0)}
+
+    if fam == "elasticsearch":
+        try:
+            index = _es_index(body)
+        except ValueError as e:
+            return {"error": str(e)}
+        rep = body.get("id")
+        if not isinstance(rep, str) or not rep:
+            return {"error": "Missing document _id"}
+        res, err = esn.delete_document(cfg, adm_user, adm_pass, index, rep)
+        if err:
+            return {"error": err}
+        audit(env, "elasticsearch", "DELETE DOC", f"{index} _id={rep}")
+        return {"ok": True, "deleted": 1 if (res or {}).get("result") == "deleted" else 0}
+
+    if fam == "redis":
+        database = validate_ident(body.get("database", "db0"), "database")
+        try:
+            key = _redis_key(body, "id")
+        except ValueError as e:
+            return {"error": str(e)}
+        res, err = rdn.delete_key(cfg, adm_user, adm_pass, database, key)
+        if err:
+            return {"error": err}
+        audit(env, "redis", "DELETE KEY", f"{database} {key}")
         return {"ok": True, "deleted": res.get("deleted", 0)}
 
     database = validate_ident(body.get("database", ""), "database")

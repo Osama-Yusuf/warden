@@ -645,6 +645,8 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .conn-checks { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
 .conn-checks .chk { white-space: nowrap; display: inline-flex; align-items: center; gap: 7px; margin: 0; cursor: pointer; }
 .conn-checks input[type=checkbox] { width: 15px; height: 15px; flex-shrink: 0; margin: 0; }
+.ce-compat { font-size: 11px; color: var(--text-muted); margin-top: 5px; display: block; min-height: 14px; }
+.ce-compat:empty { display: none; }
 
 /* add/edit form */
 #dgFormModal { z-index: 150; }
@@ -863,7 +865,8 @@ table.dgrid tbody tr:hover .dg-actwrap {
     <div class="conn-form">
       <div class="form-field"><label>Name</label><input id="ceName" placeholder="e.g. production" autocomplete="off"></div>
       <div class="form-field"><label>Engine</label><select id="ceEngine" onchange="ceEngineChanged()">
-        <option value="documentdb">MongoDB</option><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="sqlite">SQLite</option><option value="elasticsearch">Elasticsearch / OpenSearch</option><option value="redis">Redis / Valkey / ElastiCache</option></select></div>
+        <option value="documentdb">MongoDB</option><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="sqlite">SQLite</option><option value="elasticsearch">Elasticsearch</option><option value="redis">Redis</option></select>
+        <span class="ce-compat" id="ceCompat"></span></div>
       <div class="form-field"><label id="ceHostLabel">Host</label><input id="ceHost" placeholder="hostname or IP" autocomplete="off"></div>
       <div class="conn-row">
         <div class="form-field" id="cePortWrap"><label>Port</label><input id="cePort" type="number" placeholder="27017"></div>
@@ -2489,9 +2492,9 @@ function openDataGrid(spec) {
   // spec: {database, collection} (mongo) or {database, schema?, table} (sql)
   if (!requireConnection()) return;
   const name = spec.collection || (spec.schema ? `${spec.schema}.${spec.table}` : spec.table);
-  dg = { ...spec, name, limit: 50, offset: 0, total: null, columns: [], rows: [], ids: [],
-         loading: true, error: null, search: '', locked: true, meta: null, editable: false,
-         filtered: false, estimated: false };
+  dg = { ...spec, name, fam: engineFamily(currentEngine), limit: 50, offset: 0, total: null,
+         columns: [], rows: [], ids: [], loading: true, error: null, search: '', locked: true,
+         meta: null, editable: false, filtered: false, estimated: false };
   document.getElementById('dataModal').classList.add('open');
   document.getElementById('dgStats').innerHTML = '';
   renderDgChrome();
@@ -2756,20 +2759,51 @@ function dgEditRow(r) { dgOpenForm('edit', r); }
 function dgOpenForm(mode, r) {
   if (!dg || dg.locked || !dg.editable) return;
   dgForm = { mode, r };
-  const isMongo = !!dg.collection;
-  const title = `${mode === 'insert' ? 'Add row to' : 'Edit row in'} ${esc(dg.database)}.${esc(dg.name)}`;
-  let bodyHtml;
-  if (isMongo) {
+  let bodyHtml, title;
+  if (dg.fam === 'redis') {
+    title = `${mode === 'insert' ? 'Add a key to' : 'Edit key in'} ${esc(dg.database)}`;
+    bodyHtml = dgRedisFormFields(mode, r);
+  } else if (dg.collection) {  // Mongo & Elasticsearch: edit the document as JSON
+    const eng = engineLabel(currentEngine);
+    title = `${mode === 'insert' ? 'Add document to' : 'Edit document in'} ${esc(dg.database)}.${esc(dg.name)}`;
     const initial = mode === 'edit' ? JSON.stringify(dgReconstructDoc(r), null, 2) : '{\n  \n}';
-    bodyHtml = `<p class="dgf-hint">Edit the document as JSON. ${mode === 'edit' ? 'Only changed fields are written; <code>_id</code> can\'t change.' : 'Leave out <code>_id</code> to let MongoDB assign one.'}</p>
+    bodyHtml = `<p class="dgf-hint">Edit the document as JSON. ${mode === 'edit' ? 'Only changed fields are written; <code>_id</code> can\'t change.' : `Leave out <code>_id</code> to let ${esc(eng)} assign one.`}</p>
       <textarea id="dgJsonInput" class="dgf-json" spellcheck="false">${esc(initial)}</textarea>`;
   } else {
+    title = `${mode === 'insert' ? 'Add row to' : 'Edit row in'} ${esc(dg.database)}.${esc(dg.name)}`;
     bodyHtml = `<div class="dgf-grid">${dgPgFormFields(mode, r)}</div>`;
   }
   document.getElementById('dgFormTitle').textContent = title;
   document.getElementById('dgFormBody').innerHTML = bodyHtml;
   document.getElementById('dgFormSave').textContent = mode === 'insert' ? 'Review insert' : 'Review changes';
   document.getElementById('dgFormModal').classList.add('open');
+}
+
+const RD_VAL_HINT = { string: 'Plain text value.', hash: 'JSON object: {"field": "value", …}', list: 'JSON array: ["a", "b", …]', set: 'JSON array of unique members.', zset: 'JSON array of [member, score] pairs.' };
+
+function dgRedisFormFields(mode, r) {
+  const isEdit = mode === 'edit';
+  const key = isEdit ? dg.rows[r][0] : '';
+  const ktype = isEdit ? dg.rows[r][1] : 'string';
+  const ttl = isEdit ? (dg.rows[r][2] ?? '') : '';
+  const val = isEdit ? dg.rows[r][4] : '';
+  const valStr = ktype === 'string' ? (val == null ? '' : String(val)) : JSON.stringify(val ?? (ktype === 'hash' ? {} : []), null, 2);
+  const typeField = isEdit
+    ? `<input class="dgf-input" value="${esc(ktype)}" readonly>`
+    : `<select class="dgf-input" id="rdType" onchange="dgRedisTypeChanged()">${['string','hash','list','set','zset'].map(t => `<option value="${t}" ${t===ktype?'selected':''}>${t}</option>`).join('')}</select>`;
+  return `<div class="dgf-grid">
+    <div class="dgf-row"><label><span class="dgf-name">Key</span></label>
+      <div class="dgf-inputwrap"><input id="rdKey" class="dgf-input" value="${esc(key)}" ${isEdit?'readonly':''} placeholder="namespace:key" autocomplete="off"></div></div>
+    <div class="dgf-row"><label><span class="dgf-name">Type</span></label><div class="dgf-inputwrap">${typeField}</div></div>
+    <div class="dgf-row"><label><span class="dgf-name">TTL</span><span class="dgf-type">seconds · blank = no expiry</span></label>
+      <div class="dgf-inputwrap"><input id="rdTtl" class="dgf-input" type="number" min="1" value="${esc(String(ttl))}" placeholder="(no expiry)"></div></div>
+    <div class="dgf-row"><label><span class="dgf-name">Value</span><span class="dgf-type" id="rdValHint">${RD_VAL_HINT[ktype]}</span></label>
+      <div class="dgf-inputwrap"><textarea id="rdValue" class="dgf-json" spellcheck="false">${esc(valStr)}</textarea></div></div>
+  </div>`;
+}
+function dgRedisTypeChanged() {
+  const t = document.getElementById('rdType')?.value || 'string';
+  const h = document.getElementById('rdValHint'); if (h) h.textContent = RD_VAL_HINT[t];
 }
 
 function dgPgFormFields(mode, r) {
@@ -2818,8 +2852,42 @@ function dgToggleNull(btn) {
 
 function dgFormSubmit() {
   if (!dg || !dgForm) return;
+  if (dg.fam === 'redis') return dgFormSubmitRedis();
   if (dg.collection) return dgFormSubmitMongo();
   return dgFormSubmitPg();
+}
+
+function dgFormSubmitRedis() {
+  const isEdit = dgForm.mode === 'edit';
+  const key = document.getElementById('rdKey').value.trim();
+  if (!key) { toast('Key is required', 'error'); return; }
+  const ktype = isEdit ? dg.rows[dgForm.r][1] : document.getElementById('rdType').value;
+  const ttlRaw = document.getElementById('rdTtl').value.trim();
+  const ttl = ttlRaw ? parseInt(ttlRaw, 10) : null;
+  if (ttlRaw && (!Number.isFinite(ttl) || ttl <= 0)) { toast('TTL must be a positive number of seconds', 'error'); return; }
+  const raw = document.getElementById('rdValue').value;
+  let value;
+  if (ktype === 'string') value = raw;
+  else { try { value = JSON.parse(raw); } catch (e) { toast('Value must be valid JSON: ' + e.message, 'error'); return; } }
+  const q = s => JSON.stringify(String(s));
+  let preview;
+  if (ktype === 'string') preview = `SET ${key} ${q(value)}${ttl ? ` EX ${ttl}` : ''}`;
+  else if (ktype === 'hash') preview = `DEL ${key}\nHSET ${key} ${Object.entries(value || {}).map(([k, v]) => `${k} ${q(v)}`).join(' ')}`;
+  else if (ktype === 'list') preview = `DEL ${key}\nRPUSH ${key} ${(value || []).map(q).join(' ')}`;
+  else if (ktype === 'set') preview = `DEL ${key}\nSADD ${key} ${(value || []).map(q).join(' ')}`;
+  else preview = `DEL ${key}\nZADD ${key} ${(value || []).map(p => `${p[1]} ${q(p[0])}`).join(' ')}`;
+  if (ttl && ktype !== 'string') preview += `\nEXPIRE ${key} ${ttl}`;
+  dgConfirm({
+    action: isEdit ? 'update' : 'insert', danger: false,
+    endpoint: isEdit ? '/api/row-update' : '/api/row-insert',
+    payload: isEdit ? { database: dg.database, id: key, ktype, value, ttl }
+                    : { database: dg.database, key, ktype, value, ttl },
+    preview,
+    summary: isEdit ? `Replaces the value of ${key}${ttl ? ` and sets a ${ttl}s TTL` : ''}.`
+                    : `Creates ${key} as a ${ktype}${ttl ? ` with a ${ttl}s TTL` : ''}.`,
+    changes: null, confirmLabel: isEdit ? 'Save key' : 'Create key',
+    successMsg: isEdit ? 'Key updated' : 'Key created',
+  });
 }
 
 function dgFormSubmitPg() {
@@ -2901,13 +2969,17 @@ function dgFormSubmitMongo() {
   catch (e) { toast('Invalid JSON: ' + e.message, 'error'); return; }
   if (typeof edited !== 'object' || Array.isArray(edited) || edited === null) { toast('Document must be a JSON object', 'error'); return; }
   const coll = dg.collection;
+  const isEs = dg.fam === 'elasticsearch';
+  const noun = isEs ? 'document' : 'document';
   if (mode === 'insert') {
     dgConfirm({
       action: 'insert', danger: false,
       endpoint: '/api/row-insert',
       payload: { database: dg.database, collection: coll, document: edited },
-      preview: `db.getCollection('${coll}').insertOne(\n${JSON.stringify(edited, null, 2)}\n)`,
-      summary: 'Inserts 1 new document.', changes: null, confirmLabel: 'Insert document', successMsg: 'Document inserted',
+      preview: isEs
+        ? `POST /${coll}/_doc\n${JSON.stringify(edited, null, 2)}`
+        : `db.getCollection('${coll}').insertOne(\n${JSON.stringify(edited, null, 2)}\n)`,
+      summary: `Inserts 1 new ${noun}.`, changes: null, confirmLabel: 'Insert document', successMsg: 'Document inserted',
     });
   } else {
     const orig = dgReconstructDoc(dgForm.r);
@@ -2926,8 +2998,10 @@ function dgFormSubmitMongo() {
       action: 'update', danger: false,
       endpoint: '/api/row-update',
       payload: { database: dg.database, collection: coll, id: rep, set, unset },
-      preview: `db.getCollection('${coll}').updateOne(\n  { _id: ${dgMongoIdJs(rep)} },\n  { ${parts.join(', ')} }\n)`,
-      summary: 'Updates exactly 1 document.',
+      preview: isEs
+        ? `POST /${coll}/_update/${rep}\n${JSON.stringify({ doc: set, ...(unset.length ? { unset } : {}) }, null, 2)}`
+        : `db.getCollection('${coll}').updateOne(\n  { _id: ${dgMongoIdJs(rep)} },\n  { ${parts.join(', ')} }\n)`,
+      summary: `Updates exactly 1 ${noun}.`,
       changes: [...Object.keys(set).map(k => ({ col: k, from: orig[k], to: set[k] })),
                 ...unset.map(k => ({ col: k, from: orig[k], to: undefined, removed: true }))],
       confirmLabel: 'Save changes', successMsg: 'Document updated',
@@ -2937,13 +3011,28 @@ function dgFormSubmitMongo() {
 
 function dgDeleteRow(r) {
   if (!dg || dg.locked || !dg.editable) return;
+  if (dg.fam === 'redis') {
+    const key = dg.rows[r][0];
+    dgConfirm({
+      action: 'delete', danger: true,
+      endpoint: '/api/row-delete',
+      payload: { database: dg.database, id: key },
+      preview: `DEL ${key}`,
+      summary: `Permanently deletes key ${key}. This cannot be undone.`,
+      changes: null, rowPreview: { key, type: dg.rows[r][1], ttl: dg.rows[r][2], value: dg.rows[r][4] },
+      confirmLabel: 'Delete key', successMsg: 'Key deleted',
+    });
+    return;
+  }
   if (dg.collection) {
     const rep = dg.ids[r];
     dgConfirm({
       action: 'delete', danger: true,
       endpoint: '/api/row-delete',
       payload: { database: dg.database, collection: dg.collection, id: rep },
-      preview: `db.getCollection('${dg.collection}').deleteOne(\n  { _id: ${dgMongoIdJs(rep)} }\n)`,
+      preview: dg.fam === 'elasticsearch'
+        ? `DELETE /${dg.collection}/_doc/${rep}`
+        : `db.getCollection('${dg.collection}').deleteOne(\n  { _id: ${dgMongoIdJs(rep)} }\n)`,
       summary: 'Permanently deletes 1 document. This cannot be undone.',
       changes: null, rowPreview: dgReconstructDoc(r), confirmLabel: 'Delete document', successMsg: 'Document deleted',
     });
@@ -4093,6 +4182,16 @@ function ceEngineChanged() {
   document.getElementById('ceTlsWrap').style.display = ['documentdb', 'elasticsearch', 'redis'].includes(fam) ? '' : 'none';
   const up = document.getElementById('ceUploadBtn');
   if (up) up.style.display = sqlite ? '' : 'none';
+  const compat = {
+    documentdb: 'Also AWS DocumentDB',
+    postgresql: 'Also Aurora, Citus & other Postgres-compatible',
+    mysql: 'Also MariaDB & Aurora MySQL',
+    sqlite: '',
+    elasticsearch: 'Also OpenSearch',
+    redis: 'Also Valkey, ElastiCache & MemoryDB',
+  };
+  const c = document.getElementById('ceCompat');
+  if (c) c.textContent = compat[fam] || '';
 }
 
 async function uploadSqlite(input) {

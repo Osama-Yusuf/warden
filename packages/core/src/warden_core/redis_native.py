@@ -7,6 +7,7 @@ to a "row" of {key, type, ttl, memory, value}. SCAN is used everywhere so a big
 keyspace is never blocked. The free-form console runs raw Redis commands.
 """
 
+import json as _json
 import shlex
 import threading
 
@@ -221,4 +222,62 @@ def run_command(cfg, user, pwd, database, command_str):
             raise ValueError("empty command")
         c = _client(cfg, user, pwd, _db_num(database))
         return c.execute_command(*parts)
+    return _run(go)
+
+
+# ---------------------------------------------------------------------------
+# Key CRUD
+# ---------------------------------------------------------------------------
+
+def _s(v):
+    return v if isinstance(v, str) else _json.dumps(v)
+
+
+def set_key(cfg, user, pwd, database, key, ktype, value, ttl=None):
+    """Create or replace a key with a typed value. Structured types are rebuilt
+    atomically (DEL + write) in a pipeline. ttl in seconds, 0/None = no expiry."""
+    def go():
+        c = _client(cfg, user, pwd, _db_num(database))
+        t = (ktype or "string").lower()
+        if t == "string":
+            c.set(key, _s(value))
+        else:
+            pipe = c.pipeline(transaction=True)
+            pipe.delete(key)
+            if t == "hash" and isinstance(value, dict) and value:
+                pipe.hset(key, mapping={str(k): _s(v) for k, v in value.items()})
+            elif t == "list" and isinstance(value, list) and value:
+                pipe.rpush(key, *[_s(v) for v in value])
+            elif t == "set" and isinstance(value, list) and value:
+                pipe.sadd(key, *[_s(v) for v in value])
+            elif t == "zset" and isinstance(value, list) and value:
+                mapping = {str(it[0]): float(it[1]) for it in value
+                           if isinstance(it, (list, tuple)) and len(it) == 2}
+                if mapping:
+                    pipe.zadd(key, mapping)
+            elif t not in ("hash", "list", "set", "zset"):
+                raise ValueError(f"Editing '{t}' values isn't supported")
+            pipe.execute()
+        if ttl and int(ttl) > 0:
+            c.expire(key, int(ttl))
+        return {"ok": True, "key": key}
+    return _run(go)
+
+
+def delete_key(cfg, user, pwd, database, key):
+    def go():
+        c = _client(cfg, user, pwd, _db_num(database))
+        return {"deleted": int(c.delete(key))}
+    return _run(go)
+
+
+def set_ttl(cfg, user, pwd, database, key, ttl):
+    """Set expiry in seconds; ttl <= 0 makes the key persistent."""
+    def go():
+        c = _client(cfg, user, pwd, _db_num(database))
+        if ttl and int(ttl) > 0:
+            ok = c.expire(key, int(ttl))
+        else:
+            ok = c.persist(key)
+        return {"ok": bool(ok)}
     return _run(go)
