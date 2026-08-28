@@ -252,6 +252,17 @@ input[type="password"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe 
 }
 .sf-preset:hover { color: var(--text); border-color: var(--border-strong); }
 .sf-preset.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.sf-preset-n { margin-left: 5px; opacity: .55; font-variant-numeric: tabular-nums; }
+.sf-preset.sf-zero { opacity: .45; }
+/* click a table value to filter by it */
+.pill.tok { cursor: pointer; }
+.pill.tok:hover { filter: brightness(1.18); box-shadow: inset 0 0 0 1px currentColor; }
+/* keyboard shortcut cheatsheet */
+.kbd-grid { display: grid; grid-template-columns: auto 1fr; gap: 9px 16px; align-items: center; }
+.kbd-grid kbd {
+  font-family: var(--mono-font); font-size: 11px; padding: 2px 7px; border-radius: 6px;
+  background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text); white-space: nowrap;
+}
 .sf-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
 .sf-chip {
   display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-family: var(--mono-font);
@@ -1722,7 +1733,7 @@ function sfMatches(row, parsed, cfg) {
 
 function sfBarHtml(cfg) {
   const presets = (cfg.presets || []).map((p, i) =>
-    `<button class="sf-preset" data-i="${i}" onclick="sfPreset('${cfg.key}', ${i})">${esc(p.label)}</button>`).join('');
+    `<button class="sf-preset" data-i="${i}" onclick="sfPreset('${cfg.key}', ${i})">${esc(p.label)}<span class="sf-preset-n"></span></button>`).join('');
   return `<div class="sf" id="sf-${cfg.key}">
     <div class="sf-bar">
       <div class="sf-box">
@@ -1754,8 +1765,15 @@ function sfApply(key) {
     ? cfg.countText(list, parsed, all.length)
     : (active ? `${list.length} of ${all.length}` : `${all.length} total`);
   const x = document.getElementById('sf-x-' + key); if (x) x.style.display = val ? 'block' : 'none';
-  document.querySelectorAll(`#sf-${key} .sf-preset`).forEach((el, i) =>
-    el.classList.toggle('on', cfg.presets[i] && val.includes(cfg.presets[i].q)));
+  document.querySelectorAll(`#sf-${key} .sf-preset`).forEach((el, i) => {
+    const p = cfg.presets[i]; if (!p) return;
+    el.classList.toggle('on', val.includes(p.q));
+    // live facet count: how many rows this preset alone would match
+    const n = all.filter(r => sfMatches(r, sfParse(p.q, cfg.fields), cfg)).length;
+    el.classList.toggle('sf-zero', n === 0);
+    const ns = el.querySelector('.sf-preset-n');
+    if (ns) ns.textContent = ' · ' + n;
+  });
   sfRenderChips(key, parsed);
   sfSuggest(key);
 }
@@ -1785,6 +1803,16 @@ function sfRemove(key, raw) {
 function sfClearAll(key) {
   const inp = document.getElementById('sf-in-' + key);
   inp.value = ''; sfApply(key); inp.focus();
+}
+
+// click a value in a table → add it as a filter token (used by tokenable pills)
+function sfCellToken(ev, key, field, value) {
+  ev.stopPropagation();   // don't also trigger the row's open-detail click
+  const inp = document.getElementById('sf-in-' + key);
+  if (!inp) return;
+  const tok = field + ':' + (/\s/.test(value) ? `"${value}"` : value);
+  if (!sfTokens(inp.value).includes(tok)) inp.value = (inp.value.trim() + ' ' + tok).trim();
+  sfApply(key);
 }
 
 function sfDistinct(cfg, f) {
@@ -1903,30 +1931,34 @@ function renderUsersShell(fromCache) {
 function userRowsHtml(list, fam) {
   const isDocdb = fam === 'documentdb';
   const tr = u => `<tr class="urow" data-user="${esc(u.user)}" onclick="viewUserInfoFor(this.dataset.user)">`;
+  // a pill you can click to add "field:value" to the filter
+  const tok = (cls, field, value, label) =>
+    `<span class="pill ${cls} tok" data-f="${field}" data-v="${esc(value)}" data-tip="Filter by ${field}:${esc(value)}"
+      onclick="sfCellToken(event,'users',this.dataset.f,this.dataset.v)">${esc(label ?? value)}</span>`;
   let rows = '';
   for (const u of list) {
     if (fam === 'elasticsearch') {
-      const status = u.enabled ? '<span class="pill pill-ok">enabled</span>' : '<span class="pill pill-danger">disabled</span>';
-      const roles = (u.roles || []).map(r => `<span class="pill pill-ok">${esc(r)}</span>`).join(' ');
+      const status = tok(u.enabled ? 'pill-ok' : 'pill-danger', 'status', u.enabled ? 'enabled' : 'disabled');
+      const roles = (u.roles || []).map(r => tok('pill-ok', 'role', r)).join(' ');
       rows += `${tr(u)}<td class="mono">${esc(u.user)}${u.reserved ? ' <span class="pill pill-muted">built-in</span>' : ''}</td><td>${status}</td>
         <td>${roles || '<span class="pill pill-muted">none</span>'}</td></tr>`;
     } else if (fam === 'redis') {
-      const status = u.enabled ? '<span class="pill pill-ok">on</span>' : '<span class="pill pill-danger">off</span>';
+      const status = tok(u.enabled ? 'pill-ok' : 'pill-danger', 'status', u.enabled ? 'on' : 'off');
       rows += `${tr(u)}<td class="mono">${esc(u.user)}${u.reserved ? ' <span class="pill pill-muted">default</span>' : ''}</td><td>${status}</td>
         <td class="mono" style="font-size:11px">${esc(u.commands || '—')}</td>
         <td class="mono" style="font-size:11px">${esc(u.keys || '—')}</td></tr>`;
     } else if (isDocdb) {
-      const roles = u.roles.map(r => `<span class="pill pill-ok">${esc(r)}</span>`).join(' ');
+      const roles = u.roles.map(r => tok('pill-ok', 'role', r)).join(' ');
       rows += `${tr(u)}<td class="mono">${esc(u.user)}</td><td>${esc(u.db)}</td>
         <td>${roles || '<span class="pill pill-muted">none</span>'}</td></tr>`;
     } else {
-      const status = u.can_login ? '<span class="pill pill-ok">active</span>' : '<span class="pill pill-danger">disabled</span>';
+      const status = tok(u.can_login ? 'pill-ok' : 'pill-danger', 'status', u.can_login ? 'active' : 'disabled');
       const flags = [];
-      if (u.superuser) flags.push('superuser');
-      if (u.createdb) flags.push('createdb');
-      if (u.createrole) flags.push('createrole');
+      if (u.superuser) flags.push(tok('pill-warn', 'superuser', 'yes', 'superuser'));
+      if (u.createdb) flags.push(tok('pill-accent', 'createdb', 'yes', 'createdb'));
+      if (u.createrole) flags.push(tok('pill-accent', 'createrole', 'yes', 'createrole'));
       rows += `${tr(u)}<td class="mono">${esc(u.user)}</td><td>${status}</td>
-        <td>${flags.join(', ') || '—'}</td>
+        <td>${flags.join(' ') || '—'}</td>
         <td style="color:var(--text-muted)">${u.valid_until === 'never' ? '—' : esc(u.valid_until)}</td></tr>`;
     }
   }
@@ -5221,6 +5253,42 @@ document.addEventListener('keydown', e => {
     document.getElementById('qfInput').focus();
   }
 });
+
+// ── keyboard shortcuts: "/" focus filter, "g"+key nav, "?" cheatsheet ──
+let _gPending = false, _gTimer = null;
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target, tag = (t.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable) return;
+  if (e.key === '/') {
+    e.preventDefault();
+    (document.querySelector('.dg-search input, [id^="sf-in-"]') || document.getElementById('qfInput'))?.focus();
+    return;
+  }
+  if (e.key === '?') { e.preventDefault(); showShortcutHelp(); return; }
+  if (_gPending) {
+    _gPending = false; clearTimeout(_gTimer);
+    const dest = { u: 'users', d: 'databases', q: 'query', a: 'audits', c: 'envs', v: 'audit' }[e.key.toLowerCase()];
+    if (dest) { e.preventDefault(); navigate(dest); }
+    return;
+  }
+  if (e.key.toLowerCase() === 'g') { _gPending = true; _gTimer = setTimeout(() => { _gPending = false; }, 900); }
+});
+
+function showShortcutHelp() {
+  const rows = [
+    ['/', 'Focus the filter / search on this page'],
+    ['⌘ / Ctrl + K', 'Jump to a user or database'],
+    ['g then u', 'Go to Users'],
+    ['g then d', 'Go to Databases'],
+    ['g then q', 'Go to Query'],
+    ['g then a', 'Go to Audits'],
+    ['g then c', 'Go to Connections'],
+    ['Esc', 'Close a dialog or panel'],
+    ['?', 'Show this help'],
+  ].map(([k, d]) => `<kbd>${esc(k)}</kbd><span>${esc(d)}</span>`).join('');
+  showModal('Keyboard shortcuts', `<div class="kbd-grid">${rows}</div>`, [{ label: 'Close', cls: 'btn-primary' }]);
+}
 
 init();
 </script>
