@@ -1469,8 +1469,8 @@ function creds() {
 
 // ── Read-only mode ──
 function toggleReadOnly() {
-  roAuto = false;   // an explicit choice by the user overrides the prod auto-seatbelt
-  savePrefs({ readOnly: !prefs.readOnly });
+  // an explicit choice by the user overrides (and clears) the prod auto-seatbelt
+  savePrefs({ readOnly: !prefs.readOnly, roAuto: false });
   renderRoBtn();
   renderNav();
   toast(prefs.readOnly ? 'Read-only mode ON, the server now refuses all writes' : 'Read-only mode off', prefs.readOnly ? 'info' : 'success');
@@ -1488,7 +1488,8 @@ function renderRoBtn() {
 // ── Environment awareness (prod / staging / dev) ──
 const ENVKINDS_KEY = 'warden.envKinds';
 let envKinds = (() => { try { return JSON.parse(localStorage.getItem(ENVKINDS_KEY)) || {}; } catch { return {}; } })();
-let roAuto = false;   // read-only was auto-enabled for prod (session only, not the user's choice)
+// prefs.roAuto tracks whether read-only was auto-enabled for prod (persisted, so a
+// page reload doesn't strand the seatbelt on when you next connect to a non-prod env)
 function saveEnvKinds() { try { localStorage.setItem(ENVKINDS_KEY, JSON.stringify(envKinds)); } catch {} }
 
 // prod > staging > dev, inferred from the connection name unless the user tagged it
@@ -1515,19 +1516,17 @@ function applyEnvGuard(name) {
     badge.style.display = 'none';
   }
   if (kind === 'prod' && !prefs.readOnly) {
-    roAuto = true;
-    savePrefs({ readOnly: true }); renderRoBtn(); renderNav();
+    savePrefs({ readOnly: true, roAuto: true }); renderRoBtn(); renderNav();
     toast('Connected to PROD — read-only is on as a safety net. Click the lock to allow writes.', 'info');
-  } else if (kind !== 'prod' && roAuto && prefs.readOnly) {
-    roAuto = false;
-    savePrefs({ readOnly: false }); renderRoBtn(); renderNav();
+  } else if (kind !== 'prod' && prefs.roAuto && prefs.readOnly) {
+    savePrefs({ readOnly: false, roAuto: false }); renderRoBtn(); renderNav();
   }
 }
 
 function clearEnvGuard() {
   document.body.classList.remove('env-prod', 'env-staging', 'env-dev');
   const badge = document.getElementById('envBadge'); if (badge) badge.style.display = 'none';
-  if (roAuto && prefs.readOnly) { roAuto = false; savePrefs({ readOnly: false }); renderRoBtn(); }
+  if (prefs.roAuto && prefs.readOnly) { savePrefs({ readOnly: false, roAuto: false }); renderRoBtn(); }
 }
 
 function pickEnvKind() {
