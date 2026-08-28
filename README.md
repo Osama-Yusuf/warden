@@ -1,6 +1,19 @@
-# warden
+<div align="center">
 
-Every database has a door. warden is the guy standing at it.
+<img src="assets/warden.png" alt="warden" width="130">
+
+<h1>warden</h1>
+
+<p><b>Every database has a door. warden is the guy standing at it.</b></p>
+
+<p>
+<img alt="engines: 6" src="https://img.shields.io/badge/engines-6-58a6ff?style=flat-square">
+<img alt="interfaces: CLI, web, desktop" src="https://img.shields.io/badge/interfaces-CLI%20%C2%B7%20web%20%C2%B7%20desktop-8b949e?style=flat-square">
+<img alt="python: 3.9+" src="https://img.shields.io/badge/python-3.9%2B-3776ab?style=flat-square">
+<a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
+</p>
+
+</div>
 
 It holds the keys, decides who gets in and what they can touch, kicks people out, and writes everything down. It'll also read a query back to you in plain english before running it, so you know exactly what you're about to do to prod.
 
