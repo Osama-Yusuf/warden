@@ -1,4 +1,4 @@
-"""Unit tests for pure helpers inside the native drivers — no network needed."""
+"""Unit tests for pure helpers inside the native drivers, no network needed."""
 
 import pytest
 

@@ -528,8 +528,8 @@ class PostgreSQL:
             if u["superuser"]: flags.append("superuser")
             if u["createdb"]: flags.append("createdb")
             if u["createrole"]: flags.append("createrole")
-            expires = u["valid_until"] if u["valid_until"] != "never" else "—"
-            rows.append((u["name"], status, ", ".join(flags) or "—", expires))
+            expires = u["valid_until"] if u["valid_until"] != "never" else "-"
+            rows.append((u["name"], status, ", ".join(flags) or "-", expires))
         print_table(
             f"PostgreSQL Users · {self.env}",
             ["Username", "Status", "Flags", "Expires"],
@@ -614,7 +614,7 @@ class PostgreSQL:
                     privs = []
                     if p[1] == "t": privs.append("CONNECT")
                     if p[2] == "t": privs.append("CREATE")
-                    rows.append((p[0], ", ".join(privs) or "—"))
+                    rows.append((p[0], ", ".join(privs) or "-"))
             if rows:
                 print_table("Database Privileges", ["Database", "Privileges"], rows)
 
@@ -1005,7 +1005,7 @@ def interactive_mode(env, admin_user, admin_pass, dry_run=False):
 
         engine_choices = list(env_config.keys())
 
-        show_header(env, "—", "select engine below")
+        show_header(env, "-", "select engine below")
         console.print(f"\n  Available engines for [info]{env}[/]:")
         for i, e in enumerate(engine_choices, 1):
             console.print(f"    [info][{i}][/] {e}")

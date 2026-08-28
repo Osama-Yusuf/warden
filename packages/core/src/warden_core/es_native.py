@@ -1,7 +1,7 @@
 """Native Elasticsearch / OpenSearch access over the REST API.
 
 ES and OpenSearch expose the same REST surface (`/`, `_cat`, `_cluster`,
-`_search`, `_doc`), so one small pooled HTTP client talks to both — without the
+`_search`, `_doc`), so one small pooled HTTP client talks to both, without the
 version incompatibilities the official SDKs hit across the two products.
 urllib3 gives connection pooling + TLS, so repeated calls reuse sockets.
 
@@ -100,7 +100,7 @@ def cluster_name(cfg, user, pwd):
 
 
 def list_indices(cfg, user, pwd):
-    """[{name, size_bytes, docs}] — includes system (dot) indices too."""
+    """[{name, size_bytes, docs}]. Includes system (dot) indices too."""
     data, err = _req(cfg, user, pwd, "GET",
                      "/_cat/indices?format=json&bytes=b&h=index,docs.count,store.size")
     if err:

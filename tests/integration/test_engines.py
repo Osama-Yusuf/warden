@@ -1,4 +1,4 @@
-"""Integration tests — exercise the real server handlers against live engines.
+"""Integration tests: exercise the real server handlers against live engines.
 
 These call the api_* handlers directly (no HTTP) with a browser-style
 custom_config, so they cover routing + driver + query for every engine.

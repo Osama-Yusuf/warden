@@ -46,12 +46,12 @@ function renderAuditRows() {
   const rows = auditEntries.filter(line => {
     if (text && !line.toLowerCase().includes(text)) return false;
     if (auditFilter.action) {
-      const m = line.match(/\]\s+([A-Z ]+?)(?:\s+—|$)/);
+      const m = line.match(/\]\s+([A-Z ]+?)(?:\s+[\u2014·]|$)/);
       if (!m || !m[1].includes(auditFilter.action)) return false;
     }
     return true;
   }).map(line => {
-    const m = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\[([^\]]+)\]\s+(.*?)(?:\s+—\s+(.*))?$/);
+    const m = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\[([^\]]+)\]\s+(.*?)(?:\s+[\u2014·]\s+(.*))?$/);
     if (m) {
       return `<tr>
         <td class="mono" style="white-space:nowrap; color:var(--text-muted)">${esc(m[1])}</td>

@@ -510,7 +510,7 @@ function explainRedis(text) {
   const cmd = (text.trim().split(/\s+/)[0] || '').toUpperCase();
   if (!cmd) return { danger: 'none', html: '' };
   if (REDIS_READ_JS.has(cmd)) return { danger: 'read', html: `Reads with <code>${esc(cmd)}</code>. Nothing is changed.` };
-  if (REDIS_DESTRUCTIVE.has(cmd)) return { danger: 'danger', html: `<code>${esc(cmd)}</code> deletes or destroys data — this cannot be undone.` };
+  if (REDIS_DESTRUCTIVE.has(cmd)) return { danger: 'danger', html: `<code>${esc(cmd)}</code> deletes or destroys data. This cannot be undone.` };
   return { danger: 'write', html: `<code>${esc(cmd)}</code> can modify data. Review before running.` };
 }
 

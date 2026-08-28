@@ -57,11 +57,11 @@ async function doTestLogin() {
     box.innerHTML = `<div class="explain-box explain-danger"><div class="explain-text"><b>Login failed.</b> ${esc(res.error || 'Those credentials were rejected.')}</div></div>`;
     return;
   }
-  let html = `<div class="ctx-line ctx-ok"><b>Login works</b> — authenticated as <span class="mono">${esc(res.identity || test_user)}</span></div>`;
+  let html = `<div class="ctx-line ctx-ok"><b>Login works</b> · authenticated as <span class="mono">${esc(res.identity || test_user)}</span></div>`;
   if (res.roles && res.roles.length) html += `<div style="margin:10px 0 4px; font-size:12.5px"><span style="color:var(--text-muted)">roles: </span>${res.roles.map(r => `<span class="pill pill-ok">${esc(r)}</span>`).join(' ')}</div>`;
   if (res.grants && res.grants.length) html += `<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Grants</th></tr></thead><tbody>${res.grants.map(g => `<tr><td class="mono" style="font-size:11px">${esc(g)}</td></tr>`).join('')}</tbody></table></div>`;
   for (const c of (res.checks || [])) {
-    html += `<div class="ctx-line ${c.ok ? 'ctx-ok' : 'ctx-bad'}"><b>${esc(c.name)}</b>${c.detail ? ` — <span style="color:var(--text-muted)">${esc(c.detail)}</span>` : ''}</div>`;
+    html += `<div class="ctx-line ${c.ok ? 'ctx-ok' : 'ctx-bad'}"><b>${esc(c.name)}</b>${c.detail ? ` · <span style="color:var(--text-muted)">${esc(c.detail)}</span>` : ''}</div>`;
   }
   box.innerHTML = html;
 }
@@ -756,7 +756,7 @@ function renderCollTable(list) {
   const view = (db, extra) => `<button class="ibtn accent" data-tip="Browse rows &amp; columns"
     data-db="${esc(db)}" ${extra} onclick="openDataGrid(dgSpecFrom(this.dataset))">${ICONS.grid}</button>`;
   const arrow = k => sort.key === k ? `<span class="arrow">${sort.dir === 1 ? '▲' : '▼'}</span>` : '';
-  const sizeCell = s => s != null ? fmtSize(s) : '<span style="color:var(--text-muted)">—</span>';
+  const sizeCell = s => s != null ? fmtSize(s) : '<span style="color:var(--text-muted)">-</span>';
   const sorted = [...list].sort((a, b) => {
     let av, bv;
     if (sort.key === 'size') { av = a.size_bytes ?? -1; bv = b.size_bytes ?? -1; }

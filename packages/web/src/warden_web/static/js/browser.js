@@ -39,7 +39,7 @@ async function dgLoadStats() {
 
 function dgStatCards(engine, s) {
   const card = (k, v) => `<div class="dg-stat"><span class="k">${k}</span><span class="v">${v}</span></div>`;
-  const rows = s.rows == null ? '—' : (s.estimated ? '~' : '') + Number(s.rows).toLocaleString();
+  const rows = s.rows == null ? '-' : (s.estimated ? '~' : '') + Number(s.rows).toLocaleString();
   const out = [];
   if (engine === 'documentdb') {
     out.push(card('Documents', rows));
@@ -92,7 +92,7 @@ async function dgFetch() {
 async function dgToggleLock() {
   if (!dg) return;
   if (!dg.locked) { dg.locked = true; renderDgChrome(); renderDgBody(); return; }
-  if (prefs.readOnly) { toast('Read-only mode is on — turn it off in the top bar to edit', 'error'); return; }
+  if (prefs.readOnly) { toast('Read-only mode is on. Turn it off in the top bar to edit', 'error'); return; }
   // Unlocking: fetch metadata so we know the primary key + columns before editing.
   const p = { database: dg.database };
   if (dg.collection) p.collection = dg.collection;
@@ -103,7 +103,7 @@ async function dgToggleLock() {
   if (!meta.editable) { toast(meta.reason || 'This object cannot be edited', 'error'); return; }
   dg.meta = meta; dg.editable = true; dg.locked = false;
   renderDgChrome(); renderDgBody();
-  toast('Editing unlocked — changes are confirmed before they run', 'info');
+  toast('Editing unlocked. Changes are confirmed before they run', 'info');
 }
 
 function renderDgChrome() {
@@ -112,8 +112,8 @@ function renderDgChrome() {
   document.getElementById('dgTitle').innerHTML =
     `<span class="badge">${kind}</span><span class="name" data-tip="${esc(full)}">${esc(full)}</span>`;
   const lockBtn = dg.locked
-    ? `<button class="ibtn" onclick="dgToggleLock()" data-tip="Read-only — click to enable editing">${ICONS.lock}</button>`
-    : `<button class="ibtn on" onclick="dgToggleLock()" data-tip="Editing enabled — click to lock (read-only)">${ICONS.unlock}</button>`;
+    ? `<button class="ibtn" onclick="dgToggleLock()" data-tip="Read-only, click to enable editing">${ICONS.lock}</button>`
+    : `<button class="ibtn on" onclick="dgToggleLock()" data-tip="Editing enabled, click to lock (read-only)">${ICONS.unlock}</button>`;
   const addBtn = (!dg.locked && dg.editable)
     ? `<button class="ibtn success" onclick="dgAddRow()" data-tip="Add a row">${ICONS.plus}</button>` : '';
   document.getElementById('dgTools').innerHTML = `
@@ -199,10 +199,10 @@ function renderDgFoot() {
   const to = dg.offset + n;
   let range;
   if (dg.filtered) {
-    range = `${from.toLocaleString()}–${to.toLocaleString()} <span class="dg-tag">filtered</span>`;
+    range = `${from.toLocaleString()}-${to.toLocaleString()} <span class="dg-tag">filtered</span>`;
   } else {
     const totalStr = dg.total != null ? (dg.estimated ? '~' : '') + dg.total.toLocaleString() : '?';
-    range = `${from.toLocaleString()}–${to.toLocaleString()} of ${totalStr}`;
+    range = `${from.toLocaleString()}-${to.toLocaleString()} of ${totalStr}`;
   }
   const atEnd = (n < dg.limit) || (!dg.filtered && !dg.estimated && dg.total != null && to >= dg.total);
   foot.innerHTML = `

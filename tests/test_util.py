@@ -1,4 +1,4 @@
-"""Unit tests for warden_core.util — the routing, quoting, and validation
+"""Unit tests for warden_core.util: the routing, quoting, and validation
 primitives every engine path leans on."""
 
 import pytest
@@ -20,7 +20,7 @@ from warden_core import util
     ("aurora-mysql", "mysql"),
     # sqlite
     ("sqlite", "sqlite"),
-    # redis family — checked before elasticsearch on purpose
+    # redis family, checked before elasticsearch on purpose
     ("redis", "redis"),
     ("valkey", "redis"),
     ("elasticache-redis", "redis"),   # "elasticache" contains "elastic"
