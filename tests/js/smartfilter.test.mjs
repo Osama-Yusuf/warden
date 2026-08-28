@@ -1,9 +1,9 @@
 // Unit tests for the smart-filter engine, run against the REAL functions in
-// index.html (no duplication). Uses Node's built-in test runner + vm — no npm
+// js/filter.js (no duplication). Uses Node's built-in test runner + vm — no npm
 // deps. Run with:  node --test tests/js/
 //
-// The extractor pulls named `function` declarations out of the inline <script>
-// with string/comment-aware brace counting. (Regex literals containing literal
+// The extractor pulls named `function` declarations out of the file with
+// string/comment-aware brace counting. (Regex literals containing literal
 // { } are not supported by the extractor, but none of the filter functions use
 // them.)
 
@@ -17,11 +17,11 @@ import assert from 'node:assert';
 import vm from 'node:vm';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const html = readFileSync(join(here, '../../packages/web/src/warden_web/static/index.html'), 'utf8');
+const src = readFileSync(join(here, '../../packages/web/src/warden_web/static/js/filter.js'), 'utf8');
 
 function extractFn(src, name) {
   const start = src.indexOf(`function ${name}(`);
-  if (start === -1) throw new Error(`function ${name} not found in index.html`);
+  if (start === -1) throw new Error(`function ${name} not found in js/filter.js`);
   let i = src.indexOf('{', start);
   const bodyStart = i;
   let depth = 0, str = null, line = false, block = false;
@@ -40,7 +40,7 @@ function extractFn(src, name) {
 }
 
 const NAMES = ['sfParseSize', 'sfTokens', 'sfParse', 'sfVals', 'sfTokenMatch', 'sfMatches'];
-const code = NAMES.map((n) => extractFn(html, n)).join('\n\n');
+const code = NAMES.map((n) => extractFn(src, n)).join('\n\n');
 const ctx = vm.createContext({});
 const sf = vm.runInContext(code + `\n({ ${NAMES.join(', ')} })`, ctx);
 

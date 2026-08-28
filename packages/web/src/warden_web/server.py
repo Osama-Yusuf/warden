@@ -74,6 +74,9 @@ def static_dir():
 
 INDEX_HTML = static_dir() / "index.html"
 
+# The only sub-asset types the UI serves (CSS + the split-out JS modules).
+ASSET_TYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8"}
+
 
 def require_fields(body, *fields):
     missing = [f for f in fields if not body.get(f)]
@@ -1428,6 +1431,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+        elif path.startswith("/css/") or path.startswith("/js/"):
+            self._serve_asset(path)
         elif path == "/api/config":
             if not self._same_site():
                 self._json_response({"error": "Cross-origin request refused"}, 403)
@@ -1435,6 +1440,27 @@ class Handler(BaseHTTPRequestHandler):
             self._json_response(api_config({}))
         else:
             self.send_error(404)
+
+    def _serve_asset(self, path):
+        """Serve a split-out CSS/JS file from the static dir. Traversal-safe: the
+        resolved target has to stay inside static_dir(), and we only hand back the
+        asset types we actually ship."""
+        base = static_dir().resolve()
+        target = (base / path.lstrip("/")).resolve()
+        if target != base and base not in target.parents:
+            self.send_error(403)
+            return
+        ctype = ASSET_TYPES.get(target.suffix.lower())
+        if ctype is None or not target.is_file():
+            self.send_error(404)
+            return
+        data = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_POST(self):
         path = urlparse(self.path).path
