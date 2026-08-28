@@ -10,7 +10,7 @@ Errors are raised, not returned: a method either gives you the data or raises
 EngineError (something went wrong) / NotSupported (this engine can't do it).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from warden_core.util import engine_family
 
@@ -30,6 +30,18 @@ class Target:
     database: str = ""
     name: str = ""
     schema: str = ""
+
+
+@dataclass
+class Mutation:
+    """What a write op hands back. `action` and `detail` are the two strings the
+    handler writes to the audit log (e.g. "GRANT", "bob += SELECT on shop.public");
+    `response` is any extra fields to merge into the {"ok": True, ...} reply, like
+    a fresh password or a row count. The handler owns the audit call and the
+    envelope, so the adapter never has to know either exists."""
+    action: str
+    detail: str = ""
+    response: dict = field(default_factory=dict)
 
 
 class EngineAdapter:
@@ -106,13 +118,15 @@ class EngineAdapter:
         raise NotSupported("enabling or disabling a login isn't applicable here")
 
     # ── row CRUD ────────────────────────────────────────────────────────────
-    def insert_row(self, target, data):
+    # `body` is the raw request body: each engine pulls what it needs (a document,
+    # a key, a {column: value} map) out of it, so one shape covers all of them.
+    def insert_row(self, target, body):
         raise NotSupported("row editing isn't available for this engine")
 
-    def update_row(self, target, key, changes):
+    def update_row(self, target, body):
         raise NotSupported("row editing isn't available for this engine")
 
-    def delete_row(self, target, key):
+    def delete_row(self, target, body):
         raise NotSupported("row editing isn't available for this engine")
 
     # ── query console ───────────────────────────────────────────────────────
