@@ -263,9 +263,14 @@ def api_user_info(body):
     adapter, err = _adapter_for(body)
     if err:
         return {"error": err}
-    name = _named_user(body)
+    require_fields(body, "username")
     if not adapter.has_users:
         return {"error": "SQLite has no user accounts"}
+    # Elasticsearch/Redis ACL names aren't SQL identifiers, so (like the original)
+    # they skip validate_target; every other engine validates the username the
+    # same way the rest of the user operations do.
+    name = (str(body["username"]).strip() if adapter.family in ("elasticsearch", "redis")
+            else validate_target(body.get("engine", ""), body["username"]))
     try:
         return adapter.user_info(name)
     except (EngineError, ValueError) as e:

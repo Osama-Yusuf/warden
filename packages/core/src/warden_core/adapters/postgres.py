@@ -76,11 +76,15 @@ class PostgresAdapter(EngineAdapter):
         database = validate_ident(target.database, "database")
         schema = validate_ident(target.schema or "public", "schema")
         table = validate_ident(target.name, "table")
+        if not pn.available():
+            raise EngineError("Data browser needs the native PostgreSQL driver (psycopg)")
         return self._unwrap(pn.select_page(self.cfg, self.user, self.pwd,
                                            database, schema, table,
                                            limit, offset, search=search))
 
     def object_stats(self, target):
+        if not pn.available():
+            return {}
         database = validate_ident(target.database, "database")
         schema = validate_ident(target.schema or "public", "schema")
         table = validate_ident(target.name, "table")
@@ -88,6 +92,8 @@ class PostgresAdapter(EngineAdapter):
                                             database, schema, table))
 
     def table_meta(self, target):
+        if not pn.available():
+            return {"editable": False, "reason": "native PostgreSQL driver unavailable"}
         database = validate_ident(target.database, "database")
         schema = validate_ident(target.schema or "public", "schema")
         table = validate_ident(target.name, "table")

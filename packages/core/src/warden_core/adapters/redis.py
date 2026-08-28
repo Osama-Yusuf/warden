@@ -23,6 +23,8 @@ class RedisAdapter(EngineAdapter):
 
     # ── discovery / browse ──────────────────────────────────────────────────
     def ping(self):
+        if not rdn.available():
+            raise EngineError("Redis needs the native driver (redis-py)")
         return self._unwrap(rdn.ping(self.cfg, self.user, self.pwd))
 
     def list_databases(self):

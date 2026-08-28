@@ -22,6 +22,8 @@ class ElasticsearchAdapter(EngineAdapter):
 
     # ── discovery / browse ──────────────────────────────────────────────────
     def ping(self):
+        if not esn.available():
+            raise EngineError("Elasticsearch needs the native driver (urllib3)")
         return self._unwrap(esn.ping(self.cfg, self.user, self.pwd))
 
     def list_databases(self):
