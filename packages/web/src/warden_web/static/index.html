@@ -846,7 +846,7 @@ table.dgrid tbody tr:hover .dg-actwrap {
     <div class="conn-dot" id="connDot"></div>
     <span id="connText">offline</span>
   </div>
-  <span id="envBadge" class="env-badge" style="display:none" data-tip="Environment (click to change)" onclick="pickEnvKind()"></span>
+  <span id="envBadge" class="env-badge" style="display:none; cursor:default" data-tip="Environment (set it when you add or edit the connection)"></span>
   <div class="tb-spacer"></div>
   <button class="icon-btn" id="roBtn" onclick="toggleReadOnly()"></button>
   <button class="icon-btn" id="themeBtn" onclick="cycleTheme()"></button>
@@ -929,7 +929,18 @@ table.dgrid tbody tr:hover .dg-actwrap {
     <button class="modal-x" onclick="closeConnModal()" data-tip="Close">&times;</button>
     <h3 id="connFormTitle" style="margin-top:0; padding-right:34px"></h3>
     <div class="conn-form">
-      <div class="form-field"><label>Name</label><input id="ceName" placeholder="e.g. production" autocomplete="off"></div>
+      <div class="conn-row">
+        <div class="form-field" style="flex:1"><label>Name</label><input id="ceName" placeholder="e.g. production" autocomplete="off"></div>
+        <div class="form-field" id="ceEnvWrap"><label>Environment</label><select id="ceEnvKind">
+          <option value="">Auto (from name)</option>
+          <option value="prod">Production</option>
+          <option value="staging">Staging</option>
+          <option value="uat">UAT</option>
+          <option value="qa">QA</option>
+          <option value="dev">Development</option>
+          <option value="local">Local</option>
+        </select></div>
+      </div>
       <div class="form-field"><label>Engine</label><select id="ceEngine" onchange="ceEngineChanged()">
         <option value="documentdb">MongoDB</option><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL</option><option value="sqlite">SQLite</option><option value="elasticsearch">Elasticsearch</option><option value="redis">Redis</option></select>
         <span class="ce-compat" id="ceCompat"></span></div>
@@ -941,7 +952,8 @@ table.dgrid tbody tr:hover .dg-actwrap {
       <button class="btn btn-ghost btn-sm" id="ceUploadBtn" style="display:none; align-self:flex-start" onclick="document.getElementById('ceFile').click()">Upload .db file</button>
       <input type="file" id="ceFile" accept=".db,.sqlite,.sqlite3" style="display:none" onchange="uploadSqlite(this)">
       <div class="conn-checks">
-        <label class="chk" id="ceTlsWrap"><input type="checkbox" id="ceTls"> TLS</label>
+        <label class="chk" id="ceTlsWrap"><input type="checkbox" id="ceTls" onchange="ceTlsChanged()"> TLS</label>
+        <label class="chk" id="ceInsecureWrap" style="display:none" data-tip="Skip TLS certificate verification. Needed for self-signed certs or private CAs (e.g. AWS RDS/DocumentDB/ElastiCache). Leave off to verify the server's certificate."><input type="checkbox" id="ceInsecure"> trust invalid cert</label>
         <label class="chk" data-tip="Store on the server (SQLite at ~/.warden/profiles.sqlite) so it works in every browser and the CLI. Passwords are never stored there."><input type="checkbox" id="ceServer"> save on server</label>
       </div>
     </div>
@@ -1492,33 +1504,45 @@ let envKinds = (() => { try { return JSON.parse(localStorage.getItem(ENVKINDS_KE
 // page reload doesn't strand the seatbelt on when you next connect to a non-prod env)
 function saveEnvKinds() { try { localStorage.setItem(ENVKINDS_KEY, JSON.stringify(envKinds)); } catch {} }
 
-// prod > staging > dev, inferred from the connection name unless the user tagged it
+// a connection's env tag: explicit (set in the connection form) or inferred from name
 function envKind(name) {
   if (envKinds[name]) return envKinds[name];
   const n = (name || '').toLowerCase();
-  if (/stag|uat|preprod|pre-prod|\bqa\b/.test(n)) return 'staging';
+  if (/\buat\b/.test(n)) return 'uat';
+  if (/\bqa\b/.test(n)) return 'qa';
+  if (/stag|preprod|pre-prod/.test(n)) return 'staging';
   if (/prod/.test(n)) return 'prod';
-  if (/dev|local|test|sandbox/.test(n)) return 'dev';
+  if (/local/.test(n)) return 'local';
+  if (/dev|test|sandbox/.test(n)) return 'dev';
+  return null;
+}
+
+// which tier a tag belongs to — drives the colour and the prod read-only guardrail
+function envTier(tag) {
+  if (tag === 'prod') return 'prod';
+  if (['staging', 'uat', 'qa', 'preprod'].includes(tag)) return 'staging';
+  if (['dev', 'local', 'sandbox', 'test'].includes(tag)) return 'dev';
   return null;
 }
 
 // paint the top bar for the connected environment + apply the prod read-only seatbelt
 function applyEnvGuard(name) {
-  const kind = envKind(name);
+  const tag = envKind(name);
+  const tier = envTier(tag);
   const badge = document.getElementById('envBadge');
   document.body.classList.remove('env-prod', 'env-staging', 'env-dev');
-  if (kind && badge) {
-    document.body.classList.add('env-' + kind);
-    badge.className = 'env-badge ' + kind;
-    badge.textContent = kind;
+  if (tier && badge) {
+    document.body.classList.add('env-' + tier);
+    badge.className = 'env-badge ' + tier;
+    badge.textContent = tag;
     badge.style.display = '';
   } else if (badge) {
     badge.style.display = 'none';
   }
-  if (kind === 'prod' && !prefs.readOnly) {
+  if (tier === 'prod' && !prefs.readOnly) {
     savePrefs({ readOnly: true, roAuto: true }); renderRoBtn(); renderNav();
     toast('Connected to PROD — read-only is on as a safety net. Click the lock to allow writes.', 'info');
-  } else if (kind !== 'prod' && prefs.roAuto && prefs.readOnly) {
+  } else if (tier !== 'prod' && prefs.roAuto && prefs.readOnly) {
     savePrefs({ readOnly: false, roAuto: false }); renderRoBtn(); renderNav();
   }
 }
@@ -1527,19 +1551,6 @@ function clearEnvGuard() {
   document.body.classList.remove('env-prod', 'env-staging', 'env-dev');
   const badge = document.getElementById('envBadge'); if (badge) badge.style.display = 'none';
   if (prefs.roAuto && prefs.readOnly) { savePrefs({ readOnly: false, roAuto: false }); renderRoBtn(); }
-}
-
-function pickEnvKind() {
-  const name = document.getElementById('envSelect').value;
-  if (!name) return;
-  const set = (k) => { if (k) envKinds[name] = k; else delete envKinds[name]; saveEnvKinds(); applyEnvGuard(name); };
-  showModal(`Environment: ${esc(name)}`,
-    `<p class="card-meta" style="margin-bottom:0">Tag this connection so warden warns you — and defaults to read-only — when you're on production.</p>`, [
-    { label: 'Production', cls: 'btn-danger', fn: () => set('prod') },
-    { label: 'Staging', cls: 'btn-ghost', fn: () => set('staging') },
-    { label: 'Dev / Local', cls: 'btn-ghost', fn: () => set('dev') },
-    { label: 'Auto-detect', cls: 'btn-ghost', fn: () => set(null) },
-  ]);
 }
 
 // Show credential inputs only while disconnected; the row stays calm when live.
@@ -4724,6 +4735,8 @@ function openConnForm() {
   document.getElementById('cePort').value = '';
   document.getElementById('ceDb').value = '';
   document.getElementById('ceTls').checked = false;
+  document.getElementById('ceInsecure').checked = false;
+  document.getElementById('ceEnvKind').value = '';
   const srv = document.getElementById('ceServer'); if (srv) srv.checked = false;
   ceEngineChanged();
   document.getElementById('connModal').classList.add('open');
@@ -4782,6 +4795,9 @@ function editEnv(env, eng) {
   document.getElementById('cePort').value = cfg.port || '';
   document.getElementById('ceDb').value = cfg.auth_db || cfg.default_db || '';
   document.getElementById('ceTls').checked = !!cfg.tls;
+  document.getElementById('ceInsecure').checked = !!cfg.tls_insecure;
+  document.getElementById('ceEnvKind').value = envKinds[env] || '';
+  ceTlsChanged();
   const serverChk = document.getElementById('ceServer');
   if (serverChk) serverChk.checked = (config.profile_envs?.[env] || []).includes(eng);
   document.getElementById('connModal').classList.add('open');
@@ -4836,6 +4852,16 @@ function ceEngineChanged() {
   };
   const c = document.getElementById('ceCompat');
   if (c) c.textContent = compat[fam] || '';
+  ceTlsChanged();
+}
+
+// the "trust invalid cert" opt-out only makes sense when TLS is on
+function ceTlsChanged() {
+  const tlsWrap = document.getElementById('ceTlsWrap');
+  const tls = document.getElementById('ceTls');
+  const insecure = document.getElementById('ceInsecureWrap');
+  const on = tlsWrap && tlsWrap.style.display !== 'none' && tls && tls.checked;
+  if (insecure) insecure.style.display = on ? '' : 'none';
 }
 
 async function uploadSqlite(input) {
@@ -4875,11 +4901,16 @@ function addCustomEnv() {
     if (!host || !/^[a-zA-Z0-9_.\-]+$/.test(host)) { toast('Valid host required', 'error'); return; }
     if (!(port >= 1 && port <= 65535)) { toast('Valid port required', 'error'); return; }
     cfg = { host, port, tls: document.getElementById('ceTls').checked };
+    if (cfg.tls && document.getElementById('ceInsecure')?.checked) cfg.tls_insecure = true;
     if (fam === 'documentdb') cfg.auth_db = dbv || 'admin';
     else if (fam === 'mysql') { if (dbv) cfg.default_db = dbv; }
     else if (fam === 'elasticsearch' || fam === 'redis') { /* host/port/tls only */ }
     else cfg.default_db = dbv || 'postgres';
   }
+  // the env tag lives in browser-local state, keyed by connection name
+  const envTag = document.getElementById('ceEnvKind')?.value || '';
+  if (envTag) envKinds[name] = envTag; else delete envKinds[name];
+  saveEnvKinds();
   if (document.getElementById('ceServer')?.checked) {
     apiPost('/api/profile-save', { name, profile_engine: eng, profile: cfg }).then(async res => {
       if (res.error) { toast(res.error, 'error'); return; }
