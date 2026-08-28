@@ -2784,6 +2784,29 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _same_site(self):
+        """Reject cross-origin API calls (CSRF) and DNS-rebound requests: the
+        Host must be one we actually serve, and any Origin must match. When the
+        operator deliberately binds a wildcard address we can't allowlist the
+        hostname, so we don't enforce (they've opted into network exposure)."""
+        bind = getattr(self.server, "warden_bind_host", "127.0.0.1")
+        port = getattr(self.server, "warden_port", None)
+        if bind in ("0.0.0.0", "::", ""):
+            return True
+        allowed = {"127.0.0.1", "localhost", "::1", bind}
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]")
+        if host and host not in allowed:
+            return False
+        origin = self.headers.get("Origin")
+        if origin:
+            try:
+                o = urlparse(origin)
+                if o.hostname not in allowed or (port is not None and o.port != port):
+                    return False
+            except ValueError:
+                return False
+        return True
+
     def do_GET(self):
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
@@ -2797,12 +2820,18 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
         elif path == "/api/config":
+            if not self._same_site():
+                self._json_response({"error": "Cross-origin request refused"}, 403)
+                return
             self._json_response(api_config({}))
         else:
             self.send_error(404)
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if not self._same_site():
+            self._json_response({"error": "Cross-origin request refused"}, 403)
+            return
         if path == "/api/sqlite-upload":
             try:
                 self._sqlite_upload()
@@ -2975,6 +3004,8 @@ def create_server(host=DEFAULT_HOST, port=DEFAULT_PORT):
     # Threaded so a long-running or streamed query doesn't block the UI.
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True
+    server.warden_bind_host = host   # used to reject cross-origin / DNS-rebound requests
+    server.warden_port = port
     return server
 
 
