@@ -4,6 +4,7 @@ These sit in front of every query, so they're the security-critical layer."""
 import pytest
 
 from warden_web import server
+from warden_core import validation as server_validation_mod
 
 
 # ── mysql_account: name[@host] → quoted 'name'@'host' ──
@@ -198,8 +199,8 @@ def test_is_mariadb_detects_and_caches(monkeypatch):
         calls.append(sql)
         return (0, "11.8.9-MariaDB-ubu2404\n", "")
 
-    monkeypatch.setattr(server, "my_query", fake_query)
-    server._MARIADB_CACHE.clear()
+    monkeypatch.setattr(server_validation_mod, "my_query", fake_query)
+    server_validation_mod._MARIADB_CACHE.clear()
     cfg = {"host": "h1", "port": 3306}
     assert server.is_mariadb(cfg, "u", "p") is True
     # second call is served from cache — no extra query
@@ -208,12 +209,12 @@ def test_is_mariadb_detects_and_caches(monkeypatch):
 
 
 def test_is_mariadb_false_for_mysql(monkeypatch):
-    monkeypatch.setattr(server, "my_query", lambda *a: (0, "8.0.36\n", ""))
-    server._MARIADB_CACHE.clear()
+    monkeypatch.setattr(server_validation_mod, "my_query", lambda *a: (0, "8.0.36\n", ""))
+    server_validation_mod._MARIADB_CACHE.clear()
     assert server.is_mariadb({"host": "h2", "port": 3306}, "u", "p") is False
 
 
 def test_is_mariadb_false_on_query_error(monkeypatch):
-    monkeypatch.setattr(server, "my_query", lambda *a: (1, "", "boom"))
-    server._MARIADB_CACHE.clear()
+    monkeypatch.setattr(server_validation_mod, "my_query", lambda *a: (1, "", "boom"))
+    server_validation_mod._MARIADB_CACHE.clear()
     assert server.is_mariadb({"host": "h3", "port": 3306}, "u", "p") is False

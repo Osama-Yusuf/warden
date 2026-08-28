@@ -58,6 +58,17 @@ from warden_core import mongo_native as mn
 from warden_core import pg_native as pn
 from warden_core import es_native as esn
 from warden_core import redis_native as rdn
+from warden_core.validation import (
+    MYSQL_HOST_RE, MYSQL_PRIVILEGES,
+    validate_docdb_roles, mysql_account, is_mariadb,
+    validate_mysql_privilege, validate_pg_privilege, validate_target,
+    sql_like_pattern as _sql_like_pattern,
+    docdb_num as _docdb_num,
+    es_index as _es_index,
+    redis_key as _redis_key,
+    clean_columns as _clean_columns,
+    acl_rule_ok as _acl_rule_ok,
+)
 
 USE_NATIVE_MONGO = mn.available()
 USE_NATIVE_PG = pn.available()
@@ -95,69 +106,8 @@ def require_creds(body):
     require_fields(body, "admin_user", "admin_pass")
 
 
-def validate_docdb_roles(roles):
-    if not isinstance(roles, list):
-        raise ValueError("roles must be a list")
-    for r in roles:
-        if not isinstance(r, dict) or "role" not in r or "db" not in r:
-            raise ValueError("Each role must have 'role' and 'db' fields")
-        if r["role"] not in DOCDB_ROLES:
-            raise ValueError(f"Unknown DocumentDB role: {r['role']}")
-        validate_ident(r["db"], "role database")
-
-
-MYSQL_PRIVILEGES = [
-    "SELECT", "INSERT", "UPDATE", "DELETE",
-    "ALL PRIVILEGES", "CREATE", "DROP", "ALTER", "INDEX", "EXECUTE",
-]
-
-MYSQL_HOST_RE = re.compile(r'^[A-Za-z0-9_.\-%]+$')
-
-
-def mysql_account(target):
-    """'name' or 'name@host' quoted as 'name'@'host'. Host defaults to %."""
-    name, _, host = str(target).strip().partition("@")
-    name = validate_ident(name, "username")
-    host = host or "%"
-    if len(host) > 128 or not MYSQL_HOST_RE.match(host):
-        raise ValueError("Invalid MySQL host part (letters, digits, _ . - %)")
-    return f"'{name}'@'{host}'"
-
-
-# MySQL keeps account-lock state in mysql.user.account_locked; MariaDB drops
-# that column from the mysql.user view and stores the flag in mysql.global_priv
-# (JSON). Detect the flavour once per host so the right query is used.
-_MARIADB_CACHE = {}
-
-def is_mariadb(cfg, user, pwd):
-    key = (cfg.get("host"), cfg.get("port"))
-    if key not in _MARIADB_CACHE:
-        code, out, _ = my_query(cfg, user, pwd, "SELECT VERSION()")
-        _MARIADB_CACHE[key] = (code == 0 and "mariadb" in out.lower())
-    return _MARIADB_CACHE[key]
-
-
-def validate_mysql_privilege(priv):
-    upper = str(priv).strip().upper()
-    if upper not in {p.upper() for p in MYSQL_PRIVILEGES}:
-        raise ValueError(f"Unknown privilege: {priv}")
-    return upper
-
-
-def validate_target(engine, username):
-    """Validate a username for the engine. MySQL accounts may carry @host."""
-    if engine_family(engine) == "mysql":
-        mysql_account(username)  # raises when malformed
-        return str(username).strip()
-    return validate_ident(username, "username")
-
-
-def validate_pg_privilege(priv):
-    upper = priv.strip().upper()
-    valid = {p.upper() for p in PG_PRIVILEGES}
-    if upper not in valid:
-        raise ValueError(f"Unknown privilege: {priv}")
-    return upper
+# Shared validators (mysql_account, is_mariadb, validate_*) now live in
+# warden_core.validation so the engine adapters can share them.
 
 
 # ---------------------------------------------------------------------------
@@ -727,11 +677,6 @@ def api_reset_password(body):
         return {"error": err or out}
 
 
-def _acl_rule_ok(rule):
-    r = str(rule or "").strip()
-    return bool(r) and len(r) <= 256 and " " not in r and "\x00" not in r
-
-
 def api_grant(body):
     cfg, err = get_config(body)
     if err:
@@ -1157,14 +1102,6 @@ BROWSE_MAX_LIMIT = 200
 BROWSE_SEARCH_MAX = 200
 
 
-def _sql_like_pattern(term):
-    """A single-quote-safe, wildcard-escaped LIKE pattern literal for the
-    subprocess engines (mysql/sqlite), used with ESCAPE '\\'. Read-only search
-    only — the value is escaped, never trusted as SQL."""
-    body = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return "'%" + body.replace("'", "''") + "%'"
-
-
 def api_browse_data(body):
     """A page of rows from one collection/table for the data browser. Uniform
     shape across engines: {engine, columns, rows, ids?, total, estimated,
@@ -1455,29 +1392,6 @@ def _crud_supported(fam):
     if fam == "redis" and USE_NATIVE_REDIS:
         return None
     return {"error": "Row editing isn't available for this engine"}
-
-
-def _es_index(body):
-    index = str(body.get("collection", "")).strip()
-    if not index or "\x00" in index or "," in index or index.startswith("_"):
-        raise ValueError("Invalid index name")
-    return index
-
-
-def _redis_key(body, field="id"):
-    key = body.get(field)
-    if not isinstance(key, str) or not key or "\x00" in key or len(key) > 512:
-        raise ValueError("Invalid key")
-    return key
-
-
-def _clean_columns(mapping, label):
-    """Validate the column names in a {column: value} map; values are passed as
-    query parameters (never interpolated), so only the identifiers need checks."""
-    out = {}
-    for k, v in (mapping or {}).items():
-        out[validate_ident(str(k), label)] = v
-    return out
 
 
 def api_row_insert(body):
@@ -1786,31 +1700,6 @@ def _js_balanced(q):
             if depth < 0:
                 return False
     return depth == 0 and in_str is None
-
-
-def _docdb_num(v):
-    """DocumentDB counters come back as BSON Longs that JSON.stringify turns
-    into objects ({$numberLong}, {low,high}, {$numberDecimal}). Coerce to int."""
-    if isinstance(v, (int, float)):
-        return int(v)
-    if isinstance(v, dict):
-        if "$numberLong" in v:
-            return int(v["$numberLong"])
-        if "$numberDecimal" in v:
-            return int(float(v["$numberDecimal"]))
-        if "$numberInt" in v:
-            return int(v["$numberInt"])
-        if "$numberDouble" in v:
-            try:
-                return int(float(v["$numberDouble"]))
-            except (ValueError, TypeError):
-                return 0
-        if "low" in v and "high" in v:
-            return (int(v["high"]) << 32) + (int(v["low"]) & 0xFFFFFFFF)
-    try:
-        return int(v)
-    except (ValueError, TypeError):
-        return 0
 
 
 def _clean_mongosh_noise(text):
