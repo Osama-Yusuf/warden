@@ -16,8 +16,6 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
 
-import csv
-import io
 import json
 import os
 
@@ -31,11 +29,8 @@ from warden_core import (
     audit,
     engine_family,
     my_csv,
-    my_exec,
     my_query,
     sq_csv,
-    sq_exec,
-    sq_json,
     sq_query,
     delete_profile,
     load_profile_environments,
@@ -43,13 +38,9 @@ from warden_core import (
     save_profile,
     docdb_args,
     docdb_eval,
-    docdb_exec,
     generate_password,
     js_string,
     pg_csv,
-    pg_exec,
-    pg_ident,
-    pg_literal,
     pg_query,
     run_cmd,
     validate_ident,
@@ -58,6 +49,10 @@ from warden_core import mongo_native as mn
 from warden_core import pg_native as pn
 from warden_core import es_native as esn
 from warden_core import redis_native as rdn
+# The query console (api_query) still lives here, so it keeps the few validators
+# it needs directly. Everything else moved into the per-engine adapters.
+from warden_core.validation import MYSQL_PRIVILEGES, is_mariadb, validate_target
+from warden_core.adapters import EngineError, Target, get_adapter
 
 USE_NATIVE_MONGO = mn.available()
 USE_NATIVE_PG = pn.available()
@@ -93,71 +88,6 @@ def require_creds(body):
     if engine_family(body.get("engine", "")) in ("sqlite", "elasticsearch", "redis"):
         return
     require_fields(body, "admin_user", "admin_pass")
-
-
-def validate_docdb_roles(roles):
-    if not isinstance(roles, list):
-        raise ValueError("roles must be a list")
-    for r in roles:
-        if not isinstance(r, dict) or "role" not in r or "db" not in r:
-            raise ValueError("Each role must have 'role' and 'db' fields")
-        if r["role"] not in DOCDB_ROLES:
-            raise ValueError(f"Unknown DocumentDB role: {r['role']}")
-        validate_ident(r["db"], "role database")
-
-
-MYSQL_PRIVILEGES = [
-    "SELECT", "INSERT", "UPDATE", "DELETE",
-    "ALL PRIVILEGES", "CREATE", "DROP", "ALTER", "INDEX", "EXECUTE",
-]
-
-MYSQL_HOST_RE = re.compile(r'^[A-Za-z0-9_.\-%]+$')
-
-
-def mysql_account(target):
-    """'name' or 'name@host' quoted as 'name'@'host'. Host defaults to %."""
-    name, _, host = str(target).strip().partition("@")
-    name = validate_ident(name, "username")
-    host = host or "%"
-    if len(host) > 128 or not MYSQL_HOST_RE.match(host):
-        raise ValueError("Invalid MySQL host part (letters, digits, _ . - %)")
-    return f"'{name}'@'{host}'"
-
-
-# MySQL keeps account-lock state in mysql.user.account_locked; MariaDB drops
-# that column from the mysql.user view and stores the flag in mysql.global_priv
-# (JSON). Detect the flavour once per host so the right query is used.
-_MARIADB_CACHE = {}
-
-def is_mariadb(cfg, user, pwd):
-    key = (cfg.get("host"), cfg.get("port"))
-    if key not in _MARIADB_CACHE:
-        code, out, _ = my_query(cfg, user, pwd, "SELECT VERSION()")
-        _MARIADB_CACHE[key] = (code == 0 and "mariadb" in out.lower())
-    return _MARIADB_CACHE[key]
-
-
-def validate_mysql_privilege(priv):
-    upper = str(priv).strip().upper()
-    if upper not in {p.upper() for p in MYSQL_PRIVILEGES}:
-        raise ValueError(f"Unknown privilege: {priv}")
-    return upper
-
-
-def validate_target(engine, username):
-    """Validate a username for the engine. MySQL accounts may carry @host."""
-    if engine_family(engine) == "mysql":
-        mysql_account(username)  # raises when malformed
-        return str(username).strip()
-    return validate_ident(username, "username")
-
-
-def validate_pg_privilege(priv):
-    upper = priv.strip().upper()
-    valid = {p.upper() for p in PG_PRIVILEGES}
-    if upper not in valid:
-        raise ValueError(f"Unknown privilege: {priv}")
-    return upper
 
 
 # ---------------------------------------------------------------------------
@@ -237,947 +167,193 @@ def get_config(body):
     return ENVIRONMENTS[env][engine], None
 
 
-def api_connect(body):
+# ---------------------------------------------------------------------------
+# Adapter dispatch. Every engine-specific handler is the same three steps: build
+# the adapter for this request, ask it to do the thing, wrap the answer. The
+# adapter (one class per engine, over in warden_core) raises EngineError or
+# ValueError when something's off, and we turn that into a plain {"error": ...}
+# the browser already knows how to show. Write ops also hand back a Mutation, so
+# we can write the audit line without the handler knowing a single engine detail.
+# ---------------------------------------------------------------------------
+
+def _adapter_for(body):
+    """Resolve the engine adapter for this request, or return (None, error)."""
     cfg, err = get_config(body)
     if err:
-        return {"ok": False, "error": err}
-    user = body.get("admin_user", "")
-    pwd = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
+        return None, err
+    return get_adapter(body.get("engine", "documentdb"), cfg,
+                       body.get("admin_user", ""), body.get("admin_pass", "")), None
 
-    fam = engine_family(engine)
-    if fam == "documentdb":
-        if USE_NATIVE_MONGO:
-            whoami, err = mn.ping(cfg, user, pwd)
-            if err:
-                return {"ok": False, "error": err}
-            # Reads/writes go native now; the query console still uses mongosh,
-            # so warm its session in the background for a fast first query.
-            prewarm_docdb(cfg, user, pwd)
-            return {"ok": True, "host": cfg["host"], "user": whoami}
-        data, err = docdb_eval(cfg, user, pwd, "db.runCommand({connectionStatus:1})")
-        if err:
-            return {"ok": False, "error": err}
-        authed = ((data or {}).get("authInfo") or {}).get("authenticatedUsers") or []
-        whoami = authed[0].get("user") if authed else user
-        prewarm_docdb(cfg, user, pwd)
-        return {"ok": True, "host": cfg["host"], "user": whoami}
-    if fam == "mysql":
-        code, out, err = my_query(cfg, user, pwd, "SELECT CURRENT_USER()")
-        if code != 0:
-            return {"ok": False, "error": err or "Connection failed"}
-        return {"ok": True, "host": cfg["host"], "user": out.strip() or user}
-    if fam == "sqlite":
-        db_path = Path(cfg["path"])
-        if not db_path.is_file():
-            return {"ok": False, "error": f"No such file: {db_path}"}
-        code, out, err = sq_query(db_path, "SELECT sqlite_version()")
-        if code != 0:
-            return {"ok": False, "error": err or "Could not open the database file"}
-        return {"ok": True, "host": str(db_path), "user": ""}
-    if fam == "elasticsearch":
-        if not USE_NATIVE_ES:
-            return {"ok": False, "error": "Elasticsearch needs the native driver (urllib3)"}
-        whoami, err = esn.ping(cfg, user, pwd)
-        if err:
-            return {"ok": False, "error": err}
-        return {"ok": True, "host": cfg["host"], "user": whoami}
-    if fam == "redis":
-        if not USE_NATIVE_REDIS:
-            return {"ok": False, "error": "Redis needs the native driver (redis-py)"}
-        whoami, err = rdn.ping(cfg, user, pwd)
-        if err:
-            return {"ok": False, "error": err}
-        return {"ok": True, "host": cfg["host"], "user": whoami}
-    code, out, err = pg_query(cfg, user, pwd, "SELECT current_user")
-    if code != 0:
-        return {"ok": False, "error": err or "Connection failed"}
-    return {"ok": True, "host": cfg["host"], "user": out.strip() or user}
+
+def _target(body):
+    """The browse/CRUD Target. `name` is a table (SQL) or a collection / index /
+    key-namespace (everything else); each adapter validates the parts it uses."""
+    return Target(database=body.get("database", ""),
+                  name=body.get("table") or body.get("collection", ""),
+                  schema=body.get("schema", "public"))
+
+
+def _named_user(body):
+    """Validate the target username for this engine (MySQL accounts may carry an
+    @host), raising ValueError when it's missing or malformed."""
+    require_fields(body, "username")
+    return validate_target(body.get("engine", ""), body["username"])
+
+
+def _mutate(body, method, *args, env_default="production", **kwargs):
+    """Run one write op through its adapter and turn the Mutation into the reply:
+    do the work, write the audit line, return {"ok": True, ...extra}."""
+    adapter, err = _adapter_for(body)
+    if err:
+        return {"error": err}
+    try:
+        m = getattr(adapter, method)(*args, **kwargs)
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
+    audit(body.get("env", env_default), adapter.family, m.action, m.detail)
+    return {"ok": True, **m.response}
+
+
+def api_connect(body):
+    adapter, err = _adapter_for(body)
+    if err:
+        return {"ok": False, "error": err}
+    try:
+        whoami = adapter.ping()
+    except (EngineError, ValueError) as e:
+        return {"ok": False, "error": str(e)}
+    if adapter.family == "documentdb":
+        # Reads and writes go native, but the query console still uses mongosh,
+        # so warm its session now for a fast first query.
+        prewarm_docdb(adapter.cfg, adapter.user, adapter.pwd)
+    cfg = adapter.cfg
+    host = str(Path(cfg["path"])) if "path" in cfg else cfg.get("host", "")
+    return {"ok": True, "host": host, "user": whoami}
 
 
 def api_test_login(body):
-    """Connect AS a given user (their own credentials) and probe what they can
-    do. Stateless: never touches the admin session. Read-only checks only."""
-    cfg, err = get_config(body)
+    """Connect as a given user (their own credentials) and probe what they can
+    do. Stateless: never touches the admin session, read-only checks only. The
+    adapter runs the probe and resolves auth-failure messages; we just wrap it."""
+    adapter, err = _adapter_for(body)
     if err:
         return {"error": err}
-    engine = body.get("engine", "documentdb")
-    fam = engine_family(engine)
-    if fam == "sqlite":
-        return {"error": "SQLite has no user accounts to test"}
-    if fam in ("elasticsearch", "redis"):
-        return {"error": "Login testing for this engine is coming in the next pass."}
     require_fields(body, "test_user", "test_pass")
-    tu = body["test_user"]
-    tp = body["test_pass"]
-    test_db = body.get("test_db") or ""
-    if test_db:
-        test_db = validate_ident(test_db, "database")
-    checks = []
-
-    if fam == "documentdb":
-        if USE_NATIVE_MONGO:
-            r = mn.login_probe(cfg, tu, tp, test_db)
-            if not r.get("auth"):
-                return {"ok": True, "auth": False,
-                        "error": _clean_mongosh_noise(r.get("error") or "") or "Authentication failed"}
-            return {"ok": True, "auth": True, "identity": r.get("identity", tu),
-                    "roles": r.get("roles", []), "checks": r.get("checks", [])}
-        data, err = docdb_eval(cfg, tu, tp, "db.runCommand({connectionStatus:1})")
-        if err or not data:
-            return {"ok": True, "auth": False, "error": _clean_mongosh_noise(err or "") or "Authentication failed"}
-        roles = ((data or {}).get("authInfo") or {}).get("authenticatedUserRoles") or []
-        role_strs = [f"{r.get('role')}@{r.get('db', '*')}" for r in roles]
-        dbs, e2 = docdb_eval(cfg, tu, tp, "db.adminCommand({listDatabases:1}).databases.map(d => d.name)")
-        checks.append({"name": "List all databases", "ok": e2 is None,
-                       "detail": (", ".join(dbs) if e2 is None and dbs else _clean_mongosh_noise(e2 or "") or "not permitted")})
-        if test_db:
-            names, e3 = docdb_eval(cfg, tu, tp, "db.getCollectionNames()", db=test_db)
-            checks.append({"name": f"Read '{test_db}'", "ok": e3 is None,
-                           "detail": (f"{len(names or [])} collection(s) visible" if e3 is None
-                                      else _clean_mongosh_noise(e3))})
-        return {"ok": True, "auth": True, "identity": tu, "roles": role_strs, "checks": checks}
-
-    if fam == "mysql":
-        code, out, err = my_query(cfg, tu, tp, "SELECT CURRENT_USER()")
-        if code != 0:
-            return {"ok": True, "auth": False, "error": (err or "").strip() or "Authentication failed"}
-        code2, out2, _ = my_query(cfg, tu, tp, "SHOW DATABASES")
-        checks.append({"name": "Databases visible", "ok": code2 == 0,
-                       "detail": ", ".join(out2.split()) if code2 == 0 and out2.strip() else "none"})
-        grants = []
-        code3, out3, _ = my_query(cfg, tu, tp, "SHOW GRANTS")
-        if code3 == 0:
-            grants = [l for l in out3.split("\n") if l.strip()]
-        if test_db:
-            code4, out4, err4 = my_query(cfg, tu, tp, "SHOW TABLES", db=test_db)
-            checks.append({"name": f"Access '{test_db}'", "ok": code4 == 0,
-                           "detail": (f"{len(out4.split())} table(s) visible" if code4 == 0 else (err4 or "").strip() or "denied")})
-        return {"ok": True, "auth": True, "identity": out.strip(), "grants": grants, "checks": checks}
-
-    # postgresql family
-    if USE_NATIVE_PG:
-        # Non-pooled probe: fails fast on a bad password (a pool would retry for
-        # its whole timeout) and never caches a pool for one-off test creds.
-        r = pn.login_probe(cfg, tu, tp, test_db)
-        if not r.get("auth"):
-            return {"ok": True, "auth": False, "error": (r.get("error") or "").strip() or "Authentication failed"}
-        return {"ok": True, "auth": True, "identity": r.get("identity", tu), "checks": r.get("checks", [])}
-    code, out, err = pg_query(cfg, tu, tp, "SELECT current_user")
-    if code != 0:
-        return {"ok": True, "auth": False, "error": (err or "").strip() or "Authentication failed"}
-    code2, out2, _ = pg_query(cfg, tu, tp,
-        "SELECT datname FROM pg_database WHERE datistemplate=false "
-        "AND has_database_privilege(datname, 'CONNECT') ORDER BY datname")
-    checks.append({"name": "Databases they can connect to", "ok": code2 == 0,
-                   "detail": ", ".join(out2.split()) if code2 == 0 and out2.strip() else "none"})
-    if test_db:
-        code3, out3, err3 = pg_query(cfg, tu, tp, "SELECT 1", db=test_db)
-        checks.append({"name": f"Connect to '{test_db}'", "ok": code3 == 0,
-                       "detail": "connected" if code3 == 0 else (err3 or "").strip() or "denied"})
-    return {"ok": True, "auth": True, "identity": out.strip(), "checks": checks}
+    test_db = validate_ident(body["test_db"], "database") if body.get("test_db") else ""
+    try:
+        probe = adapter.login_probe(body["test_user"], body["test_pass"], test_db)
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
+    return {"ok": True, **probe}
 
 
 def api_list_users(body):
-    cfg, err = get_config(body)
+    adapter, err = _adapter_for(body)
     if err:
         return {"error": err}
-    require_creds(body)
-    user = body.get("admin_user", "")
-    pwd = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    fam = engine_family(engine)
-
-    if fam == "elasticsearch":
-        data, err = esn.list_users(cfg, user, pwd)
-        if err:
-            return {"error": err}
-        return {"users": [{"user": u["user"], "roles": u.get("roles", []),
-                           "enabled": u.get("enabled", True), "reserved": u.get("reserved", False)}
-                          for u in (data or [])]}
-    if fam == "redis":
-        data, err = rdn.list_acl_users(cfg, user, pwd)
-        if err:
-            return {"error": err}
-        return {"users": [{"user": u["name"], "enabled": u.get("enabled", True),
-                           "commands": u.get("commands", ""), "keys": u.get("keys", ""),
-                           "reserved": u["name"] == "default"} for u in (data or [])]}
-
-    if fam == "mysql":
-        excl = ("'mysql.sys','mysql.session','mysql.infoschema','mariadb.sys',"
-                "'rdsadmin','rdsrepladmin'")
-        if is_mariadb(cfg, user, pwd):
-            sql = ("SELECT User, Host, IF(JSON_VALUE(Priv,'$.account_locked')=1,'Y','N') "
-                   "FROM mysql.global_priv "
-                   f"WHERE User NOT IN ({excl}) AND JSON_VALUE(Priv,'$.is_role') IS NULL "
-                   "ORDER BY User, Host")
-        else:
-            sql = (f"SELECT user, host, account_locked FROM mysql.user "
-                   f"WHERE user NOT IN ({excl}) ORDER BY user, host")
-        code, out, err = my_query(cfg, user, pwd, sql)
-        if code != 0:
-            return {"error": err}
-        users = []
-        for line in out.strip().split("\n"):
-            parts = line.split("\t")
-            if len(parts) >= 3:
-                users.append({"user": f"{parts[0]}@{parts[1]}",
-                              "can_login": parts[2] != "Y",
-                              "superuser": False, "createdb": False,
-                              "createrole": False, "valid_until": "never"})
-        return {"users": users}
-    if fam == "sqlite":
+    if not adapter.has_users:
         return {"users": [], "note": "SQLite has no user accounts"}
-
-    if fam == "documentdb":
-        data, err = (mn.users_info(cfg, user, pwd) if USE_NATIVE_MONGO
-                     else docdb_eval(cfg, user, pwd, "db.adminCommand({usersInfo:1}).users"))
-        if err:
-            return {"error": err}
-        users = []
-        for u in (data or []):
-            roles = u.get("roles", [])
-            users.append({
-                "user": u.get("user", "?"),
-                "db": u.get("db", "?"),
-                "roles": [f"{r['role']}@{r.get('db', '*')}" for r in roles],
-                "roles_raw": roles,
-            })
-        return {"users": users}
-    else:
-        sql = """
-            SELECT rolname, rolcanlogin, rolsuper, rolcreatedb,
-                   rolcreaterole, COALESCE(rolvaliduntil::text, 'never')
-            FROM pg_roles
-            WHERE rolname NOT LIKE 'pg_%%'
-              AND rolname NOT IN ('rdsadmin','rds_superuser','rds_replication','rds_password','rdsrepladmin')
-            ORDER BY rolname
-        """
-        code, out, err = pg_query(cfg, user, pwd, sql)
-        if code != 0:
-            return {"error": err}
-        users = []
-        for line in out.strip().split("\n"):
-            if not line.strip():
-                continue
-            parts = line.split("\t")
-            if len(parts) >= 6:
-                users.append({
-                    "user": parts[0],
-                    "can_login": parts[1] == "t",
-                    "superuser": parts[2] == "t",
-                    "createdb": parts[3] == "t",
-                    "createrole": parts[4] == "t",
-                    "valid_until": parts[5],
-                })
-        return {"users": users}
+    try:
+        return {"users": adapter.list_users()}
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
 
 
 def api_user_info(body):
-    cfg, err = get_config(body)
+    adapter, err = _adapter_for(body)
     if err:
         return {"error": err}
     require_fields(body, "username")
-    user = body.get("admin_user", "")
-    pwd = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    fam = engine_family(engine)
-    if fam == "elasticsearch":
-        name = str(body.get("username", "")).strip()
-        u, err = esn.user_info(cfg, user, pwd, name)
-        if err:
-            return {"error": err}
-        return {"user": u["user"], "roles": u.get("roles", []), "enabled": u.get("enabled", True),
-                "reserved": u.get("reserved", False), "engine_family": "elasticsearch"}
-    if fam == "redis":
-        name = str(body.get("username", "")).strip()
-        u, err = rdn.acl_getuser(cfg, user, pwd, name)
-        if err:
-            return {"error": err}
-        return {"user": u["name"], "enabled": u.get("enabled", True), "commands": u.get("commands", ""),
-                "keys": u.get("keys", ""), "channels": u.get("channels", ""), "engine_family": "redis"}
-    target = validate_target(engine, body["username"])
-
-    if fam == "mysql":
-        acct = mysql_account(target)
-        code, out, err = my_query(cfg, user, pwd, f"SHOW GRANTS FOR {acct}")
-        if code != 0:
-            return {"error": err.strip() or "User not found"}
-        grants = [l for l in out.strip().split("\n") if l.strip()]
-        name, _, host = target.partition("@")
-        nm, ht = name.replace("'", "''"), (host or '%').replace("'", "''")
-        if is_mariadb(cfg, user, pwd):
-            lock_sql = ("SELECT IF(JSON_VALUE(Priv,'$.account_locked')=1,'Y','N') "
-                        f"FROM mysql.global_priv WHERE User = '{nm}' AND Host = '{ht}'")
-        else:
-            lock_sql = f"SELECT account_locked FROM mysql.user WHERE user = '{nm}' AND host = '{ht}'"
-        code2, out2, _ = my_query(cfg, user, pwd, lock_sql)
-        locked = out2.strip() == "Y"
-        return {"user": target, "engine_family": "mysql", "locked": locked,
-                "can_login": not locked, "grant_statements": grants}
-    if fam == "sqlite":
+    if not adapter.has_users:
         return {"error": "SQLite has no user accounts"}
-
-    if fam == "documentdb":
-        if USE_NATIVE_MONGO:
-            u, err = mn.user_info(cfg, user, pwd, target)
-            if err:
-                return {"error": err}
-        else:
-            data, err = docdb_eval(cfg, user, pwd, f'db.adminCommand({{usersInfo: {js_string(target)}}}).users')
-            if err:
-                return {"error": err}
-            if not data:
-                return {"error": "User not found"}
-            u = data[0]
-        return {
-            "user": u.get("user"),
-            "db": u.get("db", "?"),
-            "userId": str(u.get("userId", "n/a")),
-            "roles": u.get("roles", []),
-        }
-    else:
-        sql = f"""
-            SELECT rolname, rolcanlogin, rolsuper, rolcreatedb,
-                   rolcreaterole, COALESCE(rolvaliduntil::text,'never'),
-                   COALESCE(rolconnlimit::text,'unlimited')
-            FROM pg_roles WHERE rolname = {pg_literal(target)}
-        """
-        code, out, err = pg_query(cfg, user, pwd, sql)
-        if code != 0 or not out.strip():
-            return {"error": "User not found"}
-        parts = out.strip().split("\t")
-        info = {
-            "user": parts[0],
-            "can_login": parts[1] == "t",
-            "superuser": parts[2] == "t",
-            "createdb": parts[3] == "t",
-            "createrole": parts[4] == "t",
-            "valid_until": parts[5],
-            "conn_limit": parts[6] if len(parts) > 6 else "unlimited",
-        }
-
-        sql2 = f"""
-            SELECT table_catalog, table_schema||'.'||table_name, privilege_type
-            FROM information_schema.role_table_grants
-            WHERE grantee = {pg_literal(target)} ORDER BY 1,2 LIMIT 50
-        """
-        code2, out2, _ = pg_query(cfg, user, pwd, sql2)
-        grants = []
-        if code2 == 0 and out2.strip():
-            for line in out2.strip().split("\n"):
-                p = line.split("\t")
-                if len(p) >= 3:
-                    grants.append({"db": p[0], "table": p[1], "privilege": p[2]})
-
-        sql3 = f"""
-            SELECT datname,
-                   has_database_privilege({pg_literal(target)}, datname, 'CONNECT'),
-                   has_database_privilege({pg_literal(target)}, datname, 'CREATE')
-            FROM pg_database WHERE datistemplate=false AND datname NOT IN ('rdsadmin')
-            ORDER BY datname
-        """
-        code3, out3, _ = pg_query(cfg, user, pwd, sql3)
-        db_privs = []
-        if code3 == 0 and out3.strip():
-            for line in out3.strip().split("\n"):
-                p = line.split("\t")
-                if len(p) >= 3:
-                    privs = []
-                    if p[1] == "t": privs.append("CONNECT")
-                    if p[2] == "t": privs.append("CREATE")
-                    db_privs.append({"database": p[0], "privileges": privs})
-
-        info["grants"] = grants
-        info["db_privileges"] = db_privs
-        return info
+    # Elasticsearch/Redis ACL names aren't SQL identifiers, so (like the original)
+    # they skip validate_target; every other engine validates the username the
+    # same way the rest of the user operations do.
+    name = (str(body["username"]).strip() if adapter.family in ("elasticsearch", "redis")
+            else validate_target(body.get("engine", ""), body["username"]))
+    try:
+        return adapter.user_info(name)
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
 
 
 def api_create_user(body):
-    cfg, err = get_config(body)
-    if err:
-        return {"error": err}
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    env = body.get("env", "production")
-    fam = engine_family(engine)
-    if fam in ("elasticsearch", "redis"):
-        require_fields(body, "username")
-    else:
-        require_fields(body, "admin_user", "admin_pass", "username")
-
-    if fam == "elasticsearch":
-        name = validate_ident(str(body["username"]), "username")
-        password = body.get("password") or generate_password()
-        roles = body.get("roles") or []
-        ok, err = esn.create_user(cfg, adm_user, adm_pass, name, password, roles)
-        if not ok:
-            return {"error": err}
-        audit(env, "elasticsearch", "CREATE USER", f"{name} roles={roles}")
-        return {"ok": True, "password": password}
-
-    if fam == "redis":
-        name = validate_ident(str(body["username"]), "username")
-        password = body.get("password") or generate_password()
-        keypat = str(body.get("key_pattern") or "*")
-        keypat = keypat if keypat.startswith("~") else "~" + keypat
-        level = body.get("acl_level", "read")
-        cmds = {"read": "+@read", "write": "+@read +@write", "all": "+@all"}.get(level, "+@read")
-        rules = ["on", f">{password}", keypat] + cmds.split()
-        ok, err = rdn.acl_setuser(cfg, adm_user, adm_pass, name, rules)
-        if err:
-            return {"error": err}
-        audit(env, "redis", "CREATE ACL USER", f"{name} {level} {keypat}")
-        return {"ok": True, "password": password}
-
-    target = validate_target(engine, body["username"])
+    name = _named_user(body)
     password = body.get("password") or generate_password()
-
-    if fam == "sqlite":
-        return {"error": "SQLite has no user accounts"}
-    if fam == "mysql":
-        acct = mysql_account(target)
-        pwd_lit = password.replace("\\", "\\\\").replace("'", "\\'")
-        ok, out, err = my_exec(cfg, adm_user, adm_pass,
-                               f"CREATE USER {acct} IDENTIFIED BY '{pwd_lit}'")
-        if ok:
-            audit(env, "mysql", "CREATE USER", target)
-            return {"ok": True, "password": password}
-        return {"error": err or out}
-    if fam == "documentdb":
-        roles = body.get("roles", [])
-        validate_docdb_roles(roles)
-        if USE_NATIVE_MONGO:
-            ok, err = mn.create_user(cfg, adm_user, adm_pass, target, password, roles)
-        else:
-            role_docs = json.dumps(roles)
-            js = f'db.createUser({{user: {js_string(target)}, pwd: {js_string(password)}, roles: {role_docs}}})'
-            ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
-        if ok:
-            audit(env, "documentdb", "CREATE USER", f"{target} roles={roles}")
-            return {"ok": True, "password": password}
-        return {"error": err or out}
-    else:
-        login = "LOGIN" if body.get("can_login", True) else "NOLOGIN"
-        sql = f"CREATE USER {pg_ident(target)} WITH {login} PASSWORD {pg_literal(password)}"
-        ok, out, err = pg_exec(cfg, adm_user, adm_pass, sql)
-        if ok:
-            audit(env, "postgresql", "CREATE USER", target)
-            return {"ok": True, "password": password}
-        return {"error": err or out}
+    return _mutate(body, "create_user", name, password,
+                   can_login=body.get("can_login", True),
+                   roles=body.get("roles"),
+                   key_pattern=body.get("key_pattern"),
+                   acl_level=body.get("acl_level", "read"))
 
 
 def api_reset_password(body):
-    cfg, err = get_config(body)
-    if err:
-        return {"error": err}
-    require_fields(body, "username")
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    env = body.get("env", "production")
-    fam = engine_family(engine)
-    if fam == "elasticsearch":
-        name = validate_ident(str(body["username"]), "username")
-        password = body.get("password") or generate_password()
-        ok, err = esn.set_password(cfg, adm_user, adm_pass, name, password)
-        if not ok:
-            return {"error": err}
-        audit(env, "elasticsearch", "RESET PASSWORD", name)
-        return {"ok": True, "password": password}
-    if fam == "redis":
-        name = validate_ident(str(body["username"]), "username")
-        password = body.get("password") or generate_password()
-        res, err = rdn.acl_setuser(cfg, adm_user, adm_pass, name, ["resetpass", f">{password}"])
-        if err:
-            return {"error": err}
-        audit(env, "redis", "RESET PASSWORD", name)
-        return {"ok": True, "password": password}
-    target = validate_target(engine, body["username"])
+    name = _named_user(body)
     password = body.get("password") or generate_password()
-
-    if fam == "sqlite":
-        return {"error": "SQLite has no user accounts"}
-    if fam == "mysql":
-        acct = mysql_account(target)
-        pwd_lit = password.replace("\\", "\\\\").replace("'", "\\'")
-        ok, out, err = my_exec(cfg, adm_user, adm_pass,
-                               f"ALTER USER {acct} IDENTIFIED BY '{pwd_lit}'")
-        if ok:
-            audit(env, "mysql", "RESET PASSWORD", target)
-            return {"ok": True, "password": password}
-        return {"error": err or out}
-    if fam == "documentdb":
-        if USE_NATIVE_MONGO:
-            ok, err = mn.update_password(cfg, adm_user, adm_pass, target, password)
-        else:
-            js = f'db.updateUser({js_string(target)}, {{pwd: {js_string(password)}}})'
-            ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
-        if ok:
-            audit(env, "documentdb", "RESET PASSWORD", target)
-            return {"ok": True, "password": password}
-        return {"error": err or out}
-    else:
-        sql = f"ALTER USER {pg_ident(target)} WITH PASSWORD {pg_literal(password)}"
-        ok, out, err = pg_exec(cfg, adm_user, adm_pass, sql)
-        if ok:
-            audit(env, "postgresql", "RESET PASSWORD", target)
-            return {"ok": True, "password": password}
-        return {"error": err or out}
-
-
-def _acl_rule_ok(rule):
-    r = str(rule or "").strip()
-    return bool(r) and len(r) <= 256 and " " not in r and "\x00" not in r
+    return _mutate(body, "set_password", name, password)
 
 
 def api_grant(body):
-    cfg, err = get_config(body)
-    if err:
-        return {"error": err}
-    require_fields(body, "username")
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    env = body.get("env", "production")
-    fam = engine_family(engine)
-    if fam == "elasticsearch":
-        name = validate_ident(str(body["username"]), "username")
-        add = [str(x) for x in (body.get("roles") or [])]
-        cur, err = esn.user_info(cfg, adm_user, adm_pass, name)
-        if err:
-            return {"error": err}
-        new_roles = sorted(set(cur.get("roles", [])) | set(add))
-        ok, err = esn.set_roles(cfg, adm_user, adm_pass, name, new_roles)
-        if not ok:
-            return {"error": err}
-        audit(env, "elasticsearch", "GRANT", f"{name} += {add}")
-        return {"ok": True}
-    if fam == "redis":
-        name = validate_ident(str(body["username"]), "username")
-        rule = str(body.get("rule", "")).strip()
-        if not _acl_rule_ok(rule):
-            return {"error": "Invalid ACL rule"}
-        res, err = rdn.acl_setuser(cfg, adm_user, adm_pass, name, [rule])
-        if err:
-            return {"error": err}
-        audit(env, "redis", "GRANT", f"{name} {rule}")
-        return {"ok": True}
-    target = validate_target(engine, body["username"])
-
-    if fam == "sqlite":
-        return {"error": "SQLite has no user accounts"}
-    if fam == "mysql":
-        acct = mysql_account(target)
-        priv = validate_mysql_privilege(body.get("privilege", "SELECT"))
-        db_raw = str(body.get("database", "*")).strip() or "*"
-        obj = "*.*" if db_raw == "*" else f"`{validate_ident(db_raw, 'database')}`.*"
-        ok, out, err = my_exec(cfg, adm_user, adm_pass, f"GRANT {priv} ON {obj} TO {acct}")
-        if ok:
-            audit(env, "mysql", "GRANT", f"{target} += {priv} on {obj}")
-            return {"ok": True}
-        return {"error": err or out}
-    if fam == "documentdb":
-        roles = body.get("roles", [])
-        validate_docdb_roles(roles)
-        if USE_NATIVE_MONGO:
-            ok, err = mn.grant_roles(cfg, adm_user, adm_pass, target, roles)
-        else:
-            role_docs = json.dumps(roles)
-            js = f'db.grantRolesToUser({js_string(target)}, {role_docs})'
-            ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
-        if ok:
-            audit(env, "documentdb", "GRANT", f"{target} += {roles}")
-            return {"ok": True}
-        return {"error": err or out}
-    else:
-        priv = validate_pg_privilege(body.get("privilege", "SELECT"))
-        database = validate_ident(body.get("database", "postgres"), "database")
-        schema = validate_ident(body.get("schema", "public"), "schema")
-        if priv in ("CONNECT", "CREATE"):
-            sql = f"GRANT {priv} ON DATABASE {pg_ident(database)} TO {pg_ident(target)}"
-            run_db = cfg.get("default_db", "postgres")
-        else:
-            sql = f"GRANT {priv} ON ALL TABLES IN SCHEMA {pg_ident(schema)} TO {pg_ident(target)}"
-            run_db = database
-        ok, out, err = pg_exec(cfg, adm_user, adm_pass, sql, db=run_db)
-        if ok:
-            audit(env, "postgresql", "GRANT", f"{target} += {priv} on {database}.{schema}")
-            return {"ok": True}
-        return {"error": err or out}
+    name = _named_user(body)
+    return _mutate(body, "grant", name,
+                   privilege=body.get("privilege"), database=body.get("database"),
+                   schema=body.get("schema"), roles=body.get("roles"),
+                   rule=body.get("rule"))
 
 
 def api_revoke(body):
-    cfg, err = get_config(body)
-    if err:
-        return {"error": err}
-    require_fields(body, "username")
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    env = body.get("env", "production")
-    fam = engine_family(engine)
-    if fam == "elasticsearch":
-        name = validate_ident(str(body["username"]), "username")
-        rem = {str(x) for x in (body.get("roles") or [])}
-        cur, err = esn.user_info(cfg, adm_user, adm_pass, name)
-        if err:
-            return {"error": err}
-        new_roles = sorted(set(cur.get("roles", [])) - rem)
-        ok, err = esn.set_roles(cfg, adm_user, adm_pass, name, new_roles)
-        if not ok:
-            return {"error": err}
-        audit(env, "elasticsearch", "REVOKE", f"{name} -= {sorted(rem)}")
-        return {"ok": True}
-    if fam == "redis":
-        name = validate_ident(str(body["username"]), "username")
-        rule = str(body.get("rule", "")).strip()
-        if not _acl_rule_ok(rule):
-            return {"error": "Invalid ACL rule"}
-        res, err = rdn.acl_setuser(cfg, adm_user, adm_pass, name, [rule])
-        if err:
-            return {"error": err}
-        audit(env, "redis", "REVOKE", f"{name} {rule}")
-        return {"ok": True}
-    target = validate_target(engine, body["username"])
-
-    if fam == "sqlite":
-        return {"error": "SQLite has no user accounts"}
-    if fam == "mysql":
-        acct = mysql_account(target)
-        priv = validate_mysql_privilege(body.get("privilege", "SELECT"))
-        db_raw = str(body.get("database", "*")).strip() or "*"
-        obj = "*.*" if db_raw == "*" else f"`{validate_ident(db_raw, 'database')}`.*"
-        ok, out, err = my_exec(cfg, adm_user, adm_pass, f"REVOKE {priv} ON {obj} FROM {acct}")
-        if ok:
-            audit(env, "mysql", "REVOKE", f"{target} -= {priv} on {obj}")
-            return {"ok": True}
-        return {"error": err or out}
-    if fam == "documentdb":
-        roles = body.get("roles", [])
-        validate_docdb_roles(roles)
-        if USE_NATIVE_MONGO:
-            ok, err = mn.revoke_roles(cfg, adm_user, adm_pass, target, roles)
-        else:
-            role_docs = json.dumps(roles)
-            js = f'db.revokeRolesFromUser({js_string(target)}, {role_docs})'
-            ok, out, err = docdb_exec(cfg, adm_user, adm_pass, js)
-        if ok:
-            audit(env, "documentdb", "REVOKE", f"{target} -= {roles}")
-            return {"ok": True}
-        return {"error": err or out}
-    else:
-        priv = validate_pg_privilege(body.get("privilege", "SELECT"))
-        database = validate_ident(body.get("database", "postgres"), "database")
-        schema = validate_ident(body.get("schema", "public"), "schema")
-        if priv in ("CONNECT", "CREATE"):
-            sql = f"REVOKE {priv} ON DATABASE {pg_ident(database)} FROM {pg_ident(target)}"
-            run_db = cfg.get("default_db", "postgres")
-        else:
-            sql = f"REVOKE {priv} ON ALL TABLES IN SCHEMA {pg_ident(schema)} FROM {pg_ident(target)}"
-            run_db = database
-        ok, out, err = pg_exec(cfg, adm_user, adm_pass, sql, db=run_db)
-        if ok:
-            audit(env, "postgresql", "REVOKE", f"{target} -= {priv} on {database}.{schema}")
-            return {"ok": True}
-        return {"error": err or out}
+    name = _named_user(body)
+    return _mutate(body, "revoke", name,
+                   privilege=body.get("privilege"), database=body.get("database"),
+                   schema=body.get("schema"), roles=body.get("roles"),
+                   rule=body.get("rule"))
 
 
 def api_drop_user(body):
-    cfg, err = get_config(body)
-    if err:
-        return {"error": err}
-    require_fields(body, "username")
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    env = body.get("env", "production")
-    fam = engine_family(engine)
-    if fam == "elasticsearch":
-        name = validate_ident(str(body["username"]), "username")
-        ok, err = esn.delete_user(cfg, adm_user, adm_pass, name)
-        if not ok:
-            return {"error": err}
-        audit(env, "elasticsearch", "DELETE USER", name)
-        return {"ok": True}
-    if fam == "redis":
-        name = validate_ident(str(body["username"]), "username")
-        res, err = rdn.acl_deluser(cfg, adm_user, adm_pass, name)
-        if err:
-            return {"error": err}
-        audit(env, "redis", "DELETE ACL USER", name)
-        return {"ok": True, "deleted": res.get("deleted", 0)}
-    target = validate_target(engine, body["username"])
-
-    if fam == "sqlite":
-        return {"error": "SQLite has no user accounts"}
-    if fam == "mysql":
-        acct = mysql_account(target)
-        ok, out, err = my_exec(cfg, adm_user, adm_pass, f"DROP USER {acct}")
-        if ok:
-            audit(env, "mysql", "DROP USER", target)
-            return {"ok": True}
-        return {"error": err or out}
-    if fam == "documentdb":
-        if USE_NATIVE_MONGO:
-            ok, err = mn.drop_user(cfg, adm_user, adm_pass, target)
-        else:
-            ok, out, err = docdb_exec(cfg, adm_user, adm_pass, f'db.dropUser({js_string(target)})')
-        if ok:
-            audit(env, "documentdb", "DROP USER", target)
-            return {"ok": True}
-        return {"error": err or out}
-    else:
-        ok, out, err = pg_exec(cfg, adm_user, adm_pass, f"DROP USER {pg_ident(target)}")
-        if ok:
-            audit(env, "postgresql", "DROP USER", target)
-            return {"ok": True}
-        return {"error": err or out}
+    name = _named_user(body)
+    return _mutate(body, "drop_user", name)
 
 
 def api_toggle_login(body):
-    cfg, err = get_config(body)
-    if err:
-        return {"error": err}
-    engine = body.get("engine", "")
-    fam = engine_family(engine)
-    if fam in ("elasticsearch", "redis"):
-        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
-    if fam == "documentdb":
-        return {"error": "Not applicable to DocumentDB"}
-    if fam == "sqlite":
-        return {"error": "SQLite has no user accounts"}
-    require_fields(body, "admin_user", "admin_pass", "username")
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    env = body.get("env", "production")
-    target = validate_target(engine, body["username"])
-    enable = body.get("enable", True)
-    if fam == "mysql":
-        acct = mysql_account(target)
-        kw = "UNLOCK" if enable else "LOCK"
-        ok, out, err = my_exec(cfg, adm_user, adm_pass, f"ALTER USER {acct} ACCOUNT {kw}")
-        if ok:
-            action = "ENABLE" if enable else "DISABLE"
-            audit(env, "mysql", f"{action} USER", target)
-            return {"ok": True}
-        return {"error": err or out}
-    kw = "LOGIN" if enable else "NOLOGIN"
-    ok, out, err = pg_exec(cfg, adm_user, adm_pass, f"ALTER USER {pg_ident(target)} WITH {kw}")
-    if ok:
-        action = "ENABLE" if enable else "DISABLE"
-        audit(env, "postgresql", f"{action} USER", target)
-        return {"ok": True}
-    return {"error": err or out}
+    name = _named_user(body)
+    return _mutate(body, "toggle_login", name, body.get("enable", True))
 
 
 def api_list_databases(body):
-    cfg, err = get_config(body)
+    adapter, err = _adapter_for(body)
     if err:
         return {"error": err}
-    require_creds(body)
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    fam = engine_family(engine)
-
-    if fam == "mysql":
-        sql = ("SELECT s.schema_name, COALESCE(SUM(t.data_length + t.index_length), 0) "
-               "FROM information_schema.schemata s "
-               "LEFT JOIN information_schema.tables t ON t.table_schema = s.schema_name "
-               "WHERE s.schema_name NOT IN ('information_schema','performance_schema','sys') "
-               "GROUP BY s.schema_name ORDER BY s.schema_name")
-        code, out, err = my_query(cfg, adm_user, adm_pass, sql)
-        if code != 0:
-            return {"error": err}
-        dbs = []
-        for line in out.strip().split("\n"):
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                dbs.append({"name": parts[0], "size_bytes": int(float(parts[1])),
-                            "size_mb": round(float(parts[1]) / 1048576, 1)})
-        return {"databases": dbs}
-    if fam == "sqlite":
-        db_path = Path(cfg["path"])
-        size = db_path.stat().st_size if db_path.is_file() else 0
-        return {"databases": [{"name": db_path.name, "size_bytes": size,
-                               "size_mb": round(size / 1048576, 1)}]}
-
-    if fam == "elasticsearch":
-        # ES has no databases; the cluster is one logical "database" whose
-        # "collections" are the indices.
-        name, err = esn.cluster_name(cfg, adm_user, adm_pass)
-        if err:
-            return {"error": err}
-        health, _herr = esn.cluster_health(cfg, adm_user, adm_pass)
-        size = (health or {}).get("size_bytes") or 0
-        return {"databases": [{"name": name, "size_bytes": int(size),
-                               "size_mb": round(int(size) / 1048576, 1)}]}
-
-    if fam == "redis":
-        data, err = rdn.list_databases(cfg, adm_user, adm_pass)
-        if err:
-            return {"error": err}
-        return {"databases": [{"name": d["name"], "size_bytes": d.get("size_bytes"),
-                               "keys": d.get("keys")} for d in (data or [])]}
-
-    if fam == "documentdb":
-        data, err = (mn.list_databases(cfg, adm_user, adm_pass) if USE_NATIVE_MONGO
-                     else docdb_eval(cfg, adm_user, adm_pass, "db.adminCommand({listDatabases:1}).databases"))
-        if err:
-            return {"error": err}
-        dbs = []
-        for d in (data or []):
-            size_bytes = _docdb_num(d.get("sizeOnDisk", 0))
-            dbs.append({
-                "name": d["name"],
-                "size_bytes": size_bytes,
-                "size_mb": round(size_bytes / (1024 * 1024), 1),
-                "empty": d.get("empty", False),
-            })
-        return {"databases": dbs}
-    else:
-        sql = """
-            SELECT datname, pg_database_size(datname)::bigint
-            FROM pg_database WHERE datistemplate=false AND datname NOT IN ('rdsadmin')
-            ORDER BY datname
-        """
-        code, out, err = pg_query(cfg, adm_user, adm_pass, sql)
-        if code != 0:
-            return {"error": err}
-        dbs = []
-        for line in out.strip().split("\n"):
-            if not line.strip():
-                continue
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                size_bytes = int(parts[1])
-                dbs.append({
-                    "name": parts[0],
-                    "size_bytes": size_bytes,
-                    "size_mb": round(size_bytes / (1024 * 1024), 1),
-                })
-        return {"databases": dbs}
+    try:
+        return {"databases": adapter.list_databases()}
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
 
 
 def api_list_collections(body):
-    cfg, err = get_config(body)
+    adapter, err = _adapter_for(body)
     if err:
         return {"error": err}
-    require_creds(body)
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    fam = engine_family(engine)
-
-    if fam == "elasticsearch":
-        data, err = esn.list_indices(cfg, adm_user, adm_pass)
-        if err:
-            return {"error": err}
-        return {"collections": [{"name": d["name"], "size_bytes": d.get("size_bytes"),
-                                 "docs": d.get("docs")} for d in (data or [])]}
-
-    if fam == "redis":
-        database = validate_ident(body.get("database", "db0"), "database")
-        data, err = rdn.list_namespaces(cfg, adm_user, adm_pass, database)
-        if err:
-            return {"error": err}
-        return {"collections": [{"name": d["name"], "size_bytes": d.get("size_bytes"),
-                                 "keys": d.get("keys")} for d in (data or [])]}
-
-    if fam == "sqlite":
-        db_path = Path(cfg["path"])
-        code, out, err = sq_query(db_path,
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-        if code != 0:
-            return {"error": err}
-        names = [l.strip() for l in out.strip().split("\n") if l.strip()]
-        sizes = {}
-        code2, out2, _ = sq_query(db_path, "SELECT name, SUM(pgsize) FROM dbstat GROUP BY name")
-        if code2 == 0:
-            for line in out2.strip().split("\n"):
-                parts = line.split("\t")
-                if len(parts) >= 2 and parts[1].isdigit():
-                    sizes[parts[0]] = int(parts[1])
-        return {"tables": [{"schema": "main", "table": n,
-                            **({"size_bytes": sizes[n]} if n in sizes else {})} for n in names]}
-    database = validate_ident(body.get("database", ""), "database")
-    if fam == "mysql":
-        sql = ("SELECT table_name, COALESCE(data_length + index_length, 0) "
-               "FROM information_schema.tables WHERE table_schema = '%s' "
-               "ORDER BY table_name" % database.replace("'", "''"))
-        code, out, err = my_query(cfg, adm_user, adm_pass, sql)
-        if code != 0:
-            return {"error": err}
-        tables = []
-        for line in out.strip().split("\n"):
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                tables.append({"schema": database, "table": parts[0],
-                               "size_bytes": int(float(parts[1]))})
-        return {"tables": tables}
-
-    if fam == "documentdb":
-        if USE_NATIVE_MONGO:
-            data, err = mn.list_collections(cfg, adm_user, adm_pass, database)
-            if err:
-                return {"error": err}
-            return {"collections": data}
-        data, err = docdb_eval(cfg, adm_user, adm_pass, "db.getCollectionNames()", db=database)
-        if err:
-            return {"error": err}
-        return {"collections": [{"name": n, "size_bytes": None} for n in sorted(data or [])]}
-    else:
-        sql = """
-            SELECT n.nspname, c.relname, pg_total_relation_size(c.oid)::bigint
-            FROM pg_class c
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE c.relkind IN ('r','p','m')
-              AND n.nspname NOT IN ('pg_catalog','information_schema')
-            ORDER BY n.nspname, c.relname
-        """
-        code, out, err = pg_query(cfg, adm_user, adm_pass, sql, db=database)
-        if code != 0:
-            return {"error": err}
-        tables = []
-        for line in out.strip().split("\n"):
-            if not line.strip():
-                continue
-            parts = line.split("\t")
-            if len(parts) >= 3:
-                tables.append({"schema": parts[0], "table": parts[1],
-                               "size_bytes": int(parts[2])})
-            elif len(parts) >= 2:
-                tables.append({"schema": parts[0], "table": parts[1]})
-        return {"tables": tables}
+    try:
+        # SQL engines answer under "tables", the document/key stores under
+        # "collections"; that's exactly what collection_key tells us.
+        return {adapter.collection_key: adapter.list_collections(body.get("database", ""))}
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
 
 
 BROWSE_MAX_LIMIT = 200
 BROWSE_SEARCH_MAX = 200
 
 
-def _sql_like_pattern(term):
-    """A single-quote-safe, wildcard-escaped LIKE pattern literal for the
-    subprocess engines (mysql/sqlite), used with ESCAPE '\\'. Read-only search
-    only — the value is escaped, never trusted as SQL."""
-    body = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return "'%" + body.replace("'", "''") + "%'"
-
-
 def api_browse_data(body):
     """A page of rows from one collection/table for the data browser. Uniform
     shape across engines: {engine, columns, rows, ids?, total, estimated,
     filtered, offset, limit}. Optional `search` filters server-side (bounded by
-    the page limit); it never runs a filtered count."""
-    cfg, err = get_config(body)
+    the page limit); it never runs a filtered count. The adapter fetches the
+    page, we put the uniform wrapper around it."""
+    adapter, err = _adapter_for(body)
     if err:
         return {"error": err}
-    require_creds(body)
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    fam = engine_family(engine)
     try:
         limit = max(1, min(BROWSE_MAX_LIMIT, int(body.get("limit", 50))))
     except (TypeError, ValueError):
@@ -1187,261 +363,43 @@ def api_browse_data(body):
     except (TypeError, ValueError):
         offset = 0
     search = str(body.get("search", "") or "").strip()[:BROWSE_SEARCH_MAX]
-
-    def shape(engine_name, res):
-        out = {"engine": engine_name, "columns": res.get("columns", []),
-               "rows": res.get("rows", []), "total": res.get("total"),
-               "estimated": res.get("estimated", False),
-               "filtered": res.get("filtered", bool(search)),
-               "offset": offset, "limit": limit}
-        if "ids" in res:
-            out["ids"] = res["ids"]
-        return out
-
-    if fam == "documentdb":
-        database = validate_ident(body.get("database", ""), "database")
-        collection = str(body.get("collection", "")).strip()
-        if not collection or len(collection) > 128 or "\x00" in collection:
-            return {"error": "Invalid collection name"}
-        if not USE_NATIVE_MONGO:
-            return {"error": "Data browser needs the native MongoDB driver (pymongo)"}
-        res, err = mn.find_page(cfg, adm_user, adm_pass, database, collection,
-                                limit, offset, search=search)
-        if err:
-            return {"error": err}
-        return shape("documentdb", res)
-
-    if fam == "elasticsearch":
-        index = str(body.get("collection", "")).strip()
-        if not index or "\x00" in index or "," in index or index.startswith("_"):
-            return {"error": "Invalid index name"}
-        res, err = esn.search_docs(cfg, adm_user, adm_pass, index, limit, offset, search=search)
-        if err:
-            return {"error": err}
-        return shape("elasticsearch", res)
-
-    if fam == "redis":
-        database = validate_ident(body.get("database", "db0"), "database")
-        namespace = str(body.get("collection", "*")).strip() or "*"
-        if len(namespace) > 256 or "\x00" in namespace:
-            return {"error": "Invalid key namespace"}
-        res, err = rdn.scan_keys(cfg, adm_user, adm_pass, database, namespace, limit, offset, search=search)
-        if err:
-            return {"error": err}
-        return shape("redis", res)
-
-    if fam == "postgresql":
-        database = validate_ident(body.get("database", ""), "database")
-        schema = validate_ident(body.get("schema", "public"), "schema")
-        table = validate_ident(body.get("table", ""), "table")
-        if not USE_NATIVE_PG:
-            return {"error": "Data browser needs the native PostgreSQL driver (psycopg)"}
-        res, err = pn.select_page(cfg, adm_user, adm_pass, database, schema, table,
-                                  limit, offset, search=search)
-        if err:
-            return {"error": err}
-        return shape("postgresql", res)
-
-    if fam == "mysql":
-        database = validate_ident(body.get("database", ""), "database")
-        table = validate_ident(body.get("table", ""), "table")
-        rel = f"`{database}`.`{table}`"
-        where = ""
-        if search:
-            code0, out0, _ = my_query(cfg, adm_user, adm_pass,
-                f"SELECT column_name FROM information_schema.columns "
-                f"WHERE table_schema = '{database}' AND table_name = '{table}'", db=database)
-            colnames = [l.strip() for l in out0.strip().split("\n") if l.strip()] if code0 == 0 else []
-            pat = _sql_like_pattern(search)
-            if colnames:
-                ors = " OR ".join(f"CAST(`{c}` AS CHAR) LIKE {pat} ESCAPE '\\\\'" for c in colnames)
-                where = f" WHERE ({ors})"
-        code, out, err = my_csv(cfg, adm_user, adm_pass,
-                                f"SELECT * FROM {rel}{where} LIMIT {limit} OFFSET {offset}", db=database)
-        if code != 0:
-            return {"error": err or "Query failed"}
-        reader = list(csv.reader(io.StringIO(out)))
-        columns = reader[0] if reader else []
-        rows = [r for r in reader[1:]] if len(reader) > 1 else []
-        total = None
-        if not search:
-            code2, out2, _ = my_query(cfg, adm_user, adm_pass, f"SELECT COUNT(*) FROM {rel}", db=database)
-            if code2 == 0 and out2.strip().isdigit():
-                total = int(out2.strip())
-        return shape("mysql", {"columns": columns, "rows": rows, "total": total})
-
-    if fam == "sqlite":
-        table = validate_ident(body.get("table", ""), "table")
-        db_path = Path(cfg["path"])
-        rel = '"' + table.replace('"', '""') + '"'
-        where = ""
-        if search:
-            tlit = "'" + table.replace("'", "''") + "'"
-            code0, out0, _ = sq_query(db_path, f"SELECT name FROM pragma_table_info({tlit})")
-            colnames = [l.strip() for l in out0.strip().split("\n") if l.strip()] if code0 == 0 else []
-            pat = _sql_like_pattern(search)
-            if colnames:
-                ors = " OR ".join(f'CAST("{c}" AS TEXT) LIKE {pat} ESCAPE \'\\\'' for c in colnames)
-                where = f" WHERE ({ors})"
-        code, out, err = sq_json(db_path, f"SELECT * FROM {rel}{where} LIMIT {limit} OFFSET {offset}")
-        if code != 0:
-            return {"error": err or "Query failed"}
-        try:
-            records = json.loads(out) if out.strip() else []
-        except (json.JSONDecodeError, ValueError):
-            records = []
-        columns, seen = [], set()
-        for rec in records:
-            for k in rec.keys():
-                if k not in seen:
-                    seen.add(k)
-                    columns.append(k)
-        rows = [[rec.get(k) for k in columns] for rec in records]
-        total = None
-        if not search:
-            code2, out2, _ = sq_query(db_path, f"SELECT COUNT(*) FROM {rel}")
-            if code2 == 0 and out2.strip().isdigit():
-                total = int(out2.strip())
-        return shape("sqlite", {"columns": columns, "rows": rows, "total": total})
-
-    return {"error": f"Unsupported engine: {engine}"}
+    try:
+        res = adapter.browse(_target(body), limit, offset, search)
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
+    out = {"engine": adapter.family, "columns": res.get("columns", []),
+           "rows": res.get("rows", []), "total": res.get("total"),
+           "estimated": res.get("estimated", False),
+           "filtered": res.get("filtered", bool(search)),
+           "offset": offset, "limit": limit}
+    if "ids" in res:
+        out["ids"] = res["ids"]
+    return out
 
 
 def api_table_meta(body):
-    """Metadata a safe editor needs — primary key + columns, plus whether the
-    object is editable. Only PostgreSQL and MongoDB are editable for now."""
-    cfg, err = get_config(body)
+    """Metadata a safe editor needs: primary key + columns, plus whether the
+    object is editable. Each adapter knows its own answer (Postgres/Mongo edit
+    rows, Elasticsearch/Redis edit documents/keys, MySQL/SQLite are read-only)."""
+    adapter, err = _adapter_for(body)
     if err:
         return {"error": err}
-    require_creds(body)
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    fam = engine_family(engine)
-
-    if fam == "documentdb":
-        if not USE_NATIVE_MONGO:
-            return {"editable": False, "reason": "native MongoDB driver unavailable"}
-        database = validate_ident(body.get("database", ""), "database")
-        collection = str(body.get("collection", "")).strip()
-        meta, err = mn.collection_meta(cfg, adm_user, adm_pass, database, collection)
-        if err:
-            return {"error": err}
-        return {"engine": "documentdb", **meta}
-
-    if fam == "elasticsearch":
-        # Documents are edited as JSON, keyed by _id — same shape as MongoDB.
-        return {"engine": "elasticsearch", "editable": bool(USE_NATIVE_ES),
-                "id_field": "_id", "json_edit": True,
-                "reason": None if USE_NATIVE_ES else "native driver unavailable"}
-
-    if fam == "redis":
-        # Keys are edited with a key/type/ttl/value form, not a column grid.
-        return {"engine": "redis", "editable": bool(USE_NATIVE_REDIS),
-                "id_field": "key", "redis_edit": True,
-                "reason": None if USE_NATIVE_REDIS else "native driver unavailable"}
-
-    if fam == "postgresql":
-        if not USE_NATIVE_PG:
-            return {"editable": False, "reason": "native PostgreSQL driver unavailable"}
-        database = validate_ident(body.get("database", ""), "database")
-        schema = validate_ident(body.get("schema", "public"), "schema")
-        table = validate_ident(body.get("table", ""), "table")
-        meta, err = pn.table_meta(cfg, adm_user, adm_pass, database, schema, table)
-        if err:
-            return {"error": err}
-        reason = None if meta.get("editable") else "table has no primary key"
-        return {"engine": "postgresql", "reason": reason, **meta}
-
-    label = "MySQL" if fam == "mysql" else "SQLite"
-    return {"engine": fam, "editable": False,
-            "reason": f"row editing isn't supported for {label} yet (view & search only)"}
+    try:
+        return {"engine": adapter.family, **adapter.table_meta(_target(body))}
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
 
 
 def api_object_stats(body):
     """Header stats for the data browser (rows, size, columns, indexes), shaped
-    per engine. Best-effort — returns whatever is cheap to compute."""
-    cfg, err = get_config(body)
+    per engine. Best-effort: returns whatever is cheap to compute."""
+    adapter, err = _adapter_for(body)
     if err:
         return {"error": err}
-    require_creds(body)
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    fam = engine_family(engine)
-
-    if fam == "documentdb":
-        if not USE_NATIVE_MONGO:
-            return {"stats": {}}
-        database = validate_ident(body.get("database", ""), "database")
-        collection = str(body.get("collection", "")).strip()
-        st, err = mn.collection_stats(cfg, adm_user, adm_pass, database, collection)
-        if err:
-            return {"error": err}
-        return {"engine": "documentdb", "stats": st}
-
-    if fam == "elasticsearch":
-        index = str(body.get("collection", "")).strip()
-        st, err = esn.index_stats(cfg, adm_user, adm_pass, index)
-        if err:
-            return {"error": err}
-        return {"engine": "elasticsearch", "stats": st}
-
-    if fam == "redis":
-        database = validate_ident(body.get("database", "db0"), "database")
-        st, err = rdn.db_stats(cfg, adm_user, adm_pass, database)
-        if err:
-            return {"error": err}
-        return {"engine": "redis", "stats": st}
-
-    if fam == "postgresql":
-        if not USE_NATIVE_PG:
-            return {"stats": {}}
-        database = validate_ident(body.get("database", ""), "database")
-        schema = validate_ident(body.get("schema", "public"), "schema")
-        table = validate_ident(body.get("table", ""), "table")
-        st, err = pn.object_stats(cfg, adm_user, adm_pass, database, schema, table)
-        if err:
-            return {"error": err}
-        return {"engine": "postgresql", "stats": st}
-
-    if fam == "mysql":
-        database = validate_ident(body.get("database", ""), "database")
-        table = validate_ident(body.get("table", ""), "table")
-        st = {}
-        code, out, _ = my_query(cfg, adm_user, adm_pass,
-            f"SELECT table_rows, COALESCE(data_length+index_length,0) FROM information_schema.tables "
-            f"WHERE table_schema='{database}' AND table_name='{table}'", db=database)
-        if code == 0 and out.strip():
-            p = out.strip().split("\t")
-            if len(p) >= 2:
-                st["rows"] = int(p[0]) if p[0].isdigit() else None
-                st["estimated"] = True
-                st["size_bytes"] = int(p[1]) if p[1].isdigit() else None
-        code2, out2, _ = my_query(cfg, adm_user, adm_pass,
-            f"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='{database}' AND table_name='{table}'", db=database)
-        if code2 == 0 and out2.strip().isdigit():
-            st["columns"] = int(out2.strip())
-        return {"engine": "mysql", "stats": st}
-
-    if fam == "sqlite":
-        table = validate_ident(body.get("table", ""), "table")
-        db_path = Path(cfg["path"])
-        rel = '"' + table.replace('"', '""') + '"'
-        tlit = "'" + table.replace("'", "''") + "'"
-        st = {}
-        code, out, _ = sq_query(db_path, f"SELECT COUNT(*) FROM {rel}")
-        if code == 0 and out.strip().isdigit():
-            st["rows"] = int(out.strip())
-        code2, out2, _ = sq_query(db_path, f"SELECT COUNT(*) FROM pragma_table_info({tlit})")
-        if code2 == 0 and out2.strip().isdigit():
-            st["columns"] = int(out2.strip())
-        code3, out3, _ = sq_query(db_path, f"SELECT COALESCE(SUM(pgsize),0) FROM dbstat WHERE name={tlit}")
-        if code3 == 0 and out3.strip().isdigit():
-            st["size_bytes"] = int(out3.strip())
-        return {"engine": "sqlite", "stats": st}
-
-    return {"stats": {}}
+    try:
+        return {"engine": adapter.family, "stats": adapter.object_stats(_target(body))}
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
 
 
 def _crud_supported(fam):
@@ -1457,253 +415,31 @@ def _crud_supported(fam):
     return {"error": "Row editing isn't available for this engine"}
 
 
-def _es_index(body):
-    index = str(body.get("collection", "")).strip()
-    if not index or "\x00" in index or "," in index or index.startswith("_"):
-        raise ValueError("Invalid index name")
-    return index
-
-
-def _redis_key(body, field="id"):
-    key = body.get(field)
-    if not isinstance(key, str) or not key or "\x00" in key or len(key) > 512:
-        raise ValueError("Invalid key")
-    return key
-
-
-def _clean_columns(mapping, label):
-    """Validate the column names in a {column: value} map; values are passed as
-    query parameters (never interpolated), so only the identifiers need checks."""
-    out = {}
-    for k, v in (mapping or {}).items():
-        out[validate_ident(str(k), label)] = v
-    return out
-
-
 def api_row_insert(body):
-    cfg, err = get_config(body)
-    if err:
-        return {"error": err}
-    require_creds(body)
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    env = body.get("env", "custom")
-    fam = engine_family(engine)
-    blocked = _crud_supported(fam)
+    blocked = _crud_supported(engine_family(body.get("engine", "")))
     if blocked:
         return blocked
-
-    if fam == "documentdb":
-        database = validate_ident(body.get("database", ""), "database")
-        collection = str(body.get("collection", "")).strip()
-        doc = body.get("document")
-        if not isinstance(doc, dict):
-            return {"error": "Document must be a JSON object"}
-        res, err = mn.insert_document(cfg, adm_user, adm_pass, database, collection, doc)
-        if err:
-            return {"error": err}
-        audit(env, "documentdb", "INSERT DOC", f"{database}.{collection} _id={res.get('inserted_id')}")
-        return {"ok": True, "inserted_id": res.get("inserted_id")}
-
-    if fam == "elasticsearch":
-        try:
-            index = _es_index(body)
-        except ValueError as e:
-            return {"error": str(e)}
-        doc = body.get("document")
-        if not isinstance(doc, dict):
-            return {"error": "Document must be a JSON object"}
-        doc_id = body.get("id") if isinstance(body.get("id"), str) and body.get("id") else None
-        res, err = esn.insert_document(cfg, adm_user, adm_pass, index, doc, doc_id)
-        if err:
-            return {"error": err}
-        audit(env, "elasticsearch", "INDEX DOC", f"{index} _id={res.get('inserted_id')}")
-        return {"ok": True, "inserted_id": res.get("inserted_id")}
-
-    if fam == "redis":
-        database = validate_ident(body.get("database", "db0"), "database")
-        try:
-            key = _redis_key(body, "key")
-        except ValueError as e:
-            return {"error": str(e)}
-        res, err = rdn.set_key(cfg, adm_user, adm_pass, database, key,
-                               body.get("ktype", "string"), body.get("value"), body.get("ttl"))
-        if err:
-            return {"error": err}
-        audit(env, "redis", "SET KEY", f"{database} {key} ({body.get('ktype')})")
-        return {"ok": True, "key": key}
-
-    database = validate_ident(body.get("database", ""), "database")
-    schema = validate_ident(body.get("schema", "public"), "schema")
-    table = validate_ident(body.get("table", ""), "table")
-    try:
-        values = _clean_columns(body.get("values"), "column")
-    except ValueError as e:
-        return {"error": str(e)}
-    if not values:
-        return {"error": "No values to insert"}
-    res, err = pn.insert_row(cfg, adm_user, adm_pass, database, schema, table, values)
-    if err:
-        return {"error": err}
-    audit(env, "postgresql", "INSERT ROW", f"{schema}.{table} ({', '.join(values)})")
-    return {"ok": True, "row": res}
+    return _mutate(body, "insert_row", _target(body), body, env_default="custom")
 
 
 def api_row_update(body):
-    cfg, err = get_config(body)
-    if err:
-        return {"error": err}
-    require_creds(body)
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    env = body.get("env", "custom")
-    fam = engine_family(engine)
-    blocked = _crud_supported(fam)
+    blocked = _crud_supported(engine_family(body.get("engine", "")))
     if blocked:
         return blocked
-
-    if fam == "documentdb":
-        database = validate_ident(body.get("database", ""), "database")
-        collection = str(body.get("collection", "")).strip()
-        rep = body.get("id")
-        if rep is None:
-            return {"error": "Missing document _id"}
-        set_fields = body.get("set") or {}
-        unset_fields = body.get("unset") or []
-        if not isinstance(set_fields, dict) or not isinstance(unset_fields, list):
-            return {"error": "Invalid update payload"}
-        res, err = mn.update_document(cfg, adm_user, adm_pass, database, collection,
-                                      rep, set_fields, unset_fields)
-        if err:
-            return {"error": err}
-        audit(env, "documentdb", "UPDATE DOC", f"{database}.{collection} _id={rep}")
-        return {"ok": True, "modified": res.get("modified", 0)}
-
-    if fam == "elasticsearch":
-        try:
-            index = _es_index(body)
-        except ValueError as e:
-            return {"error": str(e)}
-        rep = body.get("id")
-        if not isinstance(rep, str) or not rep:
-            return {"error": "Missing document _id"}
-        set_fields = body.get("set") or {}
-        unset_fields = body.get("unset") or []
-        if not isinstance(set_fields, dict) or not isinstance(unset_fields, list):
-            return {"error": "Invalid update payload"}
-        res, err = esn.update_document(cfg, adm_user, adm_pass, index, rep, set_fields, unset_fields)
-        if err:
-            return {"error": err}
-        audit(env, "elasticsearch", "UPDATE DOC", f"{index} _id={rep}")
-        return {"ok": True, "modified": 1 if (res or {}).get("result") == "updated" else 0}
-
-    if fam == "redis":
-        database = validate_ident(body.get("database", "db0"), "database")
-        try:
-            key = _redis_key(body, "id")
-        except ValueError as e:
-            return {"error": str(e)}
-        res, err = rdn.set_key(cfg, adm_user, adm_pass, database, key,
-                               body.get("ktype", "string"), body.get("value"), body.get("ttl"))
-        if err:
-            return {"error": err}
-        audit(env, "redis", "SET KEY", f"{database} {key} ({body.get('ktype')})")
-        return {"ok": True, "modified": 1}
-
-    database = validate_ident(body.get("database", ""), "database")
-    schema = validate_ident(body.get("schema", "public"), "schema")
-    table = validate_ident(body.get("table", ""), "table")
-    try:
-        pk = _clean_columns(body.get("pk"), "primary key column")
-        changes = _clean_columns(body.get("changes"), "column")
-    except ValueError as e:
-        return {"error": str(e)}
-    if not pk:
-        return {"error": "Refusing to update without a primary key"}
-    if not changes:
-        return {"error": "No changes to apply"}
-    n, err = pn.update_row(cfg, adm_user, adm_pass, database, schema, table, pk, changes)
-    if err:
-        return {"error": err}
-    audit(env, "postgresql", "UPDATE ROW",
-          f"{schema}.{table} WHERE {pk} SET {', '.join(changes)}")
-    return {"ok": True, "updated": n}
+    return _mutate(body, "update_row", _target(body), body, env_default="custom")
 
 
 def api_row_delete(body):
-    cfg, err = get_config(body)
-    if err:
-        return {"error": err}
-    require_creds(body)
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-    env = body.get("env", "custom")
-    fam = engine_family(engine)
-    blocked = _crud_supported(fam)
+    blocked = _crud_supported(engine_family(body.get("engine", "")))
     if blocked:
         return blocked
-
-    if fam == "documentdb":
-        database = validate_ident(body.get("database", ""), "database")
-        collection = str(body.get("collection", "")).strip()
-        rep = body.get("id")
-        if rep is None:
-            return {"error": "Missing document _id"}
-        res, err = mn.delete_document(cfg, adm_user, adm_pass, database, collection, rep)
-        if err:
-            return {"error": err}
-        audit(env, "documentdb", "DELETE DOC", f"{database}.{collection} _id={rep}")
-        return {"ok": True, "deleted": res.get("deleted", 0)}
-
-    if fam == "elasticsearch":
-        try:
-            index = _es_index(body)
-        except ValueError as e:
-            return {"error": str(e)}
-        rep = body.get("id")
-        if not isinstance(rep, str) or not rep:
-            return {"error": "Missing document _id"}
-        res, err = esn.delete_document(cfg, adm_user, adm_pass, index, rep)
-        if err:
-            return {"error": err}
-        audit(env, "elasticsearch", "DELETE DOC", f"{index} _id={rep}")
-        return {"ok": True, "deleted": 1 if (res or {}).get("result") == "deleted" else 0}
-
-    if fam == "redis":
-        database = validate_ident(body.get("database", "db0"), "database")
-        try:
-            key = _redis_key(body, "id")
-        except ValueError as e:
-            return {"error": str(e)}
-        res, err = rdn.delete_key(cfg, adm_user, adm_pass, database, key)
-        if err:
-            return {"error": err}
-        audit(env, "redis", "DELETE KEY", f"{database} {key}")
-        return {"ok": True, "deleted": res.get("deleted", 0)}
-
-    database = validate_ident(body.get("database", ""), "database")
-    schema = validate_ident(body.get("schema", "public"), "schema")
-    table = validate_ident(body.get("table", ""), "table")
-    try:
-        pk = _clean_columns(body.get("pk"), "primary key column")
-    except ValueError as e:
-        return {"error": str(e)}
-    if not pk:
-        return {"error": "Refusing to delete without a primary key"}
-    n, err = pn.delete_row(cfg, adm_user, adm_pass, database, schema, table, pk)
-    if err:
-        return {"error": err}
-    audit(env, "postgresql", "DELETE ROW", f"{schema}.{table} WHERE {pk}")
-    return {"ok": True, "deleted": n}
+    return _mutate(body, "delete_row", _target(body), body, env_default="custom")
 
 
 MAX_QUERY_LEN = 20000
 MAX_OUTPUT_LEN = 300000
 
-# Redis commands that only read — used to gate the console in read-only mode.
+# Redis commands that only read, used to gate the console in read-only mode.
 REDIS_READ_CMDS = {
     "GET", "MGET", "STRLEN", "GETRANGE", "SUBSTR", "GETBIT", "BITCOUNT",
     "EXISTS", "TYPE", "TTL", "PTTL", "EXPIRETIME", "PEXPIRETIME", "OBJECT",
@@ -1786,31 +522,6 @@ def _js_balanced(q):
             if depth < 0:
                 return False
     return depth == 0 and in_str is None
-
-
-def _docdb_num(v):
-    """DocumentDB counters come back as BSON Longs that JSON.stringify turns
-    into objects ({$numberLong}, {low,high}, {$numberDecimal}). Coerce to int."""
-    if isinstance(v, (int, float)):
-        return int(v)
-    if isinstance(v, dict):
-        if "$numberLong" in v:
-            return int(v["$numberLong"])
-        if "$numberDecimal" in v:
-            return int(float(v["$numberDecimal"]))
-        if "$numberInt" in v:
-            return int(v["$numberInt"])
-        if "$numberDouble" in v:
-            try:
-                return int(float(v["$numberDouble"]))
-            except (ValueError, TypeError):
-                return 0
-        if "low" in v and "high" in v:
-            return (int(v["high"]) << 32) + (int(v["low"]) & 0xFFFFFFFF)
-    try:
-        return int(v)
-    except (ValueError, TypeError):
-        return 0
 
 
 def _clean_mongosh_noise(text):
@@ -2318,7 +1029,7 @@ def api_audit_run(body):
 
     fam = engine_family(engine)
     if fam in ("elasticsearch", "redis"):
-        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
+        return {"error": "This isn't available for Elasticsearch or Redis yet. Coming in the next pass."}
     if fam == "mysql":
         excl = ("'mysql.sys','mysql.session','mysql.infoschema','mariadb.sys',"
                 "'rdsadmin','rdsrepladmin'")
@@ -2497,117 +1208,13 @@ def api_audit_run(body):
 # ---------------------------------------------------------------------------
 
 def api_health(body):
-    cfg, err = get_config(body)
+    adapter, err = _adapter_for(body)
     if err:
         return {"error": err}
-    require_creds(body)
-    adm_user = body.get("admin_user", "")
-    adm_pass = body.get("admin_pass", "")
-    engine = body.get("engine", "documentdb")
-
-    fam = engine_family(engine)
-    if fam == "elasticsearch":
-        data, err = esn.cluster_health(cfg, adm_user, adm_pass)
-        if err:
-            return {"error": err}
-        return {"engine": "elasticsearch", "health": data}
-    if fam == "redis":
-        data, err = rdn.info_health(cfg, adm_user, adm_pass)
-        if err:
-            return {"error": err}
-        return {"engine": "redis", "health": data}
-    if fam == "mysql":
-        health = {}
-        checks = {
-            "version": "SELECT VERSION()",
-            "uptime": "SELECT variable_value FROM performance_schema.global_status WHERE variable_name = 'Uptime'",
-            "threads": "SELECT variable_value FROM performance_schema.global_status WHERE variable_name = 'Threads_connected'",
-            "max_connections": "SELECT @@max_connections",
-            "total_size": ("SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables "
-                           "WHERE table_schema NOT IN ('information_schema','performance_schema','sys')"),
-        }
-        for key, sql in checks.items():
-            code, out, _ = my_query(cfg, adm_user, adm_pass, sql)
-            health[key] = out.strip() if code == 0 and out.strip() else None
-        code, out, _ = my_query(cfg, adm_user, adm_pass,
-            "SELECT id, user, time, LEFT(COALESCE(info, ''), 90) FROM information_schema.processlist "
-            "WHERE command <> 'Sleep' AND time >= 5 AND info IS NOT NULL ORDER BY time DESC LIMIT 10")
-        slow = []
-        if code == 0 and out.strip():
-            for line in out.strip().split("\n"):
-                p = line.split("\t")
-                if len(p) >= 4:
-                    slow.append({"pid": p[0], "user": p[1], "runtime": p[2] + "s", "query": p[3]})
-        health["slow_queries"] = slow
-        return {"engine": "mysql", "health": health}
-    if fam == "sqlite":
-        db_path = Path(cfg["path"])
-        health = {"file": str(db_path),
-                  "size_bytes": db_path.stat().st_size if db_path.is_file() else 0}
-        for key, sql in {
-            "version": "SELECT sqlite_version()",
-            "page_count": "PRAGMA page_count",
-            "page_size": "PRAGMA page_size",
-            "journal_mode": "PRAGMA journal_mode",
-            "tables": "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
-            "integrity": "PRAGMA quick_check",
-        }.items():
-            code, out, _ = sq_query(db_path, sql)
-            health[key] = out.strip() if code == 0 else None
-        return {"engine": "sqlite", "health": health}
-    if fam == "documentdb":
-        if USE_NATIVE_MONGO:
-            data, err = mn.server_health(cfg, adm_user, adm_pass)
-        else:
-            # DocumentDB returns these counters as BSON Longs. Coerce to plain
-            # numbers or JSON.stringify turns them into {low, high, unsigned} blobs.
-            js = ("(() => { const n = v => (v && typeof v.toNumber === 'function') ? v.toNumber()"
-                  "   : (typeof v === 'number' ? v : Number(v));"
-                  " const s = db.serverStatus();"
-                  " const c = s.connections || {};"
-                  " const out = {version: String(s.version || ''), uptime: n(s.uptime),"
-                  "   connections: {current: n(c.current), available: n(c.available)},"
-                  "   mem: s.mem ? {resident: n(s.mem.resident)} : null};"
-                  " try { const cur = db.adminCommand({currentOp: 1, active: true});"
-                  "   const prog = cur.inprog || [];"
-                  "   out.active_ops = prog.length;"
-                  "   out.slow_ops = prog.filter(o => n(o.secs_running) >= 5).slice(0, 10)"
-                  "     .map(o => ({opid: String(o.opid), secs: n(o.secs_running), ns: String(o.ns || ''), op: String(o.op || '')}));"
-                  " } catch (e) { out.active_ops = null; out.slow_ops = []; }"
-                  " return out })()")
-            data, err = docdb_eval(cfg, adm_user, adm_pass, js, timeout=45)
-        if err:
-            return {"error": err}
-        return {"engine": "documentdb", "health": data}
-    else:
-        health = {}
-        checks = {
-            "version": "SELECT current_setting('server_version')",
-            "uptime": "SELECT date_trunc('second', now() - pg_postmaster_start_time())::text",
-            "connections": ("SELECT count(*) FILTER (WHERE state = 'active'),"
-                            " count(*) FILTER (WHERE state = 'idle'), count(*),"
-                            " current_setting('max_connections') FROM pg_stat_activity"),
-            "cache_hit_pct": ("SELECT round(100.0 * sum(blks_hit) /"
-                              " nullif(sum(blks_hit) + sum(blks_read), 0), 1) FROM pg_stat_database"),
-            "blocked": "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'",
-            "replicas": "SELECT count(*), coalesce(max(replay_lag)::text, '') FROM pg_stat_replication",
-            "total_size": "SELECT sum(pg_database_size(datname))::bigint FROM pg_database WHERE datistemplate = false",
-        }
-        for key, sql in checks.items():
-            code, out, _ = pg_query(cfg, adm_user, adm_pass, sql)
-            health[key] = out.strip().split("\t") if code == 0 and out.strip() else None
-        code, out, _ = pg_query(cfg, adm_user, adm_pass,
-            "SELECT pid, usename, date_trunc('second', now() - query_start)::text, left(query, 90)"
-            " FROM pg_stat_activity WHERE state <> 'idle' AND pid <> pg_backend_pid()"
-            " AND now() - query_start > interval '5 seconds' ORDER BY 3 DESC LIMIT 10")
-        slow = []
-        if code == 0 and out.strip():
-            for line in out.strip().split("\n"):
-                p = line.split("\t")
-                if len(p) >= 4:
-                    slow.append({"pid": p[0], "user": p[1], "runtime": p[2], "query": p[3]})
-        health["slow_queries"] = slow
-        return {"engine": "postgresql", "health": health}
+    try:
+        return {"engine": adapter.family, "health": adapter.health()}
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
 
 
 # ---------------------------------------------------------------------------
@@ -3019,7 +1626,7 @@ def main(argv=None):
 
     server = create_server(args.host, args.port)
     print(f"\n  warden web server running at http://{args.host}:{args.port}")
-    print(f"  Press Ctrl+C to stop.\n")
+    print("  Press Ctrl+C to stop.\n")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
