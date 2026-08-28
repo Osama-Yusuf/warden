@@ -235,7 +235,13 @@ function afterEnvChange(env) {
   const sel = document.getElementById('envSelect');
   const cur = sel.value;
   renderEnvOptions(cur);
-  if (cur === env) { disconnected(); updateEngines(); }
+  // The visible selection can change here (e.g. the first connection you save
+  // becomes the only option), so resync the engine dropdown to whatever is now
+  // selected. Without this the engine list stays empty until you re-pick the
+  // connection, and an immediate Connect fails. updateEngines() keeps the
+  // current engine and never disconnects, so this is safe on edits too.
+  updateEngines();
+  if (cur === env) disconnected();
 }
 
 function ceEngineChanged() {

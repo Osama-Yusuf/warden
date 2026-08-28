@@ -732,6 +732,7 @@ function saveList(key, list) { try { localStorage.setItem(key, JSON.stringify(li
 function pushQueryHistory(q) {
   const h = [q, ...loadList(historyKey()).filter(x => x !== q)].slice(0, 15);
   saveList(historyKey(), h);
+  _qHistFilter = '';   // a fresh run clears any active filter so the new query shows
 }
 
 function togglePin(q) {
