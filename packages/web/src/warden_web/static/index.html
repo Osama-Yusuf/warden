@@ -788,6 +788,27 @@ table.dgrid tbody tr:hover .dg-actwrap {
 }
 .hist-chip:hover { color: var(--text); background: var(--surface-hover); }
 .hist-chip code { font-family: var(--mono-font); font-size: 11.5px; white-space: nowrap; }
+/* Recent-queries panel: compact, searchable, scrollable, tucked below results */
+.qhist { margin-top: 18px; padding-top: 13px; border-top: 1px solid var(--border); }
+.qhist-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.qhist-title {
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--text-muted);
+}
+.qhist-search {
+  width: 200px; max-width: 46%; padding: 4px 9px; font-size: 12px; font-family: inherit;
+  color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+}
+.qhist-search:hover { border-color: var(--border-strong); }
+.qhist-search:focus { outline: none; border-color: var(--accent); }
+.qhist-list { max-height: 188px; overflow-y: auto; padding-right: 4px; }
+.qhist-row { display: flex; align-items: center; gap: 4px; }
+.qhist-group {
+  font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-muted); padding: 9px 2px 2px;
+}
+.qhist-group:first-child { padding-top: 2px; }
+.qhist-empty { font-size: 12px; color: var(--text-muted); padding: 8px 2px; }
 .ctx-line {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   margin-top: 8px; padding: 7px 12px; font-size: 12.5px;
@@ -3867,8 +3888,8 @@ function viewQuery() {
       <label class="chk" data-tip="Power mode: stream the engine's raw output live as it arrives, instead of the formatted table."><input type="checkbox" id="qLive"> live output</label>
       <span id="qTiming" style="font-family:var(--mono-font); font-size:11px; color:var(--text-muted)"></span>
     </div>
-    <div id="qHistory"></div>
     <div id="qResults" style="margin-top:14px"></div>
+    <div id="qHistory"></div>
   </div>`);
   const t = document.getElementById('qText');
   t.addEventListener('input', qExplainUpdate);
@@ -3878,6 +3899,7 @@ function viewQuery() {
   live.checked = !!prefs.qLive;
   live.addEventListener('change', () => savePrefs({ qLive: live.checked }));
   qExplainUpdate();
+  _qHistFilter = '';
   renderQueryHistory();
 }
 
@@ -4570,25 +4592,48 @@ function togglePin(q) {
   let p = loadList(pinnedKey());
   p = p.includes(q) ? p.filter(x => x !== q) : [q, ...p].slice(0, 10);
   saveList(pinnedKey(), p);
-  renderQueryHistory();
+  renderQueryHistoryList();   // list only, so the filter box keeps focus + text
 }
+
+// The recent/pinned list lives below the results, out of the run→result flow.
+// The shell (label + filter box) is drawn once; typing only refreshes the list
+// inside it, so the search input never loses focus mid-keystroke.
+let _qHistFilter = '';
 
 function renderQueryHistory() {
   const box = document.getElementById('qHistory');
   if (!box) return;
+  if (!(loadList(pinnedKey()).length || loadList(historyKey()).length)) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="qhist">
+    <div class="qhist-head">
+      <span class="qhist-title">Recent queries</span>
+      <input id="qHistSearch" class="qhist-search" type="search" placeholder="filter…"
+             value="${esc(_qHistFilter)}" oninput="_qHistFilter = this.value; renderQueryHistoryList()">
+    </div>
+    <div id="qHistList" class="qhist-list"></div>
+  </div>`;
+  renderQueryHistoryList();
+}
+
+function renderQueryHistoryList() {
+  const list = document.getElementById('qHistList');
+  if (!list) return;
   const pinned = loadList(pinnedKey());
   const recent = loadList(historyKey()).filter(q => !pinned.includes(q));
   window._qHist = [...pinned, ...recent];
-  const chip = (q, i, isPinned) => `<div style="display:flex; align-items:center; gap:4px">
-    <button class="copy-btn" data-i="${i}" onclick="togglePin(window._qHist[this.dataset.i])" data-tip="${isPinned ? 'Unpin' : 'Pin this query'}" style="font-size:12px">${isPinned ? '★' : '☆'}</button>
-    <button class="hist-chip" data-i="${i}" onclick="recallQuery(this.dataset.i)"><code>${esc(q.length > 105 ? q.slice(0, 105) + '…' : q)}</code></button>
+  const f = _qHistFilter.trim().toLowerCase();
+  const hit = q => !f || q.toLowerCase().includes(f);
+  const chip = (q, i, isPinned) => `<div class="qhist-row">
+    <button class="copy-btn" onclick="togglePin(window._qHist[${i}])" data-tip="${isPinned ? 'Unpin' : 'Pin this query'}" style="font-size:12px">${isPinned ? '★' : '☆'}</button>
+    <button class="hist-chip" onclick="recallQuery(${i})"><code>${esc(q.length > 105 ? q.slice(0, 105) + '…' : q)}</code></button>
   </div>`;
+  const pinnedRows = pinned.map((q, i) => hit(q) ? chip(q, i, true) : '').join('');
+  const recentRows = recent.map((q, i) => hit(q) ? chip(q, pinned.length + i, false) : '').join('');
   let html = '';
-  if (pinned.length) html += `<div class="group-label" style="padding:14px 0 4px">Pinned</div>` +
-    pinned.map((q, i) => chip(q, i, true)).join('');
-  if (recent.length) html += `<div class="group-label" style="padding:14px 0 4px">Recent queries</div>` +
-    recent.map((q, i) => chip(q, pinned.length + i, false)).join('');
-  box.innerHTML = html;
+  if (pinnedRows) html += `<div class="qhist-group">Pinned</div>` + pinnedRows;
+  if (recentRows) html += `<div class="qhist-group">Recent</div>` + recentRows;
+  if (!html) html = `<div class="qhist-empty">Nothing matches “${esc(_qHistFilter.trim())}”.</div>`;
+  list.innerHTML = html;
 }
 
 function recallQuery(i) {
