@@ -3333,8 +3333,11 @@ function dgSqlLit(v) {
   return `'${String(v).replace(/'/g, "''")}'`;
 }
 function dgRowInsert(r) {
-  const tbl = dg.schema ? `"${dg.schema}"."${dg.table}"` : dg.table ? `"${dg.table}"` : (dg.collection || 'table');
-  const cols = dg.columns.map(c => `"${c}"`).join(', ');
+  // MySQL quotes identifiers with backticks; Postgres/SQLite use double quotes
+  const bt = engineFamily(currentEngine) === 'mysql';
+  const qi = s => bt ? '`' + String(s).replace(/`/g, '``') + '`' : `"${String(s).replace(/"/g, '""')}"`;
+  const tbl = dg.schema ? `${qi(dg.schema)}.${qi(dg.table)}` : dg.table ? qi(dg.table) : (dg.collection || 'table');
+  const cols = dg.columns.map(qi).join(', ');
   const vals = dg.columns.map((c, i) => dgSqlLit(dg.rows[r][i])).join(', ');
   return `INSERT INTO ${tbl} (${cols}) VALUES (${vals});`;
 }
