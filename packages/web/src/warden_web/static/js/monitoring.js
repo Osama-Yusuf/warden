@@ -41,6 +41,14 @@ async function refreshHealth() {
     return;
   }
   if (meta) meta.textContent = `updated ${new Date().toLocaleTimeString()}`;
+  const { html, ops } = healthChips(res);
+  document.getElementById('healthChips').innerHTML = html;
+  document.getElementById('healthOps').innerHTML = ops;
+}
+
+// Build the chip row + optional slow-ops/queries table for whichever engine
+// answered. Returns { html, ops } as strings; the caller drops them into place.
+function healthChips(res) {
   const chip = (k, v, warnIf) => `<div class="chip"><span class="k">${esc(k)}</span><span class="v"${warnIf ? ' style="color:var(--danger)"' : ''}>${v}</span></div>`;
   const num = v => (typeof v === 'number' && isFinite(v)) ? v : null;
   let html = '';
@@ -130,8 +138,7 @@ async function refreshHealth() {
       </table></div>`;
     }
   }
-  document.getElementById('healthChips').innerHTML = html;
-  document.getElementById('healthOps').innerHTML = ops;
+  return { html, ops };
 }
 
 // ── Security audits ────────────────────────────────────────────────────────

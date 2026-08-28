@@ -391,29 +391,39 @@ async function viewUserInfoFor(username) {
   showPanel(loading('Looking up user…'));
   const res = await apiPost('/api/user-info', { username });
   if (res.error) { showPanel(`<div class="card"><h2>Error</h2><p style="color:var(--danger)">${esc(res.error)}</p></div>`); return; }
-  const isDocdb = currentEngine.startsWith('document');
   const uAttr = esc(res.user);
-  let html = `<div class="card"><h2>${ICONS.users} User: <span class="mono" style="font-size:14px">${uAttr}</span></h2>`;
-  if (res.engine_family === 'elasticsearch') {
-    const status = res.enabled ? '<span class="pill pill-ok">enabled</span>' : '<span class="pill pill-danger">disabled</span>';
-    html += `<p style="margin-bottom:12px">${status}${res.reserved ? ' &nbsp;<span class="pill pill-muted">built-in</span>' : ''}</p>`;
-    const rRows = (res.roles || []).map(r => `<tr><td class="mono">${esc(r)}</td>
+  if (res.engine_family === 'elasticsearch') { showPanel(userPanelEs(res, uAttr)); return; }
+  if (res.engine_family === 'redis') { showPanel(userPanelRedis(res, uAttr)); return; }
+  if (res.engine_family === 'mysql') { showPanel(userPanelMysql(res, uAttr)); return; }
+  // Mongo and Postgres share a header + a management toolbar; only the middle differs.
+  showPanel(userPanelSql(res, uAttr, currentEngine.startsWith('document')));
+}
+
+// The card open + "User: <name>" heading every engine's panel starts with.
+function userPanelHead(uAttr) {
+  return `<div class="card"><h2>${ICONS.users} User: <span class="mono" style="font-size:14px">${uAttr}</span></h2>`;
+}
+
+function userPanelEs(res, uAttr) {
+  const status = res.enabled ? '<span class="pill pill-ok">enabled</span>' : '<span class="pill pill-danger">disabled</span>';
+  let html = userPanelHead(uAttr) + `<p style="margin-bottom:12px">${status}${res.reserved ? ' &nbsp;<span class="pill pill-muted">built-in</span>' : ''}</p>`;
+  const rRows = (res.roles || []).map(r => `<tr><td class="mono">${esc(r)}</td>
       <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-user="${uAttr}" data-role="${esc(r)}" onclick="esRevokeRole(this.dataset.user, this.dataset.role)">Revoke</button></td></tr>`).join('');
-    html += `<h2 style="margin-top:4px">Roles</h2><div class="table-wrap"><table><thead><tr><th>Role</th><th></th></tr></thead><tbody>${rRows || '<tr><td colspan="2" style="color:var(--text-muted)">No roles</td></tr>'}</tbody></table></div>
+  html += `<h2 style="margin-top:4px">Roles</h2><div class="table-wrap"><table><thead><tr><th>Role</th><th></th></tr></thead><tbody>${rRows || '<tr><td colspan="2" style="color:var(--text-muted)">No roles</td></tr>'}</tbody></table></div>
       <h2 style="margin-top:18px">${ICONS.shield} Grant a role</h2>
       <div class="form-row" style="margin-bottom:0">
         <div class="form-field"><label>Role name</label><input id="uiEsRole" placeholder="e.g. monitoring_user"></div>
         <button class="btn btn-success" data-user="${uAttr}" onclick="esGrantRole(this.dataset.user)">Grant</button>
       </div>`;
-    if (!res.reserved) html += `<div class="user-toolbar">
+  if (!res.reserved) html += `<div class="user-toolbar">
       <button class="btn btn-primary" data-user="${uAttr}" onclick="openResetModal(this.dataset.user)">Reset password</button>
       <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">Delete user</button></div>`;
-    showPanel(html + '</div>');
-    return;
-  }
-  if (res.engine_family === 'redis') {
-    const status = res.enabled ? '<span class="pill pill-ok">on</span>' : '<span class="pill pill-danger">off</span>';
-    html += `<p style="margin-bottom:12px">${status}${res.user === 'default' ? ' &nbsp;<span class="pill pill-muted">default</span>' : ''}</p>
+  return html + '</div>';
+}
+
+function userPanelRedis(res, uAttr) {
+  const status = res.enabled ? '<span class="pill pill-ok">on</span>' : '<span class="pill pill-danger">off</span>';
+  let html = userPanelHead(uAttr) + `<p style="margin-bottom:12px">${status}${res.user === 'default' ? ' &nbsp;<span class="pill pill-muted">default</span>' : ''}</p>
       <div class="table-wrap"><table><tbody>
         <tr><td style="width:110px;color:var(--text-muted)">Commands</td><td class="mono" style="font-size:12px">${esc(res.commands || '—')}</td></tr>
         <tr><td style="color:var(--text-muted)">Keys</td><td class="mono" style="font-size:12px">${esc(res.keys || '—')}</td></tr>
@@ -425,37 +435,40 @@ async function viewUserInfoFor(username) {
         <div class="form-field"><label>ACL rule</label><input id="uiRedisRule" placeholder="+@write"></div>
         <button class="btn btn-success" data-user="${uAttr}" onclick="redisApplyRule(this.dataset.user)">Apply</button>
       </div>`;
-    if (res.user !== 'default') html += `<div class="user-toolbar">
+  if (res.user !== 'default') html += `<div class="user-toolbar">
       <button class="btn btn-primary" data-user="${uAttr}" onclick="openResetModal(this.dataset.user)">Reset password</button>
       <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">Delete user</button></div>`;
-    showPanel(html + '</div>');
-    return;
-  }
-  if (res.engine_family === 'mysql') {
-    const status = res.can_login ? '<span class="pill pill-ok">active</span>' : '<span class="pill pill-danger">locked</span>';
-    html += `<p style="margin-bottom:12px">${status}</p>`;
-    html += `<div class="table-wrap"><table><thead><tr><th>Grant</th></tr></thead><tbody>${
-      (res.grant_statements || []).map(g => `<tr><td class="mono" style="font-size:11.5px">${esc(g)}</td></tr>`).join('')
-      || '<tr><td style="color:var(--text-muted)">No grants</td></tr>'}</tbody></table></div>`;
-    const privOpts = (config.mysql_privileges || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
-    html += `<h2 style="margin-top:20px">${ICONS.shield} Grant a Privilege</h2>
+  return html + '</div>';
+}
+
+function userPanelMysql(res, uAttr) {
+  const status = res.can_login ? '<span class="pill pill-ok">active</span>' : '<span class="pill pill-danger">locked</span>';
+  let html = userPanelHead(uAttr) + `<p style="margin-bottom:12px">${status}</p>`;
+  html += `<div class="table-wrap"><table><thead><tr><th>Grant</th></tr></thead><tbody>${
+    (res.grant_statements || []).map(g => `<tr><td class="mono" style="font-size:11.5px">${esc(g)}</td></tr>`).join('')
+    || '<tr><td style="color:var(--text-muted)">No grants</td></tr>'}</tbody></table></div>`;
+  const privOpts = (config.mysql_privileges || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+  html += `<h2 style="margin-top:20px">${ICONS.shield} Grant a Privilege</h2>
       <div class="form-row" style="margin-bottom:0">
         <div class="form-field"><label>Privilege</label><select id="uiGrantPriv">${privOpts}</select></div>
         <div class="form-field"><label>Database (* = all)</label><input id="uiGrantDb" list="dbList" placeholder="type to search, or *"></div>
         <button class="btn btn-success" data-user="${uAttr}" onclick="grantPgPrivDirect(this.dataset.user)">Grant</button>
       </div>`;
-    const lockBtn = res.can_login
-      ? `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, false)">Lock account</button>`
-      : `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, true)">Unlock account</button>`;
-    html += `<div class="user-toolbar">
+  const lockBtn = res.can_login
+    ? `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, false)">Lock account</button>`
+    : `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, true)">Unlock account</button>`;
+  html += `<div class="user-toolbar">
       <button class="btn btn-primary" data-user="${uAttr}" onclick="openResetModal(this.dataset.user)">Reset password</button>
       <button class="btn btn-ghost" data-user="${uAttr}" onclick="openTestLoginModal(this.dataset.user, '')">Test access</button>
       ${lockBtn}
       <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">Drop user</button>
     </div></div>`;
-    showPanel(html);
-    return;
-  }
+  return html;
+}
+
+// Mongo (isDocdb) and Postgres: shared head + toolbar, engine-specific middle.
+function userPanelSql(res, uAttr, isDocdb) {
+  let html = userPanelHead(uAttr);
   if (isDocdb) {
     html += `<p class="card-meta"><strong>Auth DB:</strong> ${esc(res.db)} &nbsp;·&nbsp; <strong>ID:</strong> <span class="mono">${esc(res.userId)}</span></p>`;
     let rRows = '';
@@ -509,7 +522,6 @@ async function viewUserInfoFor(username) {
         <button class="btn btn-success" data-user="${uAttr}" onclick="grantPgPrivDirect(this.dataset.user)">Grant</button>
       </div>`;
   }
-  // Management toolbar
   const pgButtons = isDocdb ? '' : (res.can_login
     ? `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, false)">🔒 Disable login</button>`
     : `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, true)">🔓 Enable login</button>`);
@@ -520,6 +532,6 @@ async function viewUserInfoFor(username) {
     <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">🗑️ Drop user</button>
   </div>`;
   html += '</div>';
-  showPanel(html);
+  return html;
 }
 

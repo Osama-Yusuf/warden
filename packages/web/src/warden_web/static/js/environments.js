@@ -1,75 +1,8 @@
 // ── Environments manager (custom envs live in localStorage) ───────────────
 
 function viewEnvs() {
-  const details = config.environment_details || {};
-  const builtinNames = Object.keys(config.environments || {});
-  let rows = '';
-  const actionBtn = (icon, title, fn, env, eng, cls = '') =>
-    `<button class="ibtn ${cls}" data-tip="${esc(title)}" data-env="${esc(env)}" data-eng="${esc(eng)}"
-      onclick="${fn}(this.dataset.env, this.dataset.eng)">${icon}</button>`;
-
-  const isServerProfile = (env, eng) => (config.profile_envs?.[env] || []).includes(eng);
-  for (const env of builtinNames) {
-    for (const eng of (config.environments[env] || [])) {
-      const override = customEnvs[env]?.[eng];
-      const cfg = override || details[env]?.[eng] || {};
-      const hidden = isHidden(env, eng);
-      const server = isServerProfile(env, eng);
-      const status = hidden ? '<span class="pill pill-muted">hidden</span>'
-        : override ? '<span class="pill pill-warn">override</span>'
-        : server ? '<span class="pill pill-accent">server profile</span>'
-        : '<span class="pill pill-muted">built-in</span>';
-      const actions = hidden
-        ? actionBtn(ICONS.refresh, 'Restore', 'restoreEnv', env, eng, 'teal')
-        : server && !override
-          ? actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent') + actionBtn(ICONS.trash, 'Delete server profile', 'deleteServerProfile', env, eng, 'danger')
-          : actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent')
-            + (override ? actionBtn(ICONS.refresh, 'Restore built-in', 'deleteCustomEnv', env, eng, 'teal')
-                        : actionBtn(ICONS.ban, 'Hide', 'hideEnv', env, eng, 'warn'));
-      rows += `<tr${hidden ? ' style="opacity:0.45"' : ''}>
-        <td class="mono">${esc(env)}</td>
-        <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
-        <td class="mono" style="font-size:11px">${esc(cfg.host || '')}:${esc(cfg.port || '')}${cfg.tls ? ' · tls' : ''}</td>
-        <td>${status}</td>
-        <td><div class="row-acts">${actions}</div></td></tr>`;
-    }
-    // engines added onto a built-in env
-    for (const [eng, cfg] of Object.entries(customEnvs[env] || {})) {
-      if ((config.environments[env] || []).includes(eng)) continue;
-      rows += `<tr><td class="mono">${esc(env)}</td>
-        <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
-        <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${cfg.tls ? ' · tls' : ''}</td>
-        <td><span class="pill pill-warn">added</span></td>
-        <td><div class="row-acts">${actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent')}${actionBtn(ICONS.trash, 'Delete', 'deleteCustomEnv', env, eng, 'danger')}</div></td></tr>`;
-    }
-  }
-  for (const [env, engines] of Object.entries(customEnvs)) {
-    if (builtinNames.includes(env)) continue;
-    for (const [eng, cfg] of Object.entries(engines)) {
-      rows += `<tr><td class="mono">${esc(env)}</td>
-        <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
-        <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${cfg.tls ? ' · tls' : ''}</td>
-        <td><span class="pill pill-ok">custom</span></td>
-        <td><div class="row-acts">${actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent')}${actionBtn(ICONS.trash, 'Delete', 'deleteCustomEnv', env, eng, 'danger')}</div></td></tr>`;
-    }
-  }
-  const hasAny = rows.trim().length > 0;
-  const banner = connected ? '' : hasAny
-    ? `<div class="card onboard"><h2>${ICONS.bolt} Ready when you are</h2>
-        <p style="color:var(--text-muted); line-height:1.6; margin:0">Pick a connection and engine in the top bar, drop in your admin login, and hit <strong>Connect</strong>. warden takes it from there.</p></div>`
-    : `<div class="card onboard onboard-hero">
-        <div class="onboard-logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="7" ry="2.8"/><path d="M5 5.5v13c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-13"/><path d="M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8"/></svg></div>
-        <h1 class="onboard-title">Welcome to warden</h1>
-        <p class="onboard-lead">It stands at the door of your databases. Who gets in, what they can touch, and a note in the logbook for every change. Works with MongoDB, PostgreSQL, MySQL and SQLite.</p>
-        <div class="onboard-steps">
-          <div class="ob-step"><span class="ob-num">1</span><div><b>Add a connection</b><span>Host and admin login, or just a SQLite file</span></div></div>
-          <div class="ob-step"><span class="ob-num">2</span><div><b>Connect</b><span>Pick it in the top bar and hit Connect</span></div></div>
-          <div class="ob-step"><span class="ob-num">3</span><div><b>Take the wheel</b><span>Manage users, run queries, audit access</span></div></div>
-        </div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:18px">
-          <button class="btn btn-primary" onclick="openConnForm()">Add my first connection</button>
-          <button class="btn btn-ghost" onclick="document.getElementById('beoFile').click()">Import a backup</button>
-        </div></div>`;
+  const rows = envConnRows();
+  const banner = connected ? '' : envOnboardBanner(rows.trim().length > 0);
   const connCount = (rows.match(/<tr/g) || []).length;
   setContent(banner + `
     <details class="sect" open>
@@ -124,6 +57,85 @@ function viewEnvs() {
         </div>
       </div>
     </details>`);
+}
+
+// One <tr> per known connection: built-in envs, engines added onto a built-in
+// env, and fully custom envs. Each row carries its status pill + action buttons.
+function envConnRows() {
+  const details = config.environment_details || {};
+  const builtinNames = Object.keys(config.environments || {});
+  let rows = '';
+  const actionBtn = (icon, title, fn, env, eng, cls = '') =>
+    `<button class="ibtn ${cls}" data-tip="${esc(title)}" data-env="${esc(env)}" data-eng="${esc(eng)}"
+      onclick="${fn}(this.dataset.env, this.dataset.eng)">${icon}</button>`;
+
+  const isServerProfile = (env, eng) => (config.profile_envs?.[env] || []).includes(eng);
+  for (const env of builtinNames) {
+    for (const eng of (config.environments[env] || [])) {
+      const override = customEnvs[env]?.[eng];
+      const cfg = override || details[env]?.[eng] || {};
+      const hidden = isHidden(env, eng);
+      const server = isServerProfile(env, eng);
+      const status = hidden ? '<span class="pill pill-muted">hidden</span>'
+        : override ? '<span class="pill pill-warn">override</span>'
+        : server ? '<span class="pill pill-accent">server profile</span>'
+        : '<span class="pill pill-muted">built-in</span>';
+      const actions = hidden
+        ? actionBtn(ICONS.refresh, 'Restore', 'restoreEnv', env, eng, 'teal')
+        : server && !override
+          ? actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent') + actionBtn(ICONS.trash, 'Delete server profile', 'deleteServerProfile', env, eng, 'danger')
+          : actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent')
+            + (override ? actionBtn(ICONS.refresh, 'Restore built-in', 'deleteCustomEnv', env, eng, 'teal')
+                        : actionBtn(ICONS.ban, 'Hide', 'hideEnv', env, eng, 'warn'));
+      rows += `<tr${hidden ? ' style="opacity:0.45"' : ''}>
+        <td class="mono">${esc(env)}</td>
+        <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
+        <td class="mono" style="font-size:11px">${esc(cfg.host || '')}:${esc(cfg.port || '')}${cfg.tls ? ' · tls' : ''}</td>
+        <td>${status}</td>
+        <td><div class="row-acts">${actions}</div></td></tr>`;
+    }
+    // engines added onto a built-in env
+    for (const [eng, cfg] of Object.entries(customEnvs[env] || {})) {
+      if ((config.environments[env] || []).includes(eng)) continue;
+      rows += `<tr><td class="mono">${esc(env)}</td>
+        <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
+        <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${cfg.tls ? ' · tls' : ''}</td>
+        <td><span class="pill pill-warn">added</span></td>
+        <td><div class="row-acts">${actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent')}${actionBtn(ICONS.trash, 'Delete', 'deleteCustomEnv', env, eng, 'danger')}</div></td></tr>`;
+    }
+  }
+  for (const [env, engines] of Object.entries(customEnvs)) {
+    if (builtinNames.includes(env)) continue;
+    for (const [eng, cfg] of Object.entries(engines)) {
+      rows += `<tr><td class="mono">${esc(env)}</td>
+        <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
+        <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${cfg.tls ? ' · tls' : ''}</td>
+        <td><span class="pill pill-ok">custom</span></td>
+        <td><div class="row-acts">${actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent')}${actionBtn(ICONS.trash, 'Delete', 'deleteCustomEnv', env, eng, 'danger')}</div></td></tr>`;
+    }
+  }
+  return rows;
+}
+
+// The pre-connect welcome: a slim nudge once some connections exist, the full
+// hero (with onboarding steps) when there are none yet.
+function envOnboardBanner(hasAny) {
+  return hasAny
+    ? `<div class="card onboard"><h2>${ICONS.bolt} Ready when you are</h2>
+        <p style="color:var(--text-muted); line-height:1.6; margin:0">Pick a connection and engine in the top bar, drop in your admin login, and hit <strong>Connect</strong>. warden takes it from there.</p></div>`
+    : `<div class="card onboard onboard-hero">
+        <div class="onboard-logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="7" ry="2.8"/><path d="M5 5.5v13c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8v-13"/><path d="M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8"/></svg></div>
+        <h1 class="onboard-title">Welcome to warden</h1>
+        <p class="onboard-lead">It stands at the door of your databases. Who gets in, what they can touch, and a note in the logbook for every change. Works with MongoDB, PostgreSQL, MySQL and SQLite.</p>
+        <div class="onboard-steps">
+          <div class="ob-step"><span class="ob-num">1</span><div><b>Add a connection</b><span>Host and admin login, or just a SQLite file</span></div></div>
+          <div class="ob-step"><span class="ob-num">2</span><div><b>Connect</b><span>Pick it in the top bar and hit Connect</span></div></div>
+          <div class="ob-step"><span class="ob-num">3</span><div><b>Take the wheel</b><span>Manage users, run queries, audit access</span></div></div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:18px">
+          <button class="btn btn-primary" onclick="openConnForm()">Add my first connection</button>
+          <button class="btn btn-ghost" onclick="document.getElementById('beoFile').click()">Import a backup</button>
+        </div></div>`;
 }
 
 function openConnForm() {
