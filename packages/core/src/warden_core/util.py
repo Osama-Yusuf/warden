@@ -86,7 +86,7 @@ def engine_family(engine):
     """Which client family an engine key belongs to. Engine keys are free-form
     (mysql, mariadb, aurora-mysql, sqlite, aurora, citus...), so match loosely."""
     e = (engine or "").lower()
-    if e.startswith("document") or "mongo" in e:
+    if "document" in e or "mongo" in e:
         return "documentdb"
     if "mysql" in e or "maria" in e:
         return "mysql"
