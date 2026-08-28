@@ -122,6 +122,13 @@ body {
 .brand h1 span { color: var(--accent); }
 .brand-sub { font-family: var(--mono-font); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--text-muted); }
 .topbar .sep { width: 1px; align-self: stretch; margin: 2px 0; background: var(--border); }
+/* environment awareness: tag a connection prod / staging / dev */
+.env-badge { font-size: 10px; font-weight: 700; letter-spacing: .08em; padding: 3px 8px; border-radius: 6px; text-transform: uppercase; cursor: pointer; user-select: none; }
+.env-badge.prod { background: var(--danger-soft); color: var(--danger); border: 1px solid var(--danger); }
+.env-badge.staging { background: color-mix(in srgb, var(--warning) 15%, transparent); color: var(--warning); border: 1px solid var(--warning); }
+.env-badge.dev { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); }
+body.env-prod .topbar { box-shadow: inset 0 -2.5px 0 0 var(--danger); }
+body.env-staging .topbar { box-shadow: inset 0 -2.5px 0 0 var(--warning); }
 .ctl { display: flex; flex-direction: column; gap: 3px; }
 .ctl label {
   font-family: var(--mono-font); font-size: 9px; font-weight: 500;
@@ -839,6 +846,7 @@ table.dgrid tbody tr:hover .dg-actwrap {
     <div class="conn-dot" id="connDot"></div>
     <span id="connText">offline</span>
   </div>
+  <span id="envBadge" class="env-badge" style="display:none" data-tip="Environment (click to change)" onclick="pickEnvKind()"></span>
   <div class="tb-spacer"></div>
   <button class="icon-btn" id="roBtn" onclick="toggleReadOnly()"></button>
   <button class="icon-btn" id="themeBtn" onclick="cycleTheme()"></button>
@@ -850,7 +858,7 @@ table.dgrid tbody tr:hover .dg-actwrap {
     <div class="qf-wrap">
       <div class="qf">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.2"/><path d="M15.8 15.8L21 21"/></svg>
-        <input id="qfInput" placeholder="Jump to user or db…" disabled autocomplete="off">
+        <input id="qfInput" placeholder="Jump to a user, db, or table…" disabled autocomplete="off">
       </div>
       <div class="qf-results" id="qfResults"></div>
     </div>
@@ -898,6 +906,7 @@ table.dgrid tbody tr:hover .dg-actwrap {
     <h3 id="cellTitle" style="margin-top:0; padding-right:34px; font-family:var(--mono-font); font-size:13px"></h3>
     <pre id="cellBody"></pre>
     <div class="actions"><button class="ibtn" onclick="dgCopyCell()" data-tip="Copy to clipboard"><svg class="ni" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h8"/></svg></button></div>
+    <div id="cellExtra" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap"></div>
   </div>
 </div>
 
@@ -1341,7 +1350,7 @@ function renderNav() {
   renderSidebarFoot();
   const qf = document.getElementById('qfInput');
   qf.disabled = !connected;
-  qf.placeholder = connected ? 'Jump to user or db…' : 'Connect to search…';
+  qf.placeholder = connected ? 'Jump to a user, db, or table…' : 'Connect to search…';
 }
 
 function renderSidebarFoot() {
@@ -1370,21 +1379,47 @@ function markActive(id) {
 }
 
 // ── Quick-jump search ──
+// tables/collections already fetched this session (collCache), matching q
+function qfCollHits(q) {
+  const hits = [];
+  for (const [db, names] of Object.entries(collCache)) {
+    if (!Array.isArray(names)) continue;
+    for (const c of names) {
+      if (c.toLowerCase().includes(q)) hits.push({ db, coll: c });
+      if (hits.length >= 8) return hits;
+    }
+  }
+  return hits;
+}
+
 function qfRender() {
   const input = document.getElementById('qfInput');
   const box = document.getElementById('qfResults');
   const q = input.value.trim().toLowerCase();
   if (!q || !connected) { box.classList.remove('open'); box.innerHTML = ''; return; }
+  // warm the collection cache (bounded) so tables become searchable, re-render as they land
+  let started = 0;
+  for (const db of cachedDbs) {
+    if (collCache[db] === undefined && !collFetching[db] && started < 30) {
+      started++;
+      fetchColls(db).then(() => { if (box.classList.contains('open')) qfRender(); });
+    }
+  }
   const us = cachedUsers.filter(n => n.toLowerCase().includes(q)).slice(0, 6);
   const ds = cachedDbs.filter(n => n.toLowerCase().includes(q)).slice(0, 6);
-  if (!us.length && !ds.length) {
+  const cs = qfCollHits(q);
+  if (!us.length && !ds.length && !cs.length) {
     box.innerHTML = `<div class="qf-hit" style="cursor:default;color:var(--text-muted)">no matches</div>`;
     box.classList.add('open');
     return;
   }
+  const objLabel = engineFamily(currentEngine) === 'documentdb' ? 'collection'
+    : engineFamily(currentEngine) === 'elasticsearch' ? 'index'
+    : engineFamily(currentEngine) === 'redis' ? 'keys' : 'table';
   let html = '';
   for (const n of us) html += `<button class="qf-hit" data-name="${esc(n)}" onclick="qfGo('user', this.dataset.name)">${ICONS.users}<span>${esc(n)}</span><span class="tag">user</span></button>`;
   for (const n of ds) html += `<button class="qf-hit" data-name="${esc(n)}" onclick="qfGo('db', this.dataset.name)">${ICONS.db}<span>${esc(n)}</span><span class="tag">db</span></button>`;
+  for (const h of cs) html += `<button class="qf-hit" data-db="${esc(h.db)}" data-coll="${esc(h.coll)}" onclick="qfGoColl(this.dataset.db, this.dataset.coll)">${ICONS.grid}<span>${esc(h.coll)}</span><span class="tag">${esc(objLabel)} · ${esc(h.db)}</span></button>`;
   box.innerHTML = html;
   box.classList.add('open');
 }
@@ -1394,6 +1429,14 @@ function qfGo(type, name) {
   qfRender();
   if (type === 'user') { markActive('users'); viewUserInfoFor(name); }
   else { markActive('databases'); viewCollections(name); }
+}
+// jump to a table/collection: open its database's list, filtered to that object
+function qfGoColl(db, coll) {
+  document.getElementById('qfInput').value = '';
+  qfRender();
+  markActive('databases');
+  viewCollections(db);
+  setTimeout(() => { const inp = document.getElementById('sf-in-coll'); if (inp) { inp.value = coll; sfApply('coll'); } }, 750);
 }
 document.addEventListener('DOMContentLoaded', () => {
   const qf = document.getElementById('qfInput');
@@ -1426,6 +1469,7 @@ function creds() {
 
 // ── Read-only mode ──
 function toggleReadOnly() {
+  roAuto = false;   // an explicit choice by the user overrides the prod auto-seatbelt
   savePrefs({ readOnly: !prefs.readOnly });
   renderRoBtn();
   renderNav();
@@ -1439,6 +1483,64 @@ function renderRoBtn() {
   btn.title = prefs.readOnly
     ? 'Read-only mode is ON. Click to allow writes again.'
     : 'Read-only mode: click to refuse every write (safe for poking around prod).';
+}
+
+// ── Environment awareness (prod / staging / dev) ──
+const ENVKINDS_KEY = 'warden.envKinds';
+let envKinds = (() => { try { return JSON.parse(localStorage.getItem(ENVKINDS_KEY)) || {}; } catch { return {}; } })();
+let roAuto = false;   // read-only was auto-enabled for prod (session only, not the user's choice)
+function saveEnvKinds() { try { localStorage.setItem(ENVKINDS_KEY, JSON.stringify(envKinds)); } catch {} }
+
+// prod > staging > dev, inferred from the connection name unless the user tagged it
+function envKind(name) {
+  if (envKinds[name]) return envKinds[name];
+  const n = (name || '').toLowerCase();
+  if (/stag|uat|preprod|pre-prod|\bqa\b/.test(n)) return 'staging';
+  if (/prod/.test(n)) return 'prod';
+  if (/dev|local|test|sandbox/.test(n)) return 'dev';
+  return null;
+}
+
+// paint the top bar for the connected environment + apply the prod read-only seatbelt
+function applyEnvGuard(name) {
+  const kind = envKind(name);
+  const badge = document.getElementById('envBadge');
+  document.body.classList.remove('env-prod', 'env-staging', 'env-dev');
+  if (kind && badge) {
+    document.body.classList.add('env-' + kind);
+    badge.className = 'env-badge ' + kind;
+    badge.textContent = kind;
+    badge.style.display = '';
+  } else if (badge) {
+    badge.style.display = 'none';
+  }
+  if (kind === 'prod' && !prefs.readOnly) {
+    roAuto = true;
+    savePrefs({ readOnly: true }); renderRoBtn(); renderNav();
+    toast('Connected to PROD — read-only is on as a safety net. Click the lock to allow writes.', 'info');
+  } else if (kind !== 'prod' && roAuto && prefs.readOnly) {
+    roAuto = false;
+    savePrefs({ readOnly: false }); renderRoBtn(); renderNav();
+  }
+}
+
+function clearEnvGuard() {
+  document.body.classList.remove('env-prod', 'env-staging', 'env-dev');
+  const badge = document.getElementById('envBadge'); if (badge) badge.style.display = 'none';
+  if (roAuto && prefs.readOnly) { roAuto = false; savePrefs({ readOnly: false }); renderRoBtn(); }
+}
+
+function pickEnvKind() {
+  const name = document.getElementById('envSelect').value;
+  if (!name) return;
+  const set = (k) => { if (k) envKinds[name] = k; else delete envKinds[name]; saveEnvKinds(); applyEnvGuard(name); };
+  showModal(`Environment: ${esc(name)}`,
+    `<p class="card-meta" style="margin-bottom:0">Tag this connection so warden warns you — and defaults to read-only — when you're on production.</p>`, [
+    { label: 'Production', cls: 'btn-danger', fn: () => set('prod') },
+    { label: 'Staging', cls: 'btn-ghost', fn: () => set('staging') },
+    { label: 'Dev / Local', cls: 'btn-ghost', fn: () => set('dev') },
+    { label: 'Auto-detect', cls: 'btn-ghost', fn: () => set(null) },
+  ]);
 }
 
 // Show credential inputs only while disconnected; the row stays calm when live.
@@ -1576,6 +1678,7 @@ function disconnected() {
   document.getElementById('connDot').className = 'conn-dot';
   document.getElementById('connText').textContent = 'offline';
   document.getElementById('qfResults').classList.remove('open');
+  clearEnvGuard();
   renderConnState();
 }
 function doDisconnect() {
@@ -1614,6 +1717,7 @@ async function testConnection() {
       savePassword(p);
       renderNav();
       toast(`Connected · ${document.getElementById('envSelect').value} / ${engineLabel(currentEngine)}`, 'success');
+      applyEnvGuard(document.getElementById('envSelect').value);
       refreshCache();
       const ids = navModel().map(i => i.id);
       const landing = (prefs.lastView && ids.includes(prefs.lastView)) ? prefs.lastView : ids[0];
@@ -3160,7 +3264,7 @@ function renderDgBody() {
       <button class="dg-act danger" data-tip="Delete row" onclick="dgDeleteRow(${r})">${ICONS.trash}</button>
     </div></td>` : '';
     return `<tr>
-      <td class="dg-rownum">${dg.offset + r + 1}</td>${actC}
+      <td class="dg-rownum" style="cursor:pointer" data-tip="Copy this row" onclick="dgShowRow(${r})">${dg.offset + r + 1}</td>${actC}
       ${cols.map((c, ci) => {
         const v = row[ci];
         const big = v !== null && v !== undefined && (typeof v === 'object' || String(v).length > 40);
@@ -3210,9 +3314,47 @@ function dgShowCell(r, c) {
   dgCellValue = (v !== null && typeof v === 'object') ? JSON.stringify(v, null, 2) : String(v);
   document.getElementById('cellTitle').textContent = `${dg.columns[c]} · row ${dg.offset + r + 1}`;
   document.getElementById('cellBody').textContent = dgCellValue;
+  document.getElementById('cellExtra').innerHTML = '';
   document.getElementById('cellModal').classList.add('open');
 }
 function dgCopyCell() { navigator.clipboard?.writeText(dgCellValue).then(() => toast('Copied', 'success')).catch(() => {}); }
+
+// ── Copy a whole row as JSON or a ready-to-paste INSERT ──
+function dgRowObject(r) {
+  const o = {};
+  dg.columns.forEach((c, i) => { o[c] = dg.rows[r][i]; });
+  return o;
+}
+function dgSqlLit(v) {
+  if (v === null || v === undefined) return 'NULL';
+  if (typeof v === 'number') return String(v);
+  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
+  if (typeof v === 'object') return `'${JSON.stringify(v).replace(/'/g, "''")}'`;
+  return `'${String(v).replace(/'/g, "''")}'`;
+}
+function dgRowInsert(r) {
+  const tbl = dg.schema ? `"${dg.schema}"."${dg.table}"` : dg.table ? `"${dg.table}"` : (dg.collection || 'table');
+  const cols = dg.columns.map(c => `"${c}"`).join(', ');
+  const vals = dg.columns.map((c, i) => dgSqlLit(dg.rows[r][i])).join(', ');
+  return `INSERT INTO ${tbl} (${cols}) VALUES (${vals});`;
+}
+function dgShowRow(r) {
+  if (!dg) return;
+  const json = JSON.stringify(dgRowObject(r), null, 2);
+  dgCellValue = json;
+  document.getElementById('cellTitle').textContent = `Row ${dg.offset + r + 1}`;
+  document.getElementById('cellBody').textContent = json;
+  const fam = engineFamily(currentEngine);
+  const sql = fam === 'postgresql' || fam === 'mysql' || fam === 'sqlite';
+  let extra = `<button class="btn btn-ghost btn-sm" onclick="dgCopyRow(${r},'json')">Copy as JSON</button>`;
+  if (sql) extra += `<button class="btn btn-ghost btn-sm" onclick="dgCopyRow(${r},'insert')">Copy as INSERT</button>`;
+  document.getElementById('cellExtra').innerHTML = extra;
+  document.getElementById('cellModal').classList.add('open');
+}
+function dgCopyRow(r, kind) {
+  const text = kind === 'insert' ? dgRowInsert(r) : JSON.stringify(dgRowObject(r), null, 2);
+  navigator.clipboard?.writeText(text).then(() => toast(`Copied row as ${kind === 'insert' ? 'INSERT' : 'JSON'}`, 'success')).catch(() => {});
+}
 
 // ── CRUD: type coercion + previews ──────────────────────────────────────────
 function dgPgCat(type) {
@@ -5278,7 +5420,7 @@ document.addEventListener('keydown', e => {
 function showShortcutHelp() {
   const rows = [
     ['/', 'Focus the filter / search on this page'],
-    ['⌘ / Ctrl + K', 'Jump to a user or database'],
+    ['⌘ / Ctrl + K', 'Jump to a user, database, or table'],
     ['g then u', 'Go to Users'],
     ['g then d', 'Go to Databases'],
     ['g then q', 'Go to Query'],
