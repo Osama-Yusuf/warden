@@ -89,6 +89,15 @@ def test_sanitize_custom_config_tls_and_dbs():
     assert cfg["default_db"] == "shop"
 
 
+def test_sanitize_custom_config_tls_insecure_optout():
+    # verification is on by default (no flag emitted), and opt-out round-trips
+    secure = server.sanitize_custom_config({"host": "h", "port": 9200, "tls": True})
+    assert "tls_insecure" not in secure
+    insecure = server.sanitize_custom_config(
+        {"host": "h", "port": 9200, "tls": True, "tls_insecure": True})
+    assert insecure["tls_insecure"] is True
+
+
 def test_sanitize_custom_config_sqlite_path():
     cfg = server.sanitize_custom_config({"path": "/tmp/my.db"})
     assert cfg["path"].endswith("my.db")

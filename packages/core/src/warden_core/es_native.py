@@ -11,11 +11,12 @@ query console still speaks the native Query DSL.
 
 import json as _json
 import re as _re
+import ssl as _ssl
 import threading
 
 try:
     import urllib3
-    urllib3.disable_warnings()
+    urllib3.disable_warnings()  # the opt-in insecure pool would otherwise warn on every call
     HAVE_URLLIB3 = True
 except ImportError:  # pragma: no cover
     HAVE_URLLIB3 = False
@@ -23,7 +24,9 @@ except ImportError:  # pragma: no cover
 _ES_FIELD = _re.compile(r"^[A-Za-z0-9_.@\-]+$")
 
 
-_http = None
+# One pool per verification mode. TLS verifies the certificate by default;
+# tls_insecure opts out (for self-signed certs or private CAs like AWS).
+_pools = {}
 _http_lock = threading.Lock()
 
 
@@ -31,18 +34,23 @@ def available():
     return HAVE_URLLIB3
 
 
-def _pool():
-    global _http
-    if _http is None:
+def _pool(cfg):
+    insecure = bool(cfg.get("tls_insecure"))
+    key = "insecure" if insecure else "verify"
+    p = _pools.get(key)
+    if p is None:
         with _http_lock:
-            if _http is None:
-                _http = urllib3.PoolManager(
-                    cert_reqs="CERT_NONE",  # admin tool: tolerate self-signed like the mongo path
-                    retries=urllib3.Retry(2, redirect=False),
-                    timeout=urllib3.Timeout(connect=6, read=30),
-                    maxsize=8,
-                )
-    return _http
+            p = _pools.get(key)
+            if p is None:
+                common = dict(retries=urllib3.Retry(2, redirect=False),
+                              timeout=urllib3.Timeout(connect=6, read=30), maxsize=8)
+                if insecure:
+                    p = urllib3.PoolManager(cert_reqs="CERT_NONE", **common)
+                else:
+                    # default context: system trust store + hostname verification
+                    p = urllib3.PoolManager(ssl_context=_ssl.create_default_context(), **common)
+                _pools[key] = p
+    return p
 
 
 def _base(cfg):
@@ -60,7 +68,7 @@ def _headers(user, pwd):
 def _req(cfg, user, pwd, method, path, body=None):
     """One REST call. Returns (data, error) with data parsed from JSON."""
     try:
-        r = _pool().request(
+        r = _pool(cfg).request(
             method, _base(cfg) + path, headers=_headers(user, pwd),
             body=_json.dumps(body).encode() if body is not None else None)
         text = r.data.decode("utf-8", "replace")

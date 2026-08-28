@@ -53,7 +53,8 @@ def get_client(cfg, user, pwd):
         )
         if cfg.get("tls"):
             kwargs["tls"] = True
-            kwargs["tlsAllowInvalidCertificates"] = True
+            if cfg.get("tls_insecure"):
+                kwargs["tlsAllowInvalidCertificates"] = True   # opt out: self-signed / private CA
         client = MongoClient(**kwargs)
         _clients[key] = client
         return client

@@ -30,7 +30,8 @@ def available():
 
 
 def _client(cfg, user, pwd, db=0):
-    key = (cfg["host"], int(cfg["port"]), bool(cfg.get("tls")), user, pwd, int(db))
+    key = (cfg["host"], int(cfg["port"]), bool(cfg.get("tls")),
+           bool(cfg.get("tls_insecure")), user, pwd, int(db))
     with _clients_lock:
         c = _clients.get(key)
         if c is not None:
@@ -44,7 +45,11 @@ def _client(cfg, user, pwd, db=0):
             kwargs["username"] = user
         if cfg.get("tls"):
             kwargs["ssl"] = True
-            kwargs["ssl_cert_reqs"] = None
+            if cfg.get("tls_insecure"):
+                kwargs["ssl_cert_reqs"] = None          # opt out: self-signed / private CA
+            else:
+                kwargs["ssl_cert_reqs"] = "required"     # verify chain + hostname by default
+                kwargs["ssl_check_hostname"] = True
         c = _redis.Redis(**kwargs)
         _clients[key] = c
         return c

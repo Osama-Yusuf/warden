@@ -19,7 +19,9 @@ def docdb_args(config, admin_user, admin_pass, db="admin"):
         "--quiet", "--norc",
     ]
     if config.get("tls"):
-        args.extend(["--tls", "--tlsAllowInvalidCertificates"])
+        args.append("--tls")
+        if config.get("tls_insecure"):
+            args.append("--tlsAllowInvalidCertificates")   # opt out: self-signed / private CA
     return args
 
 

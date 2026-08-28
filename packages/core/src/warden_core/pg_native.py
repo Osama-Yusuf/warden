@@ -51,7 +51,9 @@ def _conninfo(config, db, user, pwd):
     if config.get("sslmode"):
         kwargs["sslmode"] = config["sslmode"]
     elif config.get("tls"):
-        kwargs["sslmode"] = "require"
+        # verify the server cert + hostname by default; tls_insecure downgrades to
+        # encrypt-only "require" (for self-signed certs or private CAs like AWS RDS)
+        kwargs["sslmode"] = "require" if config.get("tls_insecure") else "verify-full"
     return psycopg.conninfo.make_conninfo(**kwargs)
 
 

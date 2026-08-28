@@ -214,6 +214,8 @@ def sanitize_custom_config(raw):
     if not 1 <= port <= 65535:
         raise ValueError("Invalid custom port")
     cfg = {"host": host, "port": port, "tls": bool(raw.get("tls"))}
+    if raw.get("tls_insecure"):
+        cfg["tls_insecure"] = True   # opt out of certificate verification (self-signed / private CA)
     if raw.get("auth_db"):
         cfg["auth_db"] = validate_ident(str(raw["auth_db"]), "auth_db")
     if raw.get("default_db"):
