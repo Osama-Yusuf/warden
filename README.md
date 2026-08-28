@@ -14,7 +14,9 @@ Works with DocumentDB/MongoDB, PostgreSQL (Aurora and friends), MySQL/MariaDB, p
 - query console with a plain-english preview ("Updates ONE document in orders where _id = ...") and a danger badge before anything runs
 - security audits: who's admin, who can write where, dead accounts. Exclude the known ones so only real issues show up
 - cluster health: connections, slow queries, cache hit, replication lag
+- environment guardrails: tag a connection prod/staging/dev (auto-inferred from its name) and warden paints the bar red on prod, shows a PROD badge, and defaults prod to read-only — so you don't fat-finger the wrong environment
 - read-only mode for when you just want to look at prod without fear
+- quick-jump search (⌘K) across users, databases, and tables; copy any browsed row as JSON or a ready-to-paste INSERT
 - every change lands in an append-only audit log
 
 All six engines are on the same footing now: connect, data browsing, cluster health, the query console, in-grid CRUD, and user management. For Elasticsearch that's native-realm users and roles (X-Pack or the OpenSearch security plugin); for Redis it's ACL users (`ACL SETUSER`), so you can create a `cache:*` read-only user in a couple of clicks.
