@@ -5,6 +5,8 @@
 #   make dev-desktop      desktop app with auto-restart on code/UI change
 #   make web              run the web UI server
 #   make cli              run the CLI            (make cli ARGS="docdb list-users")
+#   make test             unit tests: python (pytest) + smart-filter JS (node)
+#   make test-integration integration tests against live engines (skips unreachable)
 #   make desktop          run the desktop app from source
 #   make build            wheels for all packages → dist/
 #   make build-desktop    standalone desktop bundle for THIS OS → dist/warden.app
@@ -21,7 +23,7 @@ VENV := .venv
 PY := $(VENV)/bin/python
 ARGS ?=
 
-.PHONY: setup dev dev-desktop web cli desktop build build-desktop dmg install-desktop env clean check-uv
+.PHONY: setup dev dev-desktop web cli desktop build build-desktop dmg install-desktop env clean check-uv test test-integration
 
 check-uv:
 ifndef UV
@@ -49,6 +51,15 @@ cli: $(PY)
 
 desktop: $(PY)
 	$(VENV)/bin/warden-desktop
+
+test: $(PY)
+	$(PY) -m pytest -q
+	node --test 'tests/js/*.test.mjs'
+
+# integration tests need the engines reachable (see tests/integration).
+# `make dev` era containers or `docker run` locally; unreachable engines skip.
+test-integration: $(PY)
+	PATH="/opt/homebrew/opt/mysql-client/bin:/usr/local/opt/mysql-client/bin:$$PATH" $(PY) -m pytest -m integration -v
 
 build: check-uv
 	uv build --all-packages --out-dir dist

@@ -8,3 +8,14 @@ members = [
     "packages/web",
     "packages/desktop",
 ]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: talks to a live database (skipped unless the engine is reachable)",
+]
+# unit tests are the default; integration runs only when asked for
+addopts = "-m 'not integration'"
