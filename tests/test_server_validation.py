@@ -205,7 +205,7 @@ def test_is_mariadb_detects_and_caches(monkeypatch):
     V._MARIADB_CACHE.clear()
     cfg = {"host": "h1", "port": 3306}
     assert V.is_mariadb(cfg, "u", "p") is True
-    # second call is served from cache — no extra query
+    # second call is served from cache, no extra query
     assert V.is_mariadb(cfg, "u", "p") is True
     assert len(calls) == 1
 

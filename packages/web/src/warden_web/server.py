@@ -434,7 +434,7 @@ def api_row_delete(body):
 MAX_QUERY_LEN = 20000
 MAX_OUTPUT_LEN = 300000
 
-# Redis commands that only read — used to gate the console in read-only mode.
+# Redis commands that only read, used to gate the console in read-only mode.
 REDIS_READ_CMDS = {
     "GET", "MGET", "STRLEN", "GETRANGE", "SUBSTR", "GETBIT", "BITCOUNT",
     "EXISTS", "TYPE", "TTL", "PTTL", "EXPIRETIME", "PEXPIRETIME", "OBJECT",
@@ -1024,7 +1024,7 @@ def api_audit_run(body):
 
     fam = engine_family(engine)
     if fam in ("elasticsearch", "redis"):
-        return {"error": "This isn't available for Elasticsearch or Redis yet — coming in the next pass."}
+        return {"error": "This isn't available for Elasticsearch or Redis yet. Coming in the next pass."}
     if fam == "mysql":
         excl = ("'mysql.sys','mysql.session','mysql.infoschema','mariadb.sys',"
                 "'rdsadmin','rdsrepladmin'")
