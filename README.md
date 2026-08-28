@@ -14,7 +14,7 @@ Works with DocumentDB/MongoDB, PostgreSQL (Aurora and friends), MySQL/MariaDB, p
 - query console with a plain-english preview ("Updates ONE document in orders where _id = ...") and a danger badge before anything runs
 - security audits: who's admin, who can write where, dead accounts. Exclude the known ones so only real issues show up
 - cluster health: connections, slow queries, cache hit, replication lag
-- environment guardrails: tag a connection prod/staging/dev (auto-inferred from its name) and warden paints the bar red on prod, shows a PROD badge, and defaults prod to read-only — so you don't fat-finger the wrong environment
+- environment guardrails: tag a connection (prod/staging/uat/dev/…, picked in the connection form or auto-inferred from its name) and warden paints the bar red on prod, shows the env badge, and defaults prod to read-only — so you don't fat-finger the wrong environment
 - read-only mode for when you just want to look at prod without fear
 - quick-jump search (⌘K) across users, databases, and tables; copy any browsed row as JSON or a ready-to-paste INSERT
 - every change lands in an append-only audit log
@@ -74,6 +74,8 @@ SQLite is a bit special: no server, no credentials. Point an environment at a fi
 Elasticsearch/OpenSearch and Redis don't require credentials in the form — ES may be unauthenticated, Redis is often password-only. Leave the fields blank or fill what your cluster needs; the driver handles it. For ES the cluster shows as one "database" whose indices are the browsable units; for Redis the numbered DBs (0..N) are the "databases" and keys are grouped by `prefix:` namespace.
 
 Credentials are saved per env + engine, with optional macOS Keychain storage. Env vars are in `.env.example`. The audit trail sits at `~/.warden/audit.log`.
+
+TLS connections verify the server certificate by default (system trust store + hostname). For self-signed certs or private CAs — including AWS RDS / DocumentDB / ElastiCache — tick **trust invalid cert** on the connection to skip verification. The web server also only answers same-origin requests, so a random page you visit can't drive it while it's running.
 
 ## Notes for hacking on it
 
