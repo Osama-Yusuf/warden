@@ -2,6 +2,7 @@
 name = "warden-web"
 version = "1.0.0"
 description = "warden web UI and HTTP API (stdlib server, zero runtime dependencies)"
+license = { text = "MIT" }
 requires-python = ">=3.9"
 dependencies = [
     "warden-core",
