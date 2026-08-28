@@ -17,7 +17,7 @@ def audit(env, engine, action, details=""):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"{ts}  [{env.upper()}/{engine.upper()}]  {action}"
     if details:
-        line += f"  — {details}"
+        line += f"  · {details}"
     AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
     with open(AUDIT_LOG, "a") as f:
         f.write(line + "\n")

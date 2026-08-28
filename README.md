@@ -14,7 +14,7 @@ Works with DocumentDB/MongoDB, PostgreSQL (Aurora and friends), MySQL/MariaDB, p
 - query console with a plain-english preview ("Updates ONE document in orders where _id = ...") and a danger badge before anything runs
 - security audits: who's admin, who can write where, dead accounts. Exclude the known ones so only real issues show up
 - cluster health: connections, slow queries, cache hit, replication lag
-- environment guardrails: tag a connection (prod/staging/uat/dev/…, picked in the connection form or auto-inferred from its name) and warden paints the bar red on prod, shows the env badge, and defaults prod to read-only — so you don't fat-finger the wrong environment
+- environment guardrails: tag a connection (prod/staging/uat/dev/…, picked in the connection form or auto-inferred from its name) and warden paints the bar red on prod, shows the env badge, and defaults prod to read-only, so you don't fat-finger the wrong environment
 - read-only mode for when you just want to look at prod without fear
 - quick-jump search (⌘K) across users, databases, and tables; copy any browsed row as JSON or a ready-to-paste INSERT
 - every change lands in an append-only audit log
@@ -54,7 +54,7 @@ make test-integration  # drives live engines, skips any that aren't reachable
 
 Unit tests (`tests/`) cover the pure logic with no database needed: engine routing, the validation and quoting guards that sit in front of every query, the native-driver parsers, and the smart-filter engine. The JS tests run the real filter functions pulled straight out of `index.html`, so there's no copy to drift.
 
-Integration tests (`tests/integration/`) drive the actual server handlers against each engine — connect, list databases, list users, browse a page — and skip cleanly when an engine isn't up. Point them at your own hosts with `WARDEN_TEST_<ENGINE>_HOST/PORT/USER/PASS`.
+Integration tests (`tests/integration/`) drive the actual server handlers against each engine (connect, list databases, list users, browse a page) and skip cleanly when an engine isn't up. Point them at your own hosts with `WARDEN_TEST_<ENGINE>_HOST/PORT/USER/PASS`.
 
 CI (`.github/workflows/test.yml`) runs unit + JS on every push and PR, plus the integration tests against Postgres, MariaDB, MongoDB, and Redis service containers.
 
@@ -71,18 +71,18 @@ Engine keys are matched loosely by name: `mongo`/`document` → MongoDB, `mysql`
 
 SQLite is a bit special: no server, no credentials. Point an environment at a file path, or just upload a .db file from Settings > Environments and warden stores it under `~/.warden/sqlite/`. You get the query console, tables with sizes, and a health card (integrity check included). No users to manage, so those pages hide themselves.
 
-Elasticsearch/OpenSearch and Redis don't require credentials in the form — ES may be unauthenticated, Redis is often password-only. Leave the fields blank or fill what your cluster needs; the driver handles it. For ES the cluster shows as one "database" whose indices are the browsable units; for Redis the numbered DBs (0..N) are the "databases" and keys are grouped by `prefix:` namespace.
+Elasticsearch/OpenSearch and Redis don't require credentials in the form: ES may be unauthenticated, Redis is often password-only. Leave the fields blank or fill what your cluster needs; the driver handles it. For ES the cluster shows as one "database" whose indices are the browsable units; for Redis the numbered DBs (0..N) are the "databases" and keys are grouped by `prefix:` namespace.
 
 Credentials are saved per env + engine, with optional macOS Keychain storage. Env vars are in `.env.example`. The audit trail sits at `~/.warden/audit.log`.
 
-TLS connections verify the server certificate by default (system trust store + hostname). For self-signed certs or private CAs — including AWS RDS / DocumentDB / ElastiCache — tick **trust invalid cert** on the connection to skip verification. The web server also only answers same-origin requests, so a random page you visit can't drive it while it's running.
+TLS connections verify the server certificate by default (system trust store + hostname). For self-signed certs or private CAs (including AWS RDS / DocumentDB / ElastiCache), tick **trust invalid cert** on the connection to skip verification. The web server also only answers same-origin requests, so a random page you visit can't drive it while it's running.
 
 ## Notes for hacking on it
 
 - the web server reads index.html from disk on every request, so UI edits are just a browser refresh. `make dev` restarts on py changes too
 - DocumentDB and PostgreSQL structured operations go through pooled native drivers (`warden_core/mongo_native.py` via pymongo, `warden_core/pg_native.py` via psycopg). Pooling means repeated ops (navigation, background refresh) skip the per-call connection cost, and a real pool makes concurrent requests safe. The mongosh/psql subprocesses are only used for the free-form query console (arbitrary JS/SQL a structured driver shouldn't run). If a driver isn't importable, that engine transparently falls back to its subprocess
 - the pg pool pre-flights one direct connect so a wrong password fails in milliseconds instead of the pool retrying for its whole timeout window
-- Elasticsearch/OpenSearch go through the REST API over a pooled urllib3 client (`warden_core/es_native.py`) rather than an SDK — ES and OpenSearch share the same `_cat`/`_cluster`/`_search` surface, so one client covers both without the version-incompatibility headaches. Redis/Valkey/ElastiCache use pooled redis-py (`warden_core/redis_native.py`); the key browser pages with SCAN (never KEYS) so a big keyspace is never blocked
+- Elasticsearch/OpenSearch go through the REST API over a pooled urllib3 client (`warden_core/es_native.py`) rather than an SDK: ES and OpenSearch share the same `_cat`/`_cluster`/`_search` surface, so one client covers both without the version-incompatibility headaches. Redis/Valkey/ElastiCache use pooled redis-py (`warden_core/redis_native.py`); the key browser pages with SCAN (never KEYS) so a big keyspace is never blocked
 - new engines stay fully isolated: a new `engine_family()` branch plus new handler branches, no edits to the existing engine paths. `engine_family` defaults anything unknown to postgres, so any new engine must register its family explicitly or it gets misrouted
 - the query console uses a warm mongosh session (PTY based). The first one pays the connection cost, the rest take milliseconds
 - mongosh has no `--db` flag and silently ignores it. The target db goes in the connection URI path. Don't "fix" that

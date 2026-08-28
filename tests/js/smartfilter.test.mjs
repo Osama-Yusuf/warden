@@ -1,5 +1,5 @@
 // Unit tests for the smart-filter engine, run against the REAL functions in
-// js/filter.js (no duplication). Uses Node's built-in test runner + vm — no npm
+// js/filter.js (no duplication). Uses Node's built-in test runner + vm, no npm
 // deps. Run with:  node --test tests/js/
 //
 // The extractor pulls named `function` declarations out of the file with

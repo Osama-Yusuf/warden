@@ -230,7 +230,7 @@ async function viewListUsers() {
   const key = cacheKey('users');
   const cached = viewCache.get(key);
   allUsers = cached || [];
-  usersLoading = !cached;  // first load has no data yet — show a skeleton, not "no users"
+  usersLoading = !cached;  // first load has no data yet, show a skeleton, not "no users"
   renderUsersShell(!!cached);
   const res = await apiPost('/api/list-users').catch(() => ({ error: 'Request failed' }));
   if (currentView !== 'users' || cacheKey('users') !== key) return;  // navigated away
@@ -292,8 +292,8 @@ function userRowsHtml(list, fam) {
     } else if (fam === 'redis') {
       const status = tok(u.enabled ? 'pill-ok' : 'pill-danger', 'status', u.enabled ? 'on' : 'off');
       rows += `${tr(u)}<td class="mono">${esc(u.user)}${u.reserved ? ' <span class="pill pill-muted">default</span>' : ''}</td><td>${status}</td>
-        <td class="mono" style="font-size:11px">${esc(u.commands || '—')}</td>
-        <td class="mono" style="font-size:11px">${esc(u.keys || '—')}</td></tr>`;
+        <td class="mono" style="font-size:11px">${esc(u.commands || '-')}</td>
+        <td class="mono" style="font-size:11px">${esc(u.keys || '-')}</td></tr>`;
     } else if (isDocdb) {
       const roles = u.roles.map(r => tok('pill-ok', 'role', r)).join(' ');
       rows += `${tr(u)}<td class="mono">${esc(u.user)}</td><td>${esc(u.db)}</td>
@@ -305,8 +305,8 @@ function userRowsHtml(list, fam) {
       if (u.createdb) flags.push(tok('pill-accent', 'createdb', 'yes', 'createdb'));
       if (u.createrole) flags.push(tok('pill-accent', 'createrole', 'yes', 'createrole'));
       rows += `${tr(u)}<td class="mono">${esc(u.user)}</td><td>${status}</td>
-        <td>${flags.join(' ') || '—'}</td>
-        <td style="color:var(--text-muted)">${u.valid_until === 'never' ? '—' : esc(u.valid_until)}</td></tr>`;
+        <td>${flags.join(' ') || '-'}</td>
+        <td style="color:var(--text-muted)">${u.valid_until === 'never' ? '-' : esc(u.valid_until)}</td></tr>`;
     }
   }
   return rows;
@@ -359,7 +359,7 @@ function usersFilterCfg(fam) {
       { key: 'keys', label: 'key pattern', type: 'text', get: u => u.keys },
       { key: 'default', label: 'default user', type: 'bool', get: u => u.reserved, values: ['yes', 'no'] },
     );
-    // command rules carry +/- signs (+@all grants, -@all revokes) — match the grant prefix so a revoked rule doesn't count
+    // command rules carry +/- signs (+@all grants, -@all revokes), so match the grant prefix so a revoked rule doesn't count
     cfg.presets = [{ label: 'Disabled', q: 'status:off' }, { label: 'Write grant', q: 'command:+@write' }, { label: 'Full access', q: 'command:+@all' }, { label: 'All keys', q: 'keys:~*' }];
   } else if (fam === 'documentdb') {
     cfg.placeholder = 'filter users… try role:readWrite or db:admin';
@@ -425,9 +425,9 @@ function userPanelRedis(res, uAttr) {
   const status = res.enabled ? '<span class="pill pill-ok">on</span>' : '<span class="pill pill-danger">off</span>';
   let html = userPanelHead(uAttr) + `<p style="margin-bottom:12px">${status}${res.user === 'default' ? ' &nbsp;<span class="pill pill-muted">default</span>' : ''}</p>
       <div class="table-wrap"><table><tbody>
-        <tr><td style="width:110px;color:var(--text-muted)">Commands</td><td class="mono" style="font-size:12px">${esc(res.commands || '—')}</td></tr>
-        <tr><td style="color:var(--text-muted)">Keys</td><td class="mono" style="font-size:12px">${esc(res.keys || '—')}</td></tr>
-        <tr><td style="color:var(--text-muted)">Channels</td><td class="mono" style="font-size:12px">${esc(res.channels || '—')}</td></tr>
+        <tr><td style="width:110px;color:var(--text-muted)">Commands</td><td class="mono" style="font-size:12px">${esc(res.commands || '-')}</td></tr>
+        <tr><td style="color:var(--text-muted)">Keys</td><td class="mono" style="font-size:12px">${esc(res.keys || '-')}</td></tr>
+        <tr><td style="color:var(--text-muted)">Channels</td><td class="mono" style="font-size:12px">${esc(res.channels || '-')}</td></tr>
       </tbody></table></div>
       <h2 style="margin-top:18px">${ICONS.shield} Change permissions</h2>
       <p class="card-meta">Add an ACL rule: a category (<code>+@write</code>, <code>-@dangerous</code>), a command (<code>+get</code>), or a key pattern (<code>~cache:*</code>).</p>

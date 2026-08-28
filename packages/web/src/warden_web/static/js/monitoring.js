@@ -57,10 +57,10 @@ function healthChips(res) {
     const h = res.health || {};
     const c = h.connections || {};
     const cur = num(c.current), avail = num(c.available);
-    html += chip('version', esc(h.version || '—'));
-    html += chip('uptime', num(h.uptime) != null ? fmtUptime(h.uptime) : '—');
-    html += chip('connections', cur != null ? `${cur}${avail != null ? ' / ' + (cur + avail) : ''}` : '—');
-    html += chip('active ops', esc(num(h.active_ops) ?? '—'));
+    html += chip('version', esc(h.version || '-'));
+    html += chip('uptime', num(h.uptime) != null ? fmtUptime(h.uptime) : '-');
+    html += chip('connections', cur != null ? `${cur}${avail != null ? ' / ' + (cur + avail) : ''}` : '-');
+    html += chip('active ops', esc(num(h.active_ops) ?? '-'));
     if (num(h.mem?.resident)) html += chip('memory', `${h.mem.resident} MB`);
     const slow = h.slow_ops || [];
     html += chip('slow ops (≥5s)', slow.length, slow.length > 0);
@@ -72,9 +72,9 @@ function healthChips(res) {
     }
   } else if (res.engine === 'mysql') {
     const h = res.health || {};
-    html += chip('version', esc(h.version || '—'));
-    html += chip('uptime', h.uptime ? fmtUptime(Number(h.uptime)) : '—');
-    html += chip('connections', h.threads ? `${esc(h.threads)} / ${esc(h.max_connections || '?')}` : '—');
+    html += chip('version', esc(h.version || '-'));
+    html += chip('uptime', h.uptime ? fmtUptime(Number(h.uptime)) : '-');
+    html += chip('connections', h.threads ? `${esc(h.threads)} / ${esc(h.max_connections || '?')}` : '-');
     if (h.total_size) html += chip('total size', fmtSize(Number(h.total_size)));
     const slow = h.slow_queries || [];
     html += chip('slow queries (>=5s)', slow.length, slow.length > 0);
@@ -86,46 +86,46 @@ function healthChips(res) {
     }
   } else if (res.engine === 'sqlite') {
     const h = res.health || {};
-    html += chip('file', esc((h.file || '').split('/').pop() || '—'));
+    html += chip('file', esc((h.file || '').split('/').pop() || '-'));
     html += chip('size', fmtSize(Number(h.size_bytes) || 0));
-    html += chip('version', esc(h.version || '—'));
+    html += chip('version', esc(h.version || '-'));
     if (h.page_count && h.page_size) html += chip('pages', `${esc(h.page_count)} x ${esc(h.page_size)}B`);
-    html += chip('journal', esc(h.journal_mode || '—'));
-    html += chip('tables', esc(h.tables ?? '—'));
+    html += chip('journal', esc(h.journal_mode || '-'));
+    html += chip('tables', esc(h.tables ?? '-'));
     const ok = (h.integrity || '').trim() === 'ok';
-    html += chip('integrity', ok ? 'ok' : esc(h.integrity || '—'), !ok);
+    html += chip('integrity', ok ? 'ok' : esc(h.integrity || '-'), !ok);
   } else if (res.engine === 'elasticsearch') {
     const h = res.health || {};
-    html += chip('cluster', esc(h.cluster_name || '—'));
-    html += chip('status', esc(h.status || '—'), h.status === 'red');
-    html += chip('nodes', `${esc(h.nodes ?? '—')}${h.data_nodes != null ? ' (' + h.data_nodes + ' data)' : ''}`);
-    html += chip('indices', esc(h.indices ?? '—'));
-    html += chip('documents', num(h.docs) != null ? Number(h.docs).toLocaleString() : '—');
+    html += chip('cluster', esc(h.cluster_name || '-'));
+    html += chip('status', esc(h.status || '-'), h.status === 'red');
+    html += chip('nodes', `${esc(h.nodes ?? '-')}${h.data_nodes != null ? ' (' + h.data_nodes + ' data)' : ''}`);
+    html += chip('indices', esc(h.indices ?? '-'));
+    html += chip('documents', num(h.docs) != null ? Number(h.docs).toLocaleString() : '-');
     if (h.size_bytes) html += chip('store size', fmtSize(Number(h.size_bytes)));
-    html += chip('active shards', esc(h.active_shards ?? '—'));
-    html += chip('unassigned shards', esc(h.unassigned_shards ?? '—'), Number(h.unassigned_shards) > 0);
+    html += chip('active shards', esc(h.active_shards ?? '-'));
+    html += chip('unassigned shards', esc(h.unassigned_shards ?? '-'), Number(h.unassigned_shards) > 0);
     if (h.heap_used_bytes) html += chip('heap used', fmtSize(Number(h.heap_used_bytes)));
   } else if (res.engine === 'redis') {
     const h = res.health || {};
-    html += chip('version', esc(h.version || '—'));
-    html += chip('role', esc(h.role || '—'));
-    html += chip('uptime', num(h.uptime) != null ? fmtUptime(h.uptime) : '—');
-    html += chip('keys', num(h.total_keys) != null ? Number(h.total_keys).toLocaleString() : '—');
-    html += chip('clients', `${esc(h.connected_clients ?? '—')}${h.maxclients ? ' / ' + h.maxclients : ''}`);
+    html += chip('version', esc(h.version || '-'));
+    html += chip('role', esc(h.role || '-'));
+    html += chip('uptime', num(h.uptime) != null ? fmtUptime(h.uptime) : '-');
+    html += chip('keys', num(h.total_keys) != null ? Number(h.total_keys).toLocaleString() : '-');
+    html += chip('clients', `${esc(h.connected_clients ?? '-')}${h.maxclients ? ' / ' + h.maxclients : ''}`);
     if (h.used_memory) html += chip('memory', `${fmtSize(Number(h.used_memory))}${Number(h.maxmemory) > 0 ? ' / ' + fmtSize(Number(h.maxmemory)) : ''}`);
     if (h.used_memory_peak) html += chip('peak memory', fmtSize(Number(h.used_memory_peak)));
     const hits = num(h.keyspace_hits), misses = num(h.keyspace_misses);
     if (hits != null && misses != null && (hits + misses) > 0) html += chip('hit rate', ((hits / (hits + misses)) * 100).toFixed(1) + '%');
-    html += chip('ops/sec', esc(h.ops_per_sec ?? '—'));
-    html += chip('evicted keys', esc(h.evicted_keys ?? '—'), Number(h.evicted_keys) > 0);
+    html += chip('ops/sec', esc(h.ops_per_sec ?? '-'));
+    html += chip('evicted keys', esc(h.evicted_keys ?? '-'), Number(h.evicted_keys) > 0);
   } else {
     const h = res.health || {};
     const conns = h.connections || [];
-    html += chip('version', esc(h.version?.[0] || '—'));
-    html += chip('uptime', esc(h.uptime?.[0] || '—'));
-    html += chip('connections', conns.length >= 4 ? `${esc(conns[2])} / ${esc(conns[3])} (${esc(conns[0])} active)` : '—');
-    html += chip('cache hit', h.cache_hit_pct?.[0] ? `${esc(h.cache_hit_pct[0])}%` : '—');
-    html += chip('blocked queries', esc(h.blocked?.[0] ?? '—'), Number(h.blocked?.[0]) > 0);
+    html += chip('version', esc(h.version?.[0] || '-'));
+    html += chip('uptime', esc(h.uptime?.[0] || '-'));
+    html += chip('connections', conns.length >= 4 ? `${esc(conns[2])} / ${esc(conns[3])} (${esc(conns[0])} active)` : '-');
+    html += chip('cache hit', h.cache_hit_pct?.[0] ? `${esc(h.cache_hit_pct[0])}%` : '-');
+    html += chip('blocked queries', esc(h.blocked?.[0] ?? '-'), Number(h.blocked?.[0]) > 0);
     const reps = h.replicas || [];
     html += chip('replicas', reps[0] ? `${esc(reps[0])}${reps[1] ? ' · lag ' + esc(reps[1]) : ''}` : '0');
     if (h.total_size?.[0]) html += chip('total size', fmtSize(Number(h.total_size[0])));
@@ -275,7 +275,7 @@ async function viewAuditDetail(id) {
       <div class="table-wrap"><table>
         <thead><tr><th>User</th><th>Reason</th><th>Since</th><th></th></tr></thead>
         <tbody>${exclusions.map(e => `<tr style="opacity:0.6">
-          <td class="mono">${esc(e.user)}</td><td>${esc(e.reason || '—')}</td>
+          <td class="mono">${esc(e.user)}</td><td>${esc(e.reason || '-')}</td>
           <td style="color:var(--text-muted)">${esc(e.at || '')}</td>
           <td style="text-align:right"><button class="btn btn-ghost btn-sm" data-id="${esc(id)}" data-user="${esc(e.user)}"
             onclick="restoreToAudit(this.dataset.id, this.dataset.user)">Restore</button></td></tr>`).join('')}</tbody>

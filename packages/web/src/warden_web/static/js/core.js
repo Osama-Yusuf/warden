@@ -8,7 +8,7 @@ let cachedDbs = [];
 let dbData = [];
 let dbSort = { key: 'name', dir: 1 };
 
-// ── Custom tooltip (instant, themed — native title is slow and unstyled) ──
+// ── Custom tooltip (instant, themed; native title is slow and unstyled) ──
 const tipEl = document.createElement('div');
 tipEl.className = 'tooltip';
 document.body.appendChild(tipEl);
@@ -102,7 +102,7 @@ function engineLabel(e) {
 }
 
 function fmtSize(bytes) {
-  if (bytes == null || isNaN(bytes)) return '—';
+  if (bytes == null || isNaN(bytes)) return '-';
   let v = Number(bytes);
   if (v < 1024) return `${Math.round(v)} B`;
   for (const unit of ['KB', 'MB', 'GB', 'TB', 'PB']) {
@@ -531,7 +531,7 @@ function envKind(name) {
   return null;
 }
 
-// which tier a tag belongs to — drives the colour and the prod read-only guardrail
+// which tier a tag belongs to, drives the colour and the prod read-only guardrail
 function envTier(tag) {
   if (tag === 'prod') return 'prod';
   if (['staging', 'uat', 'qa', 'preprod'].includes(tag)) return 'staging';
@@ -555,7 +555,7 @@ function applyEnvGuard(name) {
   }
   if (tier === 'prod' && !prefs.readOnly) {
     savePrefs({ readOnly: true, roAuto: true }); renderRoBtn(); renderNav();
-    toast('Connected to PROD — read-only is on as a safety net. Click the lock to allow writes.', 'info');
+    toast('Connected to PROD. Read-only is on as a safety net. Click the lock to allow writes.', 'info');
   } else if (tier !== 'prod' && prefs.roAuto && prefs.readOnly) {
     savePrefs({ readOnly: false, roAuto: false }); renderRoBtn(); renderNav();
   }

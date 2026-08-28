@@ -10,7 +10,7 @@ A ConnectionPool per (host, port, db, user) gives real concurrency: each query
 checks out its own connection, so overlapping requests never share a socket
 (the failure mode that made the warm mongosh session desync).
 
-The free-form SQL console stays on psql (pg_csv) — it renders CSV with headers
+The free-form SQL console stays on psql (pg_csv), which renders CSV with headers
 and runs arbitrary statements a structured path shouldn't.
 """
 

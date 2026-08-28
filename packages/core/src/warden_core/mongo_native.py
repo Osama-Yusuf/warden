@@ -201,7 +201,7 @@ def id_from_repr(rep):
 def _search_filter(coll, term):
     """A best-effort 'any field contains term' filter (case-insensitive regex
     across sampled field names, plus an exact _id match when term is an oid).
-    This is a collection scan — bounded by the page limit — like SQL ILIKE."""
+    This is a collection scan (bounded by the page limit), like SQL ILIKE."""
     fields, seen = [], set()
     for d in coll.find({}).limit(40):
         for k in d.keys():
@@ -356,7 +356,7 @@ def server_health(cfg, user, pwd):
 
 
 def login_probe(cfg, user, pwd, test_db=""):
-    """Connect AS the given user with a short-lived client (never pooled — test
+    """Connect AS the given user with a short-lived client (never pooled, test
     creds shouldn't linger), and report auth + read checks. Returns a dict shaped
     exactly like the server's test-login payload, or ({auth: False, error}) on
     an auth failure."""

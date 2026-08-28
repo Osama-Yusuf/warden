@@ -606,7 +606,7 @@ table.dgrid thead th.dg-actcol { position: sticky; left: 0; z-index: 4; width: 1
 .dg-actions { position: sticky; left: 0; z-index: 2; background: var(--surface-2);
   white-space: nowrap; padding: 0 10px; }
 table.dgrid tbody tr:hover .dg-actions { background: var(--surface-hover); }
-/* refined segmented action control — subtle by default, lifts on row hover */
+/* refined segmented action control, subtle by default, lifts on row hover */
 .dg-actwrap { display: inline-flex; align-items: center; padding: 2px;
   border-radius: 9px; background: var(--bg); border: 1px solid var(--border);
   opacity: 0.55; transition: opacity .14s ease, border-color .14s ease, box-shadow .14s ease; }
@@ -621,7 +621,7 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .dg-act:hover { background: var(--surface-hover); color: var(--accent); }
 .dg-act.danger:hover { color: var(--danger); background: rgba(248,81,73,0.14); }
 
-/* reusable icon button — square, tooltip via title, color by variant */
+/* reusable icon button, square, tooltip via title, color by variant */
 .ibtn { display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; padding: 0; flex-shrink: 0;
   border: 1px solid transparent; background: transparent; color: var(--text-muted);
@@ -643,7 +643,7 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .ibtn.on:hover { background: rgba(210,153,34,0.22); }
 .row-acts { display: inline-flex; gap: 4px; justify-content: flex-end; width: 100%; }
 
-/* Custom tooltip — instant + styled (native title is slow and unthemed) */
+/* Custom tooltip, instant + styled (native title is slow and unthemed) */
 .tooltip { position: fixed; z-index: 9999; max-width: 300px; pointer-events: none;
   background: var(--text-strong); color: var(--surface);
   font-size: 11.5px; font-weight: 500; line-height: 1.4; padding: 4px 9px; border-radius: 6px;

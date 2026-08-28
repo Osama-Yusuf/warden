@@ -1,7 +1,7 @@
 """PostgreSQL primitives with structured returns.
 
 Structured queries/writes go through pooled psycopg (pg_native) when it's
-importable — fast and concurrency-safe. They transparently fall back to the
+importable, fast and concurrency-safe. They transparently fall back to the
 psql subprocess otherwise. The free-form SQL console (pg_csv) always uses psql.
 """
 
