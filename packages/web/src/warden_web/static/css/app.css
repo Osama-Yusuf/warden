@@ -938,3 +938,8 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .ai-prog-bar { height: 100%; background: var(--accent); transition: width .35s ease; }
 .ai-prog-pct { font-family: var(--mono); font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 .ai-err-inline { color: var(--danger); font-size: 13px; }
+
+/* tier notes + recommended pill */
+.ai-tier-head { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.ai-tier-note { display: block; font-size: 12px; color: var(--text-muted); line-height: 1.45; margin-top: 4px; max-width: 46ch; }
+.ai-tier-rec { font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--success); background: var(--success-bg); border: 1px solid var(--success); border-radius: 999px; padding: 2px 8px; }

@@ -328,8 +328,12 @@ function aiTierCard(t, cur) {
   } else {
     ctrl = `<button type="button" class="btn" onclick="aiDownloadTier('${t.id}')">Download ${esc(t.size)}</button>`;
   }
+  const rec = t.recommended ? `<span class="ai-tier-rec">recommended</span>` : '';
   return `<div class="ai-tier ${cur === t.id ? 'sel' : ''}">
-    <div class="ai-tier-info"><span class="ai-tier-name">${esc(t.label)}</span><span class="ai-tier-size">${esc(t.size)}</span></div>
+    <div class="ai-tier-info">
+      <span class="ai-tier-head"><span class="ai-tier-name">${esc(t.label)}</span>${rec}<span class="ai-tier-size">${esc(t.size)}</span></span>
+      ${t.note ? `<span class="ai-tier-note">${esc(t.note)}</span>` : ''}
+    </div>
     <div class="ai-tier-ctrl">${ctrl}</div></div>`;
 }
 

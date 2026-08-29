@@ -28,19 +28,25 @@ MODELS_DIR = Path.home() / ".warden" / "models"
 
 # The download-and-go catalog. Same family (Qwen2.5 instruct) at three sizes, so
 # behaviour is consistent and only the capability changes.
+# Sizes labelled by what they can actually do, with an honest one-liner (shown
+# in the UI) so nobody's surprised. Qwen2.5 instruct at three sizes; behaviour is
+# consistent, only the capability grows.
 CATALOG = {
     "nano": {
-        "label": "Nano", "does": "chat & explain", "size": "~0.5 GB",
+        "label": "Nano", "size": "~0.4 GB",
+        "note": "Tiny and instant. Handles a simple ask or draft, but gets muddled easily. A quick taste of Ward.",
         "repo": "bartowski/Qwen2.5-0.5B-Instruct-GGUF",
         "file": "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf",
     },
     "small": {
-        "label": "Small", "does": "look things up & draft", "size": "~1 GB",
+        "label": "Small", "size": "~1 GB",
+        "note": "Chats and drafts changes nicely. Reads are usually right, just a touch over-eager sometimes.",
         "repo": "bartowski/Qwen2.5-1.5B-Instruct-GGUF",
         "file": "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
     },
     "medium": {
-        "label": "Medium", "does": "reports & reasoning", "size": "~2 GB",
+        "label": "Medium", "size": "~2 GB", "recommended": True,
+        "note": "The dependable one. Reads results, writes reports, drafts changes. Best pick for a laptop.",
         "repo": "bartowski/Qwen2.5-3B-Instruct-GGUF",
         "file": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
     },
@@ -119,8 +125,11 @@ _load_lock = threading.Lock()
 def _llm_for(path):
     with _load_lock:
         if _loaded["path"] != path:
+            # Plain ChatML (Qwen's native format). We don't use llama.cpp's
+            # function-calling handler; tool use is driven by a JSON-schema
+            # grammar instead, which small models follow far more reliably.
             _loaded["llm"] = Llama(model_path=path, n_ctx=8192, n_gpu_layers=-1,
-                                   chat_format="chatml-function-calling", verbose=False)
+                                   chat_format="chatml", verbose=False)
             _loaded["path"] = path
         return _loaded["llm"]
 
@@ -135,8 +144,9 @@ class LocalProvider(Provider):
         prog = download_state()
         out = []
         for tier, c in CATALOG.items():
-            row = {"id": tier, "label": f"{c['label']} ({c['does']})",
-                   "size": c["size"], "downloaded": is_downloaded(tier)}
+            row = {"id": tier, "label": c["label"], "size": c["size"],
+                   "note": c.get("note", ""), "recommended": c.get("recommended", False),
+                   "downloaded": is_downloaded(tier)}
             if tier in prog:
                 row["download"] = prog[tier]
             out.append(row)
@@ -150,47 +160,105 @@ class LocalProvider(Provider):
             raise AIError(f"The {tier} model isn't downloaded yet.")
         llm = _llm_for(str(model_path(tier)))
 
-        chat_messages = _to_openai(system, messages)
-        kwargs = {"messages": chat_messages, "temperature": 0.3, "max_tokens": 1024}
-        if tools:
-            kwargs["tools"] = [{"type": "function", "function": t} for t in tools]
-            kwargs["tool_choice"] = "auto"
+        # We don't hand a small model open-ended function-calling. Instead we ask
+        # for ONE decision as JSON, constrained by a grammar so it's always valid
+        # and always one of a fixed set of actions. The model just fills a form.
+        read = [t for t in (tools or []) if t["name"] not in ("draft_operation", "ask_user")]
+        names = [t["name"] for t in read]
+        convo = [{"role": "system", "content": _routing_prompt(system, read)}] + _render(messages)
         try:
-            resp = llm.create_chat_completion(**kwargs)
+            resp = llm.create_chat_completion(
+                messages=convo, temperature=0.2, max_tokens=768,
+                response_format={"type": "json_object", "schema": _decision_schema(names)})
         except Exception as e:
             raise AIError(f"The local model errored: {e}")
 
-        msg = resp["choices"][0]["message"]
-        calls = []
-        for i, tc in enumerate(msg.get("tool_calls") or []):
-            fn = tc.get("function", {})
-            try:
-                args = json.loads(fn.get("arguments") or "{}")
-            except (json.JSONDecodeError, TypeError):
-                args = {}
-            calls.append(ToolCall(id=tc.get("id") or f"call_{i}", name=fn.get("name", ""), args=args))
-        return ChatResult(text=(msg.get("content") or "").strip(), tool_calls=calls)
+        raw = (resp["choices"][0]["message"].get("content") or "").strip()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return ChatResult(text=raw)  # grammar should prevent this, but be safe
+        return _decision_to_result(data, names)
 
 
-def _to_openai(system, messages):
-    """Neutral messages -> the OpenAI-style shape llama.cpp's chat handler wants."""
+def _routing_prompt(system, read_tools):
+    lines = [system, "", "Tools you can call to look things up (read-only):"]
+    for t in read_tools:
+        props = (t.get("parameters") or {}).get("properties") or {}
+        args = ", ".join(props) if props else "no arguments"
+        lines.append(f"- {t['name']}({args}): {t.get('description', '')}")
+    lines += [
+        "",
+        "Reply with exactly ONE JSON object and nothing else. Choose one action:",
+        '  {"action": "reply", "reply": "<your answer, in plain words>"}',
+        '  {"action": "tool", "tool": "<a tool name above>", "args": { ... }}',
+        '  {"action": "draft", "draft": {"summary": "<one line>", "statements": ["<step>", "..."]}}',
+        '  {"action": "ask", "ask": {"question": "<one question>", "kind": "text"}}',
+        "",
+        "reply: to chat or to answer once you have what you need.",
+        "tool: only when you still need data you don't have. After a tool result appears, switch to reply.",
+        "draft: for any create / grant / revoke / change / delete. You never run it; warden shows a preview.",
+        "ask: only when a required detail like a name is missing. Never ask about passwords or privileges.",
+        "",
+        "Examples:",
+        '- "make user bob read-only on shop" -> {"action": "draft", "draft": {"summary": "Create bob with read on shop", "statements": ["create user bob", "grant read on shop to bob"]}}',
+        '- "add a new collection gg to learn" -> {"action": "draft", "draft": {"summary": "Create collection gg in learn", "statements": ["create collection gg in learn"]}}',
+        '- "add a user to shop" (no name given) -> {"action": "ask", "ask": {"question": "What should I name them?", "kind": "text"}}',
+        '- "who are the admins?" -> {"action": "tool", "tool": "list_users", "args": {}}',
+        '- (after a tool result is shown) -> {"action": "reply", "reply": "Two can write: alice on shop and the admin."}',
+    ]
+    return "\n".join(lines)
+
+
+def _render(messages):
+    """Neutral messages -> a plain chat transcript the routing model can read.
+    Tool calls and their results become readable lines, not a wire protocol."""
     out = []
-    if system:
-        out.append({"role": "system", "content": system})
     for m in messages:
         role = m.get("role")
         if role == "user":
             out.append({"role": "user", "content": m.get("content", "")})
         elif role == "assistant":
-            entry = {"role": "assistant", "content": m.get("content") or ""}
             if m.get("tool_calls"):
-                entry["tool_calls"] = [{
-                    "id": tc.id, "type": "function",
-                    "function": {"name": tc.name, "arguments": json.dumps(tc.args)},
-                } for tc in m["tool_calls"]]
-                entry["content"] = None
-            out.append(entry)
+                looked = ", ".join(tc.name for tc in m["tool_calls"])
+                out.append({"role": "assistant", "content": f"(looked up: {looked})"})
+            elif m.get("content"):
+                out.append({"role": "assistant", "content": m["content"]})
         elif role == "tool":
-            out.append({"role": "tool", "tool_call_id": m.get("tool_call_id", ""),
-                        "content": m.get("content", "")})
+            out.append({"role": "user",
+                        "content": f"Result of {m.get('name', 'tool')}: {m.get('content', '')}"})
     return out
+
+
+def _decision_schema(tool_names):
+    return {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["reply", "tool", "draft", "ask"]},
+            "reply": {"type": "string"},
+            "tool": {"type": "string", "enum": tool_names or ["none"]},
+            "args": {"type": "object"},
+            "draft": {"type": "object", "properties": {
+                "summary": {"type": "string"},
+                "statements": {"type": "array", "items": {"type": "string"}}}},
+            "ask": {"type": "object", "properties": {
+                "question": {"type": "string"},
+                "kind": {"type": "string", "enum": ["text", "select", "multiselect", "boolean"]},
+                "options": {"type": "array", "items": {"type": "string"}},
+                "hint": {"type": "string"}}},
+        },
+        "required": ["action"],
+    }
+
+
+def _decision_to_result(data, tool_names):
+    action = data.get("action")
+    if action == "tool" and data.get("tool") in tool_names:
+        return ChatResult(tool_calls=[ToolCall(id="call_0", name=data["tool"], args=data.get("args") or {})])
+    if action == "draft" and isinstance(data.get("draft"), dict):
+        draft = dict(data["draft"])
+        draft.setdefault("writes", True)
+        return ChatResult(tool_calls=[ToolCall(id="draft_0", name="draft_operation", args=draft)])
+    if action == "ask" and isinstance(data.get("ask"), dict):
+        return ChatResult(tool_calls=[ToolCall(id="ask_0", name="ask_user", args=data["ask"])])
+    return ChatResult(text=(data.get("reply") or "").strip())
