@@ -396,33 +396,44 @@ OP_ROUTE = {
 }
 _WRITES_DATA = {"create_user", "drop_user", "reset_password", "toggle_login", "grant", "revoke"}
 
-# A plain access level, translated per engine: Mongo uses a role name (attached
-# to the database), SQL engines use a privilege.
-_ACCESS = {
-    "documentdb": {"read": "read", "write": "readWrite", "admin": "dbOwner"},
-    "postgresql": {"read": "SELECT", "write": "ALL", "admin": "ALL"},
-    "mysql": {"read": "SELECT", "write": "ALL", "admin": "ALL"},
-}
+# A plain access level, translated per engine. Mongo uses one role; SQL engines
+# use a set of privileges (write really means insert+update+delete, and Postgres
+# needs CONNECT before table grants are any use).
+_MONGO_ROLE = {"read": "read", "write": "readWrite", "admin": "dbOwner"}
+_PG_PRIVS = {"read": ["CONNECT", "SELECT"],
+             "write": ["CONNECT", "SELECT", "INSERT", "UPDATE", "DELETE"],
+             "admin": ["CONNECT", "CREATE", "ALL PRIVILEGES"]}
+_MYSQL_PRIVS = {"read": ["SELECT"],
+                "write": ["SELECT", "INSERT", "UPDATE", "DELETE"],
+                "admin": ["ALL PRIVILEGES"]}
 
 
-def _op_body(conn, op, fam):
-    kind = op.get("kind")
+def _base_body(conn, op):
     b = dict(conn)
     b["_source"] = "ward"   # audit stamps this as Ward's doing
     if op.get("username"):
         b["username"] = op["username"]
-    if kind in ("grant", "revoke"):
-        db = op.get("database", "")
-        b["database"] = db
-        table = _ACCESS.get(fam, _ACCESS["postgresql"])
-        val = table.get((op.get("access") or "read").lower(), table["read"])
-        if fam == "documentdb":
-            b["roles"] = [{"role": val, "db": db}]   # Mongo wants role + db objects
-        else:
-            b["privilege"] = val
-    if kind == "toggle_login":
+    return b
+
+
+def _op_body(conn, op):
+    """Body for the simple, one-call operations (not grant/revoke)."""
+    b = _base_body(conn, op)
+    if op.get("kind") == "toggle_login":
         b["enable"] = bool(op.get("enable", True))
     return b
+
+
+def _grant_bodies(conn, op, fam):
+    """One handler body per underlying privilege, translating the plain access
+    level into the engine's vocabulary. Mongo is a single role grant."""
+    access = (op.get("access") or "read").lower()
+    db = op.get("database", "")
+    base = _base_body(conn, op)
+    if fam == "documentdb":
+        return [{**base, "database": db, "roles": [{"role": _MONGO_ROLE.get(access, "read"), "db": db}]}]
+    privs = (_PG_PRIVS if fam == "postgresql" else _MYSQL_PRIVS).get(access, ["SELECT"])
+    return [{**base, "database": db, "privilege": p} for p in privs]
 
 
 def run_operations(body, routes):
@@ -437,17 +448,33 @@ def run_operations(body, routes):
     fam = engine_family(conn.get("engine", ""))
     results = []
     for op in ops:
-        route = OP_ROUTE.get(op.get("kind"))
+        kind = op.get("kind")
+        route = OP_ROUTE.get(kind)
         handler = routes.get(route) if route else None
         if not handler:
-            results.append({"kind": op.get("kind"), "ok": False, "error": "unsupported operation"})
+            results.append({"kind": kind, "ok": False, "error": "unsupported operation"})
             continue
-        try:
-            res = handler(_op_body(conn, op, fam))
-        except Exception as e:  # a bad op shouldn't abort the rest
-            res = {"error": str(e)}
-        results.append({"kind": op.get("kind"), "target": op.get("username") or op.get("database"),
-                        "ok": bool(res.get("ok")) and "error" not in res,
-                        "error": res.get("error"),
-                        "password": res.get("password")})
+        target = op.get("username") or op.get("database")
+        if kind in ("grant", "revoke"):
+            # An access level fans out to several privilege grants on SQL; roll
+            # them into one result so the card reads as one line.
+            errors, pw = [], None
+            for sub in _grant_bodies(conn, op, fam):
+                res = _call(handler, sub)
+                if res.get("error"):
+                    errors.append(res["error"])
+            results.append({"kind": kind, "target": target, "ok": not errors,
+                            "error": errors[0] if errors else None, "password": pw})
+        else:
+            res = _call(handler, _op_body(conn, op))
+            results.append({"kind": kind, "target": target,
+                            "ok": bool(res.get("ok")) and "error" not in res,
+                            "error": res.get("error"), "password": res.get("password")})
     return {"results": results, "ran": sum(1 for r in results if r["ok"])}
+
+
+def _call(handler, sub):
+    try:
+        return handler(sub)
+    except Exception as e:  # a bad op shouldn't abort the rest of the batch
+        return {"error": str(e)}

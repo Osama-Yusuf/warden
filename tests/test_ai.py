@@ -205,6 +205,24 @@ def test_local_provider_flags_and_catalog():
     assert isinstance(download_state(), dict)
 
 
+def test_grant_access_translation():
+    from warden_web.assistant import _grant_bodies
+    conn = {"admin_user": "a"}
+    g = {"username": "u", "database": "shop"}
+    # Mongo: one role grant, db attached to the role
+    b = _grant_bodies(conn, {**g, "access": "write"}, "documentdb")
+    assert len(b) == 1 and b[0]["roles"] == [{"role": "readWrite", "db": "shop"}]
+    # MySQL write is the four DML privileges, not a blanket ALL
+    privs = [x["privilege"] for x in _grant_bodies(conn, {**g, "access": "write"}, "mysql")]
+    assert privs == ["SELECT", "INSERT", "UPDATE", "DELETE"]
+    # Postgres read must include CONNECT or the user can't even reach the db
+    pg = [x["privilege"] for x in _grant_bodies(conn, {**g, "access": "read"}, "postgresql")]
+    assert "CONNECT" in pg and "SELECT" in pg
+    # admin uses the valid name, never the invalid bare 'ALL'
+    adm = [x["privilege"] for x in _grant_bodies(conn, {**g, "access": "admin"}, "mysql")]
+    assert "ALL PRIVILEGES" in adm and "ALL" not in adm
+
+
 def test_draft_db_validation():
     from warden_web.assistant import _validate_draft_db
     dbs = ["koala-editor", "staging-editor", "fox-editor", "shop"]
