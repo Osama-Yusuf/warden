@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 
 from warden_core.ai import AIError, get_provider
+from warden_core.ai import local
 
 MAX_HOPS = 6            # tool round-trips before we stop and answer with what we have
 MAX_TOOL_CHARS = 6000   # trim a tool result before feeding it back, to keep tokens sane
@@ -108,8 +109,8 @@ VIRTUAL_TOOLS = [
     },
 ]
 
-_ALL_DECLS = TOOLS + VIRTUAL_TOOLS
 _VIRTUAL = {t["name"] for t in VIRTUAL_TOOLS}
+_BY_VNAME = {t["name"]: t for t in VIRTUAL_TOOLS}
 
 
 # ---------------------------------------------------------------------------
@@ -131,15 +132,26 @@ def _system_prompt(body):
         "You help them inspect and understand their data. You are careful, brief, and plain-spoken.",
         "",
         "You are in READ-ONLY mode. You may look at anything with your tools, but you cannot change data.",
-        "Rules:",
-        "- To answer a question, call the read tools. Never invent a user, database, table, or collection"
-        " name; look it up first with list_users / list_databases / list_collections.",
-        "- If the user asks to create, grant, revoke, change, or delete something, do NOT do it. Call"
-        " draft_operation to lay out exactly what should happen, and warden lets the user run it. warden's"
-        " defaults are fine: generate a password when none is given, and a user may have no privileges.",
-        "- If you are missing something you truly cannot guess (like the name for a new user), call ask_user."
-        " Do not ask about passwords or privileges.",
-        "- Keep replies short. This is production; be precise, not chatty.",
+        "Decide how to respond, in this order:",
+        "1. A greeting or a question about you: just answer in a sentence. No tools.",
+        "2. A question about the data: call the read tools you need, then ANSWER in plain words using what"
+        " came back. Never invent a user, database, table, or collection name; look it up first. Do not"
+        " call the same tool twice, and never call ask_user just to repeat the user's own question.",
+        "3. A request to create, grant, revoke, change, or delete, when you have the essentials (a name,"
+        " and roughly what access): call draft_operation with the concrete steps. warden shows the user a"
+        " preview to run; you never run it. Passwords and privileges have safe defaults, so you do NOT"
+        " need them and must not ask about them.",
+        "4. Only call ask_user when YOU are missing an essential you cannot look up or default, like a name"
+        " the user never gave. Keep it to one short question.",
+        "Keep every reply short. This is production; be precise, not chatty.",
+        "",
+        "Worked examples:",
+        "- User: 'who can write?' -> call list_users, then reply in words like 'Two can: alice on shop,"
+        " and admin everywhere.' Do NOT ask a question back.",
+        "- User: 'create user mamo, read on book, write on learn' -> call draft_operation with those two"
+        " grants. You already have the name and the access, so do NOT ask anything.",
+        "- User: 'create a user in book' -> call ask_user 'What should I name them?'. Only the name is"
+        " missing; do not ask about the password or privileges.",
         "",
         f"Context: engine={engine}, environment={env}, page={page}, selected={selection}, read-only={ro}.",
         f"Security audits available here: {audit_line}.",
@@ -203,15 +215,14 @@ def chat_turn(body, routes):
     provider_name = body.get("ai_provider", "")
     key = body.get("ai_key", "")
     model = body.get("ai_model", "")
-    if not key:
-        return {"error": "No API key. Add one in Settings to switch the assistant on."}
-    if not model:
-        return {"error": "No model selected. Pick one in Settings."}
-
     try:
         provider = get_provider(provider_name, key, model)
     except AIError as e:
         return {"error": str(e)}
+    if provider.needs_key and not key:
+        return {"error": "No API key. Add one in Settings to switch the assistant on."}
+    if not model:
+        return {"error": "No model selected. Pick one in Settings."}
 
     system = _system_prompt(body)
     conn = _connection(body)
@@ -219,40 +230,80 @@ def chat_turn(body, routes):
     if not messages:
         return {"error": "Nothing to answer."}
     steps = []
+    seen = set()   # tool-call signatures we've already run, to stop small models looping
+    # Strong models get the full kit; weak on-device ones skip ask_user (they
+    # tend to misuse it, echoing the user's own question back).
+    decls = TOOLS + VIRTUAL_TOOLS if provider.strong else TOOLS + [_BY_VNAME["draft_operation"]]
 
     for _ in range(MAX_HOPS):
         try:
-            result = provider.chat(system, messages, _ALL_DECLS)
+            result = provider.chat(system, messages, decls)
         except AIError as e:
             return {"error": str(e), "steps": steps}
 
         if not result.tool_calls:
-            return {"reply": result.text or "(no answer)", "steps": steps}
+            reply = _clean_reply(result.text)
+            if reply:
+                return {"reply": reply, "steps": steps}
+            break  # empty or malformed: synthesize a plain answer below
 
         # A virtual tool ends the turn with a payload for the panel.
         for tc in result.tool_calls:
             if tc.name in _VIRTUAL:
                 key_out = "question" if tc.name == "ask_user" else "draft"
-                return {key_out: tc.args or {}, "steps": steps,
-                        "note": result.text or ""}
+                return {key_out: tc.args or {}, "steps": steps, "note": _clean_reply(result.text)}
 
         # Otherwise run the read-only tools and feed the results back.
-        messages.append({"role": "assistant", "content": result.text,
-                         "tool_calls": result.tool_calls})
+        messages.append({"role": "assistant", "content": result.text, "tool_calls": result.tool_calls})
         for tc in result.tool_calls:
-            out = _run_tool(tc, conn, routes)
-            steps.append({"tool": tc.name, "args": tc.args})
+            sig = (tc.name, json.dumps(tc.args, sort_keys=True, default=str))
+            if sig in seen:
+                out = {"note": "you already fetched this above; use it to answer now"}
+            else:
+                seen.add(sig)
+                out = _run_tool(tc, conn, routes)
+                steps.append({"tool": tc.name, "args": tc.args})
             messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.name,
                              "content": json.dumps(out, default=str)[:MAX_TOOL_CHARS]})
 
-    return {"reply": "I kept reaching for tools without landing on an answer. Mind rephrasing?",
-            "steps": steps}
+    # Ran out of hops or got a blank answer: force a plain-words reply (no tools).
+    try:
+        final = provider.chat(system + "\n\nNow answer the user in plain words using what you already"
+                              " learned. Do not call any tool.", messages, None)
+        reply = _clean_reply(final.text)
+        if reply:
+            return {"reply": reply, "steps": steps}
+    except AIError:
+        pass
+    return {"reply": "I had a look but couldn't put together a clean answer. Mind rephrasing?", "steps": steps}
+
+
+def _clean_reply(text):
+    """Small models sometimes leak a raw 'functions.name:' token instead of an
+    answer. Treat that (and empties) as no answer."""
+    t = (text or "").strip()
+    if not t or t.startswith("functions.") or t.startswith("functions ") or t == "()":
+        return ""
+    return t
 
 
 def list_models(body):
-    """Handler for /api/ai/models: what can this key actually use right now."""
+    """Handler for /api/ai/models: what can this provider actually use right now.
+    For remote providers that's what the key unlocks; for on-device it's the
+    catalog with each size marked downloaded / in-progress / not yet."""
     try:
         provider = get_provider(body.get("ai_provider", ""), body.get("ai_key", ""))
         return {"models": provider.list_models()}
     except AIError as e:
         return {"error": str(e)}
+
+
+def download_model(body):
+    """Handler for /api/ai/download: start fetching one on-device model size (or
+    report where an in-flight one is). The download runs in the background; the
+    UI polls /api/ai/models to watch the bar."""
+    try:
+        local.start_download(body.get("tier", ""))
+    except AIError as e:
+        return {"error": str(e)}
+    return {"ok": True, "state": local.download_state().get(body.get("tier", ""), {})}

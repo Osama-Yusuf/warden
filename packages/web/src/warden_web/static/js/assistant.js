@@ -1,11 +1,14 @@
-// ── AI assistant (Phase 1: talk & explain, read-only) ───────────────────────
-// The dock lives bottom-right and only exists when AI is switched on. It opens a
-// side panel that chats with the model through /api/ai/chat. Nothing here writes
-// to a database: the model can look, explain, and draft, but the human runs any
-// change themselves. See packages/web/src/warden_web/assistant.py for the spine.
+// ── Ward, warden's assistant (Phase 1: talk & explain, read-only) ───────────
+// Ward is warden's nephew: knows the house, still learning, allowed to look but
+// not touch. The dock lives bottom-right and only exists when AI is switched on.
+// It opens a side panel that chats through /api/ai/chat. Nothing here writes to
+// a database: Ward can look, explain, and draft, but you run any change.
+// See packages/web/src/warden_web/assistant.py for the safety spine.
 
 const AI_STORE = 'warden.ai';
-const AI_KEYHOLE = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="4"/><path d="M9.6 12.2 8.2 19h7.6l-1.4-6.8z"/></svg>';
+// Ward's mark: a keyhole (warden's lineage) with a spark (the bright young helper).
+const WARD_MARK = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="9.5" r="3.7"/><path d="M8.4 12.4 7 18.6h7l-1.4-6.2z"/><path d="M18.4 4.6l.62 1.78 1.78.62-1.78.62-.62 1.78-.62-1.78-1.78-.62 1.78-.62z"/></svg>';
+const AI_KEYHOLE = WARD_MARK;   // legacy alias used across the panel markup
 
 function aiSettings() { try { return JSON.parse(localStorage.getItem(AI_STORE)) || {}; } catch { return {}; } }
 function saveAiSettings(patch) {
@@ -13,7 +16,11 @@ function saveAiSettings(patch) {
   try { localStorage.setItem(AI_STORE, JSON.stringify(s)); } catch {}
   return s;
 }
-function aiReady() { const s = aiSettings(); return !!(s.enabled && s.key && s.model); }
+function aiReady() {
+  const s = aiSettings();
+  if (!s.enabled || !s.model) return false;
+  return s.provider === 'local' ? true : !!s.key;   // local needs no key
+}
 
 let aiThread = [];       // [{role:'user'|'assistant', content}]
 let aiBusy = false;
@@ -27,7 +34,7 @@ function mountAssistantDock() {
   if (!dock) {
     const b = document.createElement('button');
     b.id = 'aiDock'; b.className = 'ai-dock'; b.type = 'button';
-    b.title = 'Assistant'; b.setAttribute('aria-label', 'Open the assistant');
+    b.title = 'Ward'; b.setAttribute('aria-label', 'Open Ward');
     b.onclick = toggleAiPanel;
     b.innerHTML = AI_KEYHOLE;
     document.body.appendChild(b);
@@ -42,7 +49,7 @@ function ensureAiPanel() {
   p.innerHTML = `
     <div class="ai-head">
       <span class="ai-avatar">${AI_KEYHOLE}</span>
-      <span class="ai-who">assistant</span>
+      <span class="ai-who">Ward</span>
       <span class="ai-ctx" id="aiCtx"></span>
       <button class="ai-x" type="button" title="Close" aria-label="Close" onclick="toggleAiPanel()">&times;</button>
     </div>
@@ -86,14 +93,14 @@ function aiEnvValue() { return document.getElementById('envSelect')?.value || ''
 
 // ── chat ────────────────────────────────────────────────────────────────────
 function aiGreeting() {
-  aiBubble('ai', "Hey. I can explain who can touch what, summarize a table, run the security audits as a report, or draft an operation for you to run. I only ever look, never change, so poke around freely.");
+  aiBubble('ai', "Hey, I'm Ward. I can explain who can reach what, summarize a table, run the security audits as a report, or draft a change for you to run. I only ever look, never touch, so poke around freely.");
 }
 
 function aiNeedsSetup() {
-  aiBubble('ai', 'Almost there. Add an API key and pick a model on the Assistant page, then we can talk.');
+  aiBubble('ai', "Almost there. Pick a model on the Ward page (download one, or paste a key), then we can talk.");
   const t = document.getElementById('aiThread');
   const cta = document.createElement('button');
-  cta.className = 'ai-inline-btn'; cta.type = 'button'; cta.textContent = 'Open Assistant settings';
+  cta.className = 'ai-inline-btn'; cta.type = 'button'; cta.textContent = 'Set up Ward';
   cta.onclick = () => { toggleAiPanel(); navigate('assistant'); };
   t.appendChild(cta); aiScroll();
 }
@@ -231,54 +238,142 @@ function aiDraft(d) {
 }
 function aiCopyDraft(lines) { copyText((lines || []).join('\n')); }
 
-// ── the Assistant page (settings + what it can do) ───────────────────────────
+// ── the Ward page (meet him, then pick a brain) ──────────────────────────────
 function viewAssistant() {
   markActive('assistant');
   const s = aiSettings();
   const on = !!s.enabled;
   setContent(`
-    <div class="view-head"><h2>Assistant</h2>
+    <div class="view-head"><h2>Ward</h2>
       <label class="ai-toggle">
         <input type="checkbox" id="aiEnable" ${on ? 'checked' : ''} onchange="aiToggleEnabled(this.checked)">
         <span>${on ? 'On' : 'Off'}</span>
       </label>
     </div>
-    <p class="muted" style="max-width:60ch">An assistant that knows what you're looking at. It can explain access, summarize data, run the security audits as a report, and draft operations for you. Off by default, and it only ever reads, never changes anything on its own.</p>
-    <div id="aiConfig" style="${on ? '' : 'display:none'}">
-      <div class="card ai-card">
-        <h3>Provider</h3>
-        <div class="ai-field">
-          <label>Provider</label>
-          <select id="aiProvider" onchange="0">
-            <option value="gemini" selected>Google Gemini</option>
-          </select>
-        </div>
-        <div class="ai-field">
-          <label>API key</label>
-          <input type="password" id="aiApiKey" value="${esc(s.key || '')}" placeholder="paste your Gemini API key" autocomplete="off">
-        </div>
-        <div class="ai-field">
-          <label>Model</label>
-          <div class="ai-model-row">
-            <select id="aiModel">${s.model ? `<option value="${esc(s.model)}" selected>${esc(s.model)}</option>` : '<option value="">fetch models first</option>'}</select>
-            <button type="button" class="btn" onclick="aiFetchModels()">Fetch models</button>
-          </div>
-        </div>
-        <div class="ai-field">
-          <label>Custom behavior <span class="muted">(optional)</span></label>
-          <textarea id="aiPersona" rows="2" placeholder="e.g. always answer in a single sentence, prefer table names over ids…">${esc(s.persona || '')}</textarea>
-        </div>
-        <div class="ai-privacy">${ICONS.shield || ''} Your prompt and your schema names (table, user, database names) are sent to Google. Your row data and credentials never are. Turn AI off and nothing leaves your machine.</div>
-        <div class="ai-actions"><button type="button" class="btn primary" onclick="aiSaveConfig()">Save</button></div>
-      </div>
-    </div>`);
+    <p class="muted ai-lore">warden's nephew. Knows the house, still learning the ropes, and allowed to look but never touch. Ward explains who can reach what, reads you a report, or drafts a change for you to run. Off by default.</p>
+    <div id="aiConfig" style="${on ? '' : 'display:none'}"></div>`);
+  if (on) aiRenderConfig();
 }
 
 function aiToggleEnabled(on) {
   saveAiSettings({ enabled: !!on });
-  document.getElementById('aiConfig').style.display = on ? '' : 'none';
   document.querySelector('.ai-toggle span').textContent = on ? 'On' : 'Off';
+  document.getElementById('aiConfig').style.display = on ? '' : 'none';
+  if (on) aiRenderConfig();
   mountAssistantDock();
+}
+
+function aiRenderConfig() {
+  const s = aiSettings();
+  const provider = s.provider || 'local';
+  const card = (id, title, desc) => `<button type="button" class="ai-prov ${provider === id ? 'sel' : ''}" onclick="aiPickProvider('${id}')">
+      <span class="ai-prov-t">${esc(title)}</span><span class="ai-prov-d">${esc(desc)}</span></button>`;
+  document.getElementById('aiConfig').innerHTML = `
+    <div class="ai-providers">
+      ${card('local', 'On this machine', 'Private, no key. Downloads a small model. Best for chatting and drafting.')}
+      ${card('gemini', 'Google Gemini', 'Needs a free API key. Sharper for questions and reports.')}
+    </div>
+    <div id="aiProviderBody"></div>
+    <div class="card ai-card">
+      <div class="ai-field"><label>Custom behavior <span class="muted">(optional)</span></label>
+        <textarea id="aiPersona" rows="2" placeholder="e.g. keep answers to one line, prefer names over ids…">${esc(s.persona || '')}</textarea></div>
+      <div class="ai-actions"><button type="button" class="btn" onclick="aiSavePersona()">Save behavior</button></div>
+    </div>`;
+  aiRenderProviderBody(provider);
+}
+
+function aiPickProvider(id) {
+  saveAiSettings({ provider: id });
+  aiRenderConfig();
+  mountAssistantDock();
+}
+
+function aiRenderProviderBody(provider) {
+  const body = document.getElementById('aiProviderBody');
+  if (!body) return;
+  if (provider === 'gemini') { body.innerHTML = aiGeminiHtml(); return; }
+  body.innerHTML = `<div class="card ai-card"><div class="loading-msg"><div class="spinner"></div> Loading model sizes…</div></div>`;
+  aiRenderLocal();
+}
+
+// ── local (download & go) ────────────────────────────────────────────────────
+async function aiRenderLocal() {
+  const res = await apiPost('/api/ai/models', { ai_provider: 'local' });
+  const body = document.getElementById('aiProviderBody');
+  if (!body) return;
+  if (res.error) { body.innerHTML = `<div class="card ai-card"><div class="ai-err-inline">${esc(res.error)}</div></div>`; return; }
+  body.innerHTML = aiLocalHtml(res.models || []);
+  if ((res.models || []).some(t => t.download && t.download.status === 'downloading')) aiPollLocal();
+}
+
+function aiLocalHtml(tiers) {
+  const cur = aiSettings().model;
+  return `<div class="ai-tiers">${tiers.map(t => aiTierCard(t, cur)).join('')}</div>
+    <div class="ai-privacy">${ICONS.shield || ''} Nothing leaves your machine. The model runs right here.</div>`;
+}
+
+function aiTierCard(t, cur) {
+  const dl = t.download;
+  let ctrl;
+  if (dl && dl.status === 'downloading') {
+    const pct = dl.pct || 0;
+    const mb = dl.total ? ` ${Math.round((dl.done || 0) / 1e6)}/${Math.round(dl.total / 1e6)} MB` : '';
+    ctrl = `<div class="ai-prog"><div class="ai-prog-bar" style="width:${pct}%"></div></div><span class="ai-prog-pct">${pct}%${mb}</span>`;
+  } else if (t.downloaded) {
+    ctrl = (cur === t.id)
+      ? `<span class="ai-tier-inuse">In use ✓</span>`
+      : `<button type="button" class="btn primary" onclick="aiUseTier('${t.id}')">Use this</button>`;
+  } else if (dl && dl.status === 'error') {
+    ctrl = `<button type="button" class="btn" onclick="aiDownloadTier('${t.id}')">Retry</button>`;
+  } else {
+    ctrl = `<button type="button" class="btn" onclick="aiDownloadTier('${t.id}')">Download ${esc(t.size)}</button>`;
+  }
+  return `<div class="ai-tier ${cur === t.id ? 'sel' : ''}">
+    <div class="ai-tier-info"><span class="ai-tier-name">${esc(t.label)}</span><span class="ai-tier-size">${esc(t.size)}</span></div>
+    <div class="ai-tier-ctrl">${ctrl}</div></div>`;
+}
+
+async function aiDownloadTier(tier) {
+  const res = await apiPost('/api/ai/download', { tier });
+  if (res.error) { toast(res.error, 'error'); return; }
+  aiRenderLocal();
+}
+
+let _aiPoll = null;
+function aiPollLocal() {
+  if (_aiPoll) return;
+  _aiPoll = setInterval(async () => {
+    if (currentView !== 'assistant') { clearInterval(_aiPoll); _aiPoll = null; return; }
+    const res = await apiPost('/api/ai/models', { ai_provider: 'local' });
+    const body = document.getElementById('aiProviderBody');
+    if (body && !res.error) body.innerHTML = aiLocalHtml(res.models || []);
+    if (!(res.models || []).some(t => t.download && t.download.status === 'downloading')) {
+      clearInterval(_aiPoll); _aiPoll = null;
+    }
+  }, 1200);
+}
+
+function aiUseTier(tier) {
+  saveAiSettings({ provider: 'local', model: tier, enabled: true });
+  aiRenderLocal();
+  mountAssistantDock();
+  toast('Ward is using the ' + tier + ' model. Dock is bottom-right.', 'success');
+}
+
+// ── gemini (bring your own key) ──────────────────────────────────────────────
+function aiGeminiHtml() {
+  const s = aiSettings();
+  const model = s.provider === 'gemini' ? s.model : '';
+  return `<div class="card ai-card">
+    <div class="ai-field"><label>API key</label>
+      <input type="password" id="aiApiKey" value="${esc(s.key || '')}" placeholder="paste your Gemini API key" autocomplete="off"></div>
+    <div class="ai-field"><label>Model</label>
+      <div class="ai-model-row">
+        <select id="aiModel">${model ? `<option value="${esc(model)}" selected>${esc(model)}</option>` : '<option value="">fetch models first</option>'}</select>
+        <button type="button" class="btn" onclick="aiFetchModels()">Fetch models</button></div></div>
+    <div class="ai-privacy">${ICONS.shield || ''} Your prompt and schema names (table, user, database names) go to Google. Your rows and credentials never do.</div>
+    <div class="ai-actions"><button type="button" class="btn primary" onclick="aiSaveGemini()">Save</button></div>
+  </div>`;
 }
 
 async function aiFetchModels() {
@@ -295,11 +390,15 @@ async function aiFetchModels() {
   toast(`${models.length} models available`, 'success');
 }
 
-function aiSaveConfig() {
+function aiSaveGemini() {
   const key = document.getElementById('aiApiKey').value.trim();
   const model = document.getElementById('aiModel').value;
-  const persona = document.getElementById('aiPersona').value.trim();
-  saveAiSettings({ provider: 'gemini', key, model, persona, enabled: true });
+  saveAiSettings({ provider: 'gemini', key, model, enabled: true });
   mountAssistantDock();
-  toast(aiReady() ? 'Assistant is ready. The dock is bottom-right.' : 'Saved. Pick a model to finish.', aiReady() ? 'success' : 'info');
+  toast(aiReady() ? 'Ward is ready with Gemini.' : 'Saved. Pick a model to finish.', aiReady() ? 'success' : 'info');
+}
+
+function aiSavePersona() {
+  saveAiSettings({ persona: document.getElementById('aiPersona').value.trim() });
+  toast('Saved', 'success');
 }

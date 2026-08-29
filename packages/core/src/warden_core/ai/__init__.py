@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from .base import AIError, ChatResult, Provider, ToolCall
 from .gemini import GeminiProvider
+from .local import LocalProvider
 
 _PROVIDERS = {
     "gemini": GeminiProvider,
+    "local": LocalProvider,
 }
 
 

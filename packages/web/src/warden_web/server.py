@@ -1347,6 +1347,10 @@ def api_ai_models(body):
     return assistant.list_models(body)
 
 
+def api_ai_download(body):
+    return assistant.download_model(body)
+
+
 def api_ai_chat(body):
     fam = engine_family(body.get("engine", ""))
     body["_audits"] = [{"id": a["id"], "title": a["title"]}
@@ -1395,6 +1399,7 @@ ROUTES = {
     "/api/keychain-delete": api_keychain_delete,
     "/api/audit-log": api_audit_log,
     "/api/ai/models": api_ai_models,
+    "/api/ai/download": api_ai_download,
     "/api/ai/chat": api_ai_chat,
 }
 

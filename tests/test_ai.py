@@ -185,3 +185,37 @@ def test_audits_land_in_system_prompt(monkeypatch):
     assistant.chat_turn(body, routes={})
     system = fake.calls[0][0]
     assert "admin-access" in system and "READ-ONLY" in system
+
+
+# --------------------------------------------------------------------------
+# On-device (local) provider: catalog + capability flags. No model file or
+# llama-cpp needed here; list_models only checks the filesystem.
+# --------------------------------------------------------------------------
+
+def test_local_provider_flags_and_catalog():
+    from warden_core.ai.local import CATALOG, LocalProvider, download_state
+    p = get_provider("local", "", "small")
+    assert isinstance(p, LocalProvider)
+    assert p.needs_key is False and p.strong is False
+    assert set(CATALOG) == {"nano", "small", "medium"}
+    models = p.list_models()
+    assert [m["id"] for m in models] == ["nano", "small", "medium"]
+    assert all("downloaded" in m and "size" in m for m in models)
+    assert isinstance(download_state(), dict)
+
+
+def test_weak_provider_is_not_offered_ask_user(monkeypatch):
+    fake = FakeProvider([ChatResult(text="hi")])
+    fake.needs_key = False
+    fake.strong = False
+    monkeypatch.setattr(assistant, "get_provider", lambda *a, **k: fake)
+    assistant.chat_turn(_body(ai_key=""), routes={})
+    names = [t["name"] for t in fake.calls[0][2]]
+    assert "draft_operation" in names and "ask_user" not in names
+
+
+def test_strong_provider_gets_the_full_kit(monkeypatch):
+    fake = _use(monkeypatch, [ChatResult(text="hi")])   # default strong=True
+    assistant.chat_turn(_body(), routes={})
+    names = [t["name"] for t in fake.calls[0][2]]
+    assert "ask_user" in names and "draft_operation" in names

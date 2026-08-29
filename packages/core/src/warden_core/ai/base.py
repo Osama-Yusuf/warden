@@ -50,6 +50,8 @@ class Provider:
     """Base class. Subclasses fill in list_models() and chat()."""
 
     name = ""
+    needs_key = True   # remote providers need an API key; on-device ones don't
+    strong = True      # can be trusted with nuanced tools like ask_user; small local models can't
 
     def __init__(self, api_key="", model=""):
         self.api_key = api_key

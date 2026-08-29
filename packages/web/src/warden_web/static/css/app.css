@@ -916,3 +916,25 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .ai-privacy svg { width: 16px; height: 16px; flex: none; margin-top: 1px; }
 .ai-actions { display: flex; justify-content: flex-end; }
 @media (prefers-reduced-motion: reduce) { .ai-panel, .ai-dock, .ai-bars i { transition: none; animation: none; } }
+
+/* Ward settings: provider picker + local model tiers */
+#aiConfig { max-width: 640px; }
+.ai-lore { max-width: 62ch; margin-bottom: 20px; }
+.ai-providers { display: flex; gap: 12px; margin-bottom: 16px; }
+.ai-prov { flex: 1; text-align: left; display: flex; flex-direction: column; gap: 5px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; cursor: pointer; font: inherit; }
+.ai-prov:hover { border-color: var(--border-strong); }
+.ai-prov.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.ai-prov-t { font-weight: 650; color: var(--text); }
+.ai-prov-d { font-size: 12.5px; color: var(--text-muted); line-height: 1.45; }
+.ai-tiers { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.ai-tier { display: flex; align-items: center; gap: 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px; padding: 13px 15px; }
+.ai-tier.sel { border-color: var(--success); }
+.ai-tier-info { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.ai-tier-name { font-weight: 600; }
+.ai-tier-size { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); }
+.ai-tier-ctrl { display: flex; align-items: center; gap: 10px; justify-content: flex-end; min-width: 150px; }
+.ai-tier-inuse { color: var(--success); font-weight: 650; font-size: 13px; }
+.ai-prog { flex: 1; height: 7px; min-width: 80px; background: var(--surface); border: 1px solid var(--border); border-radius: 99px; overflow: hidden; }
+.ai-prog-bar { height: 100%; background: var(--accent); transition: width .35s ease; }
+.ai-prog-pct { font-family: var(--mono); font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.ai-err-inline { color: var(--danger); font-size: 13px; }
