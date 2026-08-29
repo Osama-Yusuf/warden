@@ -197,10 +197,11 @@ def test_local_provider_flags_and_catalog():
     p = get_provider("local", "", "small")
     assert isinstance(p, LocalProvider)
     assert p.needs_key is False and p.strong is False
-    assert set(CATALOG) == {"nano", "small", "medium"}
+    assert set(CATALOG) == {"nano", "small", "medium", "large"}
     models = p.list_models()
-    assert [m["id"] for m in models] == ["nano", "small", "medium"]
-    assert all("downloaded" in m and "size" in m for m in models)
+    assert [m["id"] for m in models] == ["nano", "small", "medium", "large"]
+    assert all("downloaded" in m and "size" in m and "note" in m for m in models)
+    assert sum(m["recommended"] for m in models) == 1  # exactly one recommended
     assert isinstance(download_state(), dict)
 
 

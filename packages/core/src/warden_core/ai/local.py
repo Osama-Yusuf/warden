@@ -50,6 +50,12 @@ CATALOG = {
         "repo": "bartowski/Qwen2.5-3B-Instruct-GGUF",
         "file": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
     },
+    "large": {
+        "label": "Large", "size": "~4.7 GB",
+        "note": "The sharpest on-device brain. Best answers and reports, but slower and hungrier for RAM.",
+        "repo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
+        "file": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    },
 }
 
 
