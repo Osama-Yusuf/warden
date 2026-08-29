@@ -14,6 +14,12 @@ node --test tests/js/            # the front-end filter tests
 ```
 
 ### The live engines
-Integration + the smoke want the six engines reachable on localhost. The usual local setup is Docker containers (Postgres, MySQL/MariaDB, Mongo, Elasticsearch on 9200 as `elastic`/`espass`, Redis on 6379 with `testpass`). Point them elsewhere with `WARDEN_TEST_<ENGINE>_HOST/PORT/USER/PASS`.
+Integration + the smoke want the engines reachable on localhost. There's a compose file that spins them all up with the exact creds the tests expect:
+
+```bash
+cd tests/engines && ./engines.sh up      # or: docker compose up -d
+```
+
+See [`engines/`](engines/) for the details (subsets, ports, creds). Point the tests somewhere else with `WARDEN_TEST_<ENGINE>_HOST/PORT/USER/PASS`.
 
 **Gotcha:** MySQL's client CLI needs to be on `PATH`, e.g. `PATH="/opt/homebrew/opt/mysql-client/bin:$PATH" uv run pytest -m integration`.
