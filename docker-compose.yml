@@ -1,0 +1,18 @@
+# Run warden in a container:
+#
+#   docker compose up            # builds the image + starts it
+#   open http://localhost:8642
+#
+# warden connects out to whatever databases you point it at. To reach a database
+# running on your host machine, use host.docker.internal as the host in the
+# connection form instead of localhost (the container's localhost is itself).
+name: warden
+
+services:
+  warden:
+    build: .
+    image: warden:local
+    ports: ["8642:8642"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # so "host.docker.internal" works on Linux too
+    restart: unless-stopped
