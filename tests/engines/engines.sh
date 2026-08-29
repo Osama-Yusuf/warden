@@ -30,7 +30,9 @@ case "$cmd" in
   up)
     services=(); for n in "$@"; do services+=("$(resolve "$n")"); done
     echo "starting ${services[*]:-all engines}..."
-    docker compose up -d --wait "${services[@]}"    # --wait blocks on the healthchecks
+    # ${arr[@]+"${arr[@]}"} so an empty array expands to nothing instead of
+    # tripping "unbound variable" under set -u on macOS's stock bash 3.2.
+    docker compose up -d --wait ${services[@]+"${services[@]}"}    # --wait blocks on the healthchecks
     echo "ready. point the tests at them: uv run pytest -m integration"
     ;;
   down)
@@ -40,6 +42,6 @@ case "$cmd" in
     docker compose ps
     ;;
   *)
-    grep '^#' "$0" | sed 's/^# \{0,1\}//'   # print the header as help
+    grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'   # header block as help, minus the shebang
     ;;
 esac
