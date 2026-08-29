@@ -53,6 +53,7 @@ from warden_core import redis_native as rdn
 # it needs directly. Everything else moved into the per-engine adapters.
 from warden_core.validation import MYSQL_PRIVILEGES, is_mariadb, validate_target
 from warden_core.adapters import EngineError, Target, get_adapter
+from warden_web import assistant
 
 USE_NATIVE_MONGO = mn.available()
 USE_NATIVE_PG = pn.available()
@@ -1335,6 +1336,24 @@ def api_audit_log(body):
     return {"entries": lines[:100]}
 
 
+# ---------------------------------------------------------------------------
+# AI assistant (off by default; none of this runs unless the user turns it on
+# and supplies a key). The heavy lifting lives in assistant.py; these two are
+# thin wrappers so the assistant can reuse the same read-only handlers and the
+# same route table the rest of the app uses.
+# ---------------------------------------------------------------------------
+
+def api_ai_models(body):
+    return assistant.list_models(body)
+
+
+def api_ai_chat(body):
+    fam = engine_family(body.get("engine", ""))
+    body["_audits"] = [{"id": a["id"], "title": a["title"]}
+                       for a in AUDIT_DEFS if a["engine"] == fam]
+    return assistant.chat_turn(body, ROUTES)
+
+
 REQUIRES_CREDS = {
     "/api/connect", "/api/list-users", "/api/user-info",
     "/api/create-user", "/api/reset-password", "/api/grant",
@@ -1375,6 +1394,8 @@ ROUTES = {
     "/api/keychain-get": api_keychain_get,
     "/api/keychain-delete": api_keychain_delete,
     "/api/audit-log": api_audit_log,
+    "/api/ai/models": api_ai_models,
+    "/api/ai/chat": api_ai_chat,
 }
 
 
