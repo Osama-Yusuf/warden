@@ -205,6 +205,24 @@ def test_local_provider_flags_and_catalog():
     assert isinstance(download_state(), dict)
 
 
+def test_draft_db_validation():
+    from warden_web.assistant import _validate_draft_db
+    dbs = ["koala-editor", "staging-editor", "fox-editor", "shop"]
+    # a database that doesn't exist but matches several -> select the close ones
+    q = _validate_draft_db({"database": "editor"}, dbs)
+    assert q and q["kind"] == "select"
+    assert set(q["options"]) == {"koala-editor", "staging-editor", "fox-editor"}
+    # an exact match -> no question, the draft stands
+    assert _validate_draft_db({"database": "fox-editor"}, dbs) is None
+    # no database on the draft -> nothing to check
+    assert _validate_draft_db({"summary": "make a user"}, dbs) is None
+    # a name that matches nothing -> ask them to type it
+    q2 = _validate_draft_db({"database": "zzzzz"}, dbs)
+    assert q2 and q2["kind"] == "text"
+    # can't list databases -> never blocks
+    assert _validate_draft_db({"database": "editor"}, []) is None
+
+
 def test_machine_report_shape():
     from warden_core.ai.local import CATALOG, machine_report
     r = machine_report()

@@ -185,27 +185,45 @@ function aiQuestion(q) {
   const wrap = document.createElement('div');
   wrap.className = 'ai-ask';
   const kind = q.kind || 'text';
+  const opts = Array.isArray(q.options) ? q.options : [];
   let controls = '';
   if (kind === 'boolean') {
     controls = `<div class="ai-ask-row">
       <button type="button" class="ai-chip-btn" onclick="aiAnswer('yes')">Yes</button>
       <button type="button" class="ai-chip-btn" onclick="aiAnswer('no')">No</button></div>`;
-  } else if (kind === 'select' && Array.isArray(q.options)) {
+  } else if (kind === 'select' && opts.length) {
     controls = `<div class="ai-ask-row">` +
-      q.options.map(o => `<button type="button" class="ai-chip-btn" onclick="aiAnswer(${JSON.stringify(esc(o)).replace(/"/g, '&quot;')})">${esc(o)}</button>`).join('') +
-      `</div>`;
-  } else if (kind === 'multiselect' && Array.isArray(q.options)) {
+      opts.map((o, i) => `<button type="button" class="ai-chip-btn ai-opt" data-i="${i}">${esc(o)}</button>`).join('') +
+      `</div>` + aiTypeOut();
+  } else if (kind === 'multiselect' && opts.length) {
     controls = `<div class="ai-ask-multi">` +
-      q.options.map((o, i) => `<label class="ai-check"><input type="checkbox" value="${esc(o)}" id="aiMs${i}"> ${esc(o)}</label>`).join('') +
-      `</div><button type="button" class="ai-chip-btn primary" onclick="aiAnswerMulti(this)">Confirm</button>`;
+      opts.map(o => `<label class="ai-check"><input type="checkbox" value="${esc(o)}"> ${esc(o)}</label>`).join('') +
+      `</div><button type="button" class="ai-chip-btn primary" onclick="aiAnswerMulti(this)">Confirm</button>` + aiTypeOut();
   } else {
     controls = `<div class="ai-ask-row"><input type="text" class="ai-ask-input" id="aiAskInput"
       placeholder="type your answer…" onkeydown="if(event.key==='Enter'){aiAnswer(this.value)}">
       <button type="button" class="ai-chip-btn primary" onclick="aiAnswer(document.getElementById('aiAskInput').value)">Send</button></div>`;
   }
   wrap.innerHTML = `<div class="ai-ask-q">${esc(q.question || '')}</div>${controls}${q.hint ? `<div class="ai-ask-hint">${esc(q.hint)}</div>` : ''}`;
+  // Wire option buttons by index so we never have to escape a value into inline JS.
+  wrap.querySelectorAll('.ai-opt').forEach(b => { b.onclick = () => aiAnswer(opts[+b.dataset.i]); });
+  const typeBtn = wrap.querySelector('.ai-typeout-btn');
+  if (typeBtn) typeBtn.onclick = () => {
+    const row = wrap.querySelector('.ai-typeout-row');
+    row.style.display = 'flex'; typeBtn.style.display = 'none';
+    row.querySelector('input').focus();
+  };
   t.appendChild(wrap); aiScroll();
   setTimeout(() => document.getElementById('aiAskInput')?.focus(), 30);
+}
+
+// A "none of these, let me type it" escape for pick lists.
+function aiTypeOut() {
+  return `<button type="button" class="ai-typeout-btn">none of these, type it out</button>
+    <div class="ai-typeout-row" style="display:none">
+      <input type="text" class="ai-ask-input" placeholder="type the exact name…" onkeydown="if(event.key==='Enter')aiAnswer(this.value)">
+      <button type="button" class="ai-chip-btn primary" onclick="aiAnswer(this.previousElementSibling.value)">Use</button>
+    </div>`;
 }
 
 function aiAnswer(val) {

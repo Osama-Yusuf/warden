@@ -258,7 +258,7 @@ def _routing_prompt(system, read_tools):
         "Reply with exactly ONE JSON object and nothing else. Choose one action:",
         '  {"action": "reply", "reply": "<your answer, in plain words>"}',
         '  {"action": "tool", "tool": "<a tool name above>", "args": { ... }}',
-        '  {"action": "draft", "draft": {"summary": "<one line>", "statements": ["<step>", "..."]}}',
+        '  {"action": "draft", "draft": {"summary": "<one line>", "database": "<target database, exact name>", "statements": ["<step>", "..."]}}',
         '  {"action": "ask", "ask": {"question": "<one question>", "kind": "text"}}',
         "",
         "reply: to chat or to answer once you have what you need.",
@@ -267,7 +267,7 @@ def _routing_prompt(system, read_tools):
         "ask: only when a required detail like a name is missing. Never ask about passwords or privileges.",
         "",
         "Examples:",
-        '- "make user bob read-only on shop" -> {"action": "draft", "draft": {"summary": "Create bob with read on shop", "statements": ["create user bob", "grant read on shop to bob"]}}',
+        '- "make user bob read-only on shop" -> {"action": "draft", "draft": {"summary": "Create bob with read on shop", "database": "shop", "statements": ["create user bob", "grant read on shop to bob"]}}',
         '- "add a new collection gg to learn" -> {"action": "draft", "draft": {"summary": "Create collection gg in learn", "statements": ["create collection gg in learn"]}}',
         '- "add a user to shop" (no name given) -> {"action": "ask", "ask": {"question": "What should I name them?", "kind": "text"}}',
         '- "who are the admins?" -> {"action": "tool", "tool": "list_users", "args": {}}',
@@ -306,6 +306,7 @@ def _decision_schema(tool_names):
             "args": {"type": "object"},
             "draft": {"type": "object", "properties": {
                 "summary": {"type": "string"},
+                "database": {"type": "string"},
                 "statements": {"type": "array", "items": {"type": "string"}}}},
             "ask": {"type": "object", "properties": {
                 "question": {"type": "string"},

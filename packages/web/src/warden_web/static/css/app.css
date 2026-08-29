@@ -955,3 +955,8 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .ai-tier-best { font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); background: var(--accent-bg); border: 1px solid var(--accent); border-radius: 999px; padding: 2px 8px; }
 .ai-tier-heavy { font-family: var(--mono); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--warning); background: var(--surface); border: 1px solid var(--warning); border-radius: 999px; padding: 2px 8px; }
 .ai-tier.dim { opacity: .6; }
+
+/* "type it out" escape on pick lists */
+.ai-typeout-btn { margin-top: 8px; font: inherit; font-size: 12px; color: var(--text-muted); background: none; border: none; text-decoration: underline; cursor: pointer; padding: 2px 0; }
+.ai-typeout-btn:hover { color: var(--accent); }
+.ai-typeout-row { display: flex; gap: 8px; margin-top: 8px; }

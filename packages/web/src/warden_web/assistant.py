@@ -102,6 +102,7 @@ VIRTUAL_TOOLS = [
                         "themselves. Use this for anything that creates, grants, revokes, changes, or deletes."),
         "parameters": {"type": "object", "properties": {
             "summary": {"type": "string", "description": "One plain-english line of what this does."},
+            "database": {"type": "string", "description": "The database this targets, if any. Must be a real one, exact name."},
             "statements": {"type": "array", "items": {"type": "string"},
                            "description": "The concrete steps, one per line."},
             "writes": {"type": "boolean", "description": "True if it changes data (almost always true here)."}},
@@ -159,6 +160,55 @@ def _system_prompt(body):
     if persona:
         lines += ["", f"The user also asked you to: {persona}"]
     return "\n".join(lines)
+
+
+def _list_databases(conn, routes):
+    """The real database names on this connection, or [] if we can't tell (not
+    connected, no creds, engine has none). Fetched once per turn."""
+    handler = routes.get("/api/list-databases")
+    if not handler or not conn.get("engine"):
+        return []
+    try:
+        res = handler(dict(conn))
+    except Exception:
+        return []
+    dbs = res.get("databases") if isinstance(res, dict) else None
+    if not isinstance(dbs, list):
+        return []
+    return [str(d.get("name") if isinstance(d, dict) else d) for d in dbs if d]
+
+
+def _database_hint(names):
+    """Tell the model which databases actually exist. This is a nudge; the hard
+    guarantee is _validate_draft_db below, which the model can't skip."""
+    if not names:
+        return ""
+    shown = ", ".join(names[:80])
+    more = "" if len(names) <= 80 else f", and {len(names) - 80} more"
+    return ("\n\nThe real databases on this connection are: " + shown + more + "."
+            "\nUse a database name only from that list, and put the one you're targeting in the draft's"
+            " 'database' field. If the user's database isn't an exact match, don't guess.")
+
+
+def _validate_draft_db(draft, names):
+    """Guardrail: if the draft targets a database that doesn't exist, return an
+    ask_user question (the close matches to pick from, or a plain 'type it') so
+    the model can't quietly draft against a database that isn't there."""
+    if not names:
+        return None
+    target = str(draft.get("database") or "").strip()
+    if not target:
+        return None
+    lows = {n.lower() for n in names}
+    if target.lower() in lows:
+        return None  # exact match, all good
+    matches = [n for n in names if target.lower() in n.lower() or n.lower() in target.lower()]
+    if matches:
+        return {"question": f"There's no database called '{target}'. Which one did you mean?",
+                "kind": "select", "options": matches[:12],
+                "hint": "Pick one, or type the exact name."}
+    return {"question": f"I don't see a database called '{target}'. What's the exact name?",
+            "kind": "text"}
 
 
 def _connection(body):
@@ -224,8 +274,9 @@ def chat_turn(body, routes):
     if not model:
         return {"error": "No model selected. Pick one in Settings."}
 
-    system = _system_prompt(body)
     conn = _connection(body)
+    real_dbs = _list_databases(conn, routes)
+    system = _system_prompt(body) + _database_hint(real_dbs)
     messages = _neutral_messages(body.get("messages", []))
     if not messages:
         return {"error": "Nothing to answer."}
@@ -249,9 +300,13 @@ def chat_turn(body, routes):
 
         # A virtual tool ends the turn with a payload for the panel.
         for tc in result.tool_calls:
-            if tc.name in _VIRTUAL:
-                key_out = "question" if tc.name == "ask_user" else "draft"
-                return {key_out: tc.args or {}, "steps": steps, "note": _clean_reply(result.text)}
+            if tc.name == "ask_user":
+                return {"question": tc.args or {}, "steps": steps, "note": _clean_reply(result.text)}
+            if tc.name == "draft_operation":
+                dq = _validate_draft_db(tc.args or {}, real_dbs)
+                if dq:  # the draft names a database that doesn't exist: disambiguate first
+                    return {"question": dq, "steps": steps}
+                return {"draft": tc.args or {}, "steps": steps, "note": _clean_reply(result.text)}
 
         # Otherwise run the read-only tools and feed the results back.
         messages.append({"role": "assistant", "content": result.text, "tool_calls": result.tool_calls})
