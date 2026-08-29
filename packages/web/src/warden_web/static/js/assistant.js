@@ -241,21 +241,83 @@ function aiAnswerMulti(btn) {
 
 function aiDraft(d) {
   const t = aiThreadEl();
-  const writes = d.writes !== false;
-  const lines = Array.isArray(d.statements) ? d.statements : [];
+  const ops = Array.isArray(d.operations) ? d.operations : [];
+  const lines = ops.length ? ops.map(aiOpLine) : (Array.isArray(d.statements) ? d.statements : []);
   const el = document.createElement('div');
-  el.className = 'ai-op' + (writes ? '' : ' readonly');
+  el.className = 'ai-op';
+  el._ops = ops;
   el.innerHTML = `
-    <div class="ai-op-h">proposed${writes ? ' · write' : ' · read'}</div>
+    <div class="ai-op-h">proposed · write</div>
     <div class="ai-op-sum">${esc(d.summary || '')}</div>
     <div class="ai-op-lines">${lines.map(l => `<div>${esc(l)}</div>`).join('')}</div>
-    <div class="ai-op-foot">
-      <span class="ai-op-note">Phase 1: run this yourself in the UI. Executing from chat lands in the next pass.</span>
-      <button type="button" class="ai-chip-btn" onclick='aiCopyDraft(${JSON.stringify(lines).replace(/'/g, "&#39;")})'>Copy</button>
-    </div>`;
-  t.appendChild(el); aiScroll();
+    <div class="ai-op-foot"></div>`;
+  t.appendChild(el);
+  aiDraftFoot(el, 'idle');
+  aiScroll();
 }
-function aiCopyDraft(lines) { copyText((lines || []).join('\n')); }
+
+// A structured operation as one plain-english line.
+function aiOpLine(op) {
+  const u = op.username || '';
+  const a = op.access || 'read';
+  const db = op.database || '?';
+  switch (op.kind) {
+    case 'create_user': return `create user ${u}`;
+    case 'drop_user': return `drop user ${u}`;
+    case 'reset_password': return `reset password for ${u}`;
+    case 'toggle_login': return `${op.enable === false ? 'disable' : 'enable'} login for ${u}`;
+    case 'grant': return `grant ${a} on ${db} to ${u}`;
+    case 'revoke': return `revoke ${a} on ${db} from ${u}`;
+    default: return op.kind || 'operation';
+  }
+}
+
+// The card's footer changes with state: idle -> a restricted confirm -> results.
+function aiDraftFoot(el, state) {
+  const foot = el.querySelector('.ai-op-foot');
+  const ops = el._ops || [];
+  if (!ops.length) {
+    foot.innerHTML = `<span class="ai-op-note">Run this yourself in the UI.</span>
+      <button type="button" class="ai-chip-btn">Copy</button>`;
+    foot.querySelector('button').onclick = () => copyText(ops.map(aiOpLine).join('\n'));
+    return;
+  }
+  if (prefs.readOnly) {
+    foot.innerHTML = `<span class="ai-op-note ai-warn">Read-only mode is on. Turn it off in the top bar to let Ward run this.</span>`;
+    return;
+  }
+  if (state === 'confirm') {
+    foot.innerHTML = `<span class="ai-op-note ai-warn">This changes data. Sure?</span>
+      <button type="button" class="ai-chip-btn">Cancel</button>
+      <button type="button" class="ai-chip-btn danger">Yes, run it</button>`;
+    const [cancel, go] = foot.querySelectorAll('button');
+    cancel.onclick = () => aiDraftFoot(el, 'idle');
+    go.onclick = () => aiRunOps(el);
+  } else {
+    foot.innerHTML = `<span class="ai-op-note">Ward will run this for you.</span>
+      <button type="button" class="ai-chip-btn primary">Confirm &amp; run &#9656;</button>`;
+    foot.querySelector('button').onclick = () => aiDraftFoot(el, 'confirm');
+  }
+}
+
+async function aiRunOps(el) {
+  el.querySelector('.ai-op-foot').innerHTML =
+    `<span class="ai-op-note"><span class="ai-bars"><i></i><i></i><i></i></span> running</span>`;
+  const res = await apiPost('/api/ai/execute', { operations: el._ops });
+  const foot = el.querySelector('.ai-op-foot');
+  el.classList.add('done');
+  if (!res || res.error) { foot.innerHTML = `<span class="ai-op-note ai-warn">${esc(res && res.error || 'Failed to run.')}</span>`; return; }
+  const results = res.results || [];
+  el.querySelector('.ai-op-lines').innerHTML = results.map(r =>
+    `<div class="ai-res ${r.ok ? 'ok' : 'bad'}">${r.ok ? '&#10003;' : '&#10007;'} ${esc(r.kind)}${r.target ? ' ' + esc(r.target) : ''}` +
+    `${r.error ? ' &mdash; ' + esc(r.error) : ''}` +
+    `${r.password ? ` &middot; password <code class="ai-pw" title="click to copy">${esc(r.password)}</code>` : ''}</div>`).join('');
+  const ok = results.filter(r => r.ok).length;
+  foot.innerHTML = `<span class="ai-op-note">${ok}/${results.length} done${results.some(r => r.password) ? ' &middot; copy the password now' : ''}.</span>`;
+  el.querySelectorAll('.ai-pw').forEach(c => { c.onclick = () => copyText(c.textContent); });
+  if (typeof viewListUsers === 'function' && currentView === 'users' && connected) viewListUsers();
+  aiScroll();
+}
 
 // ── the Ward page (meet him, then pick a brain) ──────────────────────────────
 function viewAssistant() {

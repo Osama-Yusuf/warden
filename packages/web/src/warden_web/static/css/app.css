@@ -960,3 +960,13 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .ai-typeout-btn { margin-top: 8px; font: inherit; font-size: 12px; color: var(--text-muted); background: none; border: none; text-decoration: underline; cursor: pointer; padding: 2px 0; }
 .ai-typeout-btn:hover { color: var(--accent); }
 .ai-typeout-row { display: flex; gap: 8px; margin-top: 8px; }
+
+/* Ward running an operation: confirm + results */
+.ai-op-note.ai-warn { color: var(--warning); }
+.ai-chip-btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.ai-chip-btn.danger:hover { filter: brightness(1.08); }
+.ai-res { font-family: var(--mono); font-size: 12px; line-height: 1.5; padding: 1px 0; }
+.ai-res.ok { color: var(--success); }
+.ai-res.bad { color: var(--danger); }
+.ai-res code, .ai-pw { color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; cursor: pointer; }
+.ai-pw:hover { border-color: var(--accent); }

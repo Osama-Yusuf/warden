@@ -16,6 +16,7 @@ import json
 
 from warden_core.ai import AIError, get_provider
 from warden_core.ai import local
+from warden_core.util import engine_family
 
 MAX_HOPS = 6            # tool round-trips before we stop and answer with what we have
 MAX_TOOL_CHARS = 6000   # trim a tool result before feeding it back, to keep tokens sane
@@ -98,15 +99,20 @@ VIRTUAL_TOOLS = [
     },
     {
         "name": "draft_operation",
-        "description": ("Propose a change instead of making it. warden shows the user a preview they can run "
-                        "themselves. Use this for anything that creates, grants, revokes, changes, or deletes."),
+        "description": ("Propose a change for the user to confirm and run. Use for anything that creates, "
+                        "grants, revokes, resets, or deletes a user. Fill 'operations' with structured steps; "
+                        "never include a password, they are generated."),
         "parameters": {"type": "object", "properties": {
             "summary": {"type": "string", "description": "One plain-english line of what this does."},
-            "database": {"type": "string", "description": "The database this targets, if any. Must be a real one, exact name."},
-            "statements": {"type": "array", "items": {"type": "string"},
-                           "description": "The concrete steps, one per line."},
-            "writes": {"type": "boolean", "description": "True if it changes data (almost always true here)."}},
-            "required": ["summary", "statements"]},
+            "operations": {"type": "array", "description": "The concrete steps.", "items": {
+                "type": "object", "properties": {
+                    "kind": {"type": "string",
+                             "enum": ["create_user", "drop_user", "reset_password", "grant", "revoke", "toggle_login"]},
+                    "username": {"type": "string"},
+                    "database": {"type": "string", "description": "For grant/revoke: a real database, exact name."},
+                    "access": {"type": "string", "enum": ["read", "write", "admin"]}},
+                "required": ["kind"]}}},
+            "required": ["summary", "operations"]},
     },
 ]
 
@@ -196,19 +202,25 @@ def _validate_draft_db(draft, names):
     the model can't quietly draft against a database that isn't there."""
     if not names:
         return None
-    target = str(draft.get("database") or "").strip()
-    if not target:
-        return None
     lows = {n.lower() for n in names}
-    if target.lower() in lows:
-        return None  # exact match, all good
-    matches = [n for n in names if target.lower() in n.lower() or n.lower() in target.lower()]
-    if matches:
-        return {"question": f"There's no database called '{target}'. Which one did you mean?",
-                "kind": "select", "options": matches[:12],
-                "hint": "Pick one, or type the exact name."}
-    return {"question": f"I don't see a database called '{target}'. What's the exact name?",
-            "kind": "text"}
+    # every database the draft touches: the top-level one (legacy) plus each op's
+    targets = []
+    if draft.get("database"):
+        targets.append(str(draft["database"]).strip())
+    for op in draft.get("operations") or []:
+        if op.get("database"):
+            targets.append(str(op["database"]).strip())
+    for target in targets:
+        if not target or target.lower() in lows:
+            continue
+        matches = [n for n in names if target.lower() in n.lower() or n.lower() in target.lower()]
+        if matches:
+            return {"question": f"There's no database called '{target}'. Which one did you mean?",
+                    "kind": "select", "options": matches[:12],
+                    "hint": "Pick one, or type the exact name."}
+        return {"question": f"I don't see a database called '{target}'. What's the exact name?",
+                "kind": "text"}
+    return None
 
 
 def _connection(body):
@@ -367,3 +379,75 @@ def download_model(body):
 def check_machine(_body=None):
     """Handler for /api/ai/check: look at this machine and say which size fits."""
     return local.machine_report()
+
+
+# ── Phase 2: run a confirmed operation ───────────────────────────────────────
+# The model proposes structured operations (a name, a database, a plain access
+# level); warden maps each to the same write handler the buttons use, so the
+# read-only gate, validation, and audit line all come for free. Ward never picks
+# a password: that's always generated.
+OP_ROUTE = {
+    "create_user": "/api/create-user",
+    "drop_user": "/api/drop-user",
+    "reset_password": "/api/reset-password",
+    "toggle_login": "/api/toggle-login",
+    "grant": "/api/grant",
+    "revoke": "/api/revoke",
+}
+_WRITES_DATA = {"create_user", "drop_user", "reset_password", "toggle_login", "grant", "revoke"}
+
+# A plain access level, translated per engine: Mongo uses a role name (attached
+# to the database), SQL engines use a privilege.
+_ACCESS = {
+    "documentdb": {"read": "read", "write": "readWrite", "admin": "dbOwner"},
+    "postgresql": {"read": "SELECT", "write": "ALL", "admin": "ALL"},
+    "mysql": {"read": "SELECT", "write": "ALL", "admin": "ALL"},
+}
+
+
+def _op_body(conn, op, fam):
+    kind = op.get("kind")
+    b = dict(conn)
+    b["_source"] = "ward"   # audit stamps this as Ward's doing
+    if op.get("username"):
+        b["username"] = op["username"]
+    if kind in ("grant", "revoke"):
+        db = op.get("database", "")
+        b["database"] = db
+        table = _ACCESS.get(fam, _ACCESS["postgresql"])
+        val = table.get((op.get("access") or "read").lower(), table["read"])
+        if fam == "documentdb":
+            b["roles"] = [{"role": val, "db": db}]   # Mongo wants role + db objects
+        else:
+            b["privilege"] = val
+    if kind == "toggle_login":
+        b["enable"] = bool(op.get("enable", True))
+    return b
+
+
+def run_operations(body, routes):
+    """Handler for /api/ai/execute: run the operations the user confirmed, in
+    order, each through its real handler. Refuses in read-only mode."""
+    if body.get("read_only"):
+        return {"error": "Read-only mode is on. Turn it off in the top bar to let Ward make changes."}
+    ops = body.get("operations") or []
+    if not ops:
+        return {"error": "Nothing to run."}
+    conn = _connection(body)
+    fam = engine_family(conn.get("engine", ""))
+    results = []
+    for op in ops:
+        route = OP_ROUTE.get(op.get("kind"))
+        handler = routes.get(route) if route else None
+        if not handler:
+            results.append({"kind": op.get("kind"), "ok": False, "error": "unsupported operation"})
+            continue
+        try:
+            res = handler(_op_body(conn, op, fam))
+        except Exception as e:  # a bad op shouldn't abort the rest
+            res = {"error": str(e)}
+        results.append({"kind": op.get("kind"), "target": op.get("username") or op.get("database"),
+                        "ok": bool(res.get("ok")) and "error" not in res,
+                        "error": res.get("error"),
+                        "password": res.get("password")})
+    return {"results": results, "ran": sum(1 for r in results if r["ok"])}

@@ -214,7 +214,8 @@ def _mutate(body, method, *args, env_default="production", **kwargs):
         m = getattr(adapter, method)(*args, **kwargs)
     except (EngineError, ValueError) as e:
         return {"error": str(e)}
-    audit(body.get("env", env_default), adapter.family, m.action, m.detail)
+    detail = f"{m.detail} · via Ward" if body.get("_source") == "ward" else m.detail
+    audit(body.get("env", env_default), adapter.family, m.action, detail)
     return {"ok": True, **m.response}
 
 
@@ -470,6 +471,7 @@ RO_BLOCKED_ROUTES = {
     "/api/create-user", "/api/reset-password", "/api/grant",
     "/api/revoke", "/api/drop-user", "/api/toggle-login",
     "/api/row-insert", "/api/row-update", "/api/row-delete",
+    "/api/ai/execute",   # Ward running a confirmed change is still a change
 }
 
 RO_DOCDB_BLOCK = re.compile(
@@ -1355,6 +1357,10 @@ def api_ai_check(body):
     return assistant.check_machine(body)
 
 
+def api_ai_execute(body):
+    return assistant.run_operations(body, ROUTES)
+
+
 def api_ai_chat(body):
     fam = engine_family(body.get("engine", ""))
     body["_audits"] = [{"id": a["id"], "title": a["title"]}
@@ -1370,6 +1376,7 @@ REQUIRES_CREDS = {
     "/api/table-meta", "/api/object-stats", "/api/row-insert", "/api/row-update", "/api/row-delete",
     "/api/query", "/api/query-stream",
     "/api/audit-run", "/api/health",
+    "/api/ai/execute",
 }
 
 ROUTES = {
@@ -1406,6 +1413,7 @@ ROUTES = {
     "/api/ai/download": api_ai_download,
     "/api/ai/check": api_ai_check,
     "/api/ai/chat": api_ai_chat,
+    "/api/ai/execute": api_ai_execute,
 }
 
 
