@@ -58,6 +58,16 @@ Or skip make entirely: `uv run warden`, `uv run warden-web`, `uv run warden-desk
 
 Desktop builds for other OSes come from CI. Push a tag like `v1.0.0` and it builds macOS (arm + intel) and Windows bundles and attaches them to a release. PyInstaller can't cross compile so that's the way.
 
+### No Python? Run it with Docker
+
+```sh
+docker compose up        # builds the image, serves the web UI at http://localhost:8642
+```
+
+That runs the web face of warden in a container (the native desktop window can't live in one). The image bundles the database clients (psql, mysql, mongosh, sqlite3), so the query console works for every engine, not just the driver-backed features.
+
+One gotcha: inside the container, `localhost` is the container. To reach a database running on your host machine, use `host.docker.internal` as the host in the connection form.
+
 ## Tests
 
 ```sh
@@ -65,9 +75,9 @@ make test              # python unit tests + smart-filter JS tests
 make test-integration  # drives live engines, skips any that aren't reachable
 ```
 
-Unit tests (`tests/`) cover the pure logic with no database needed: engine routing, the validation and quoting guards that sit in front of every query, the native-driver parsers, and the smart-filter engine. The JS tests run the real filter functions pulled straight out of `index.html`, so there's no copy to drift.
+Unit tests (`tests/`) cover the pure logic with no database needed: engine routing, the validation and quoting guards that sit in front of every query, the native-driver parsers, and the smart-filter engine. The JS tests run the real filter functions pulled straight out of `static/js/filter.js`, so there's no copy to drift.
 
-Integration tests (`tests/integration/`) drive the actual server handlers against each engine (connect, list databases, list users, browse a page) and skip cleanly when an engine isn't up. Point them at your own hosts with `WARDEN_TEST_<ENGINE>_HOST/PORT/USER/PASS`.
+Integration tests (`tests/integration/`) drive the actual server handlers against each engine (connect, list databases, list users, browse a page) and skip cleanly when an engine isn't up. Need engines to run against? `cd tests/engines && ./engines.sh up` starts them all with the creds the tests expect. Or point the tests at your own hosts with `WARDEN_TEST_<ENGINE>_HOST/PORT/USER/PASS`.
 
 CI (`.github/workflows/test.yml`) runs unit + JS on every push and PR, plus the integration tests against Postgres, MariaDB, MongoDB, and Redis service containers.
 

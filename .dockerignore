@@ -1,0 +1,16 @@
+# Keep the build context lean: none of this belongs in the image.
+.git/
+.github/
+.venv/
+**/.venv/
+**/__pycache__/
+**/*.pyc
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.claude/
+node_modules/
+*.app
+*.icns

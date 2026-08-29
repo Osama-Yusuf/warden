@@ -1,0 +1,74 @@
+# Test engines for warden. Spin up the databases the integration + smoke tests
+# expect, with the exact creds those tests default to. Ports default to the
+# standard ones (override with the WARDEN_*_PORT env vars if they clash).
+#
+#   docker compose up -d                 # all of them
+#   docker compose up -d postgres mongo  # just a couple
+#   docker compose down                  # stop and remove
+#
+# Or use ./engines.sh for friendly names + a readiness wait.
+#
+# SQLite isn't here: it's a file on disk, no server to run.
+
+name: warden-test-engines
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: adminpass
+    ports: ["${WARDEN_PG_PORT:-5432}:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  mysql:                       # MariaDB on purpose: exercises warden's MySQL/MariaDB split
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: adminpass
+    ports: ["${WARDEN_MYSQL_PORT:-3306}:3306"]
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  mongo:
+    image: mongo:6
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: adminpass
+    ports: ["${WARDEN_MONGO_PORT:-27017}:27017"]
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ping:1}).ok' || exit 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "false"
+      ELASTIC_PASSWORD: espass
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"     # keep the heap sane on a laptop
+    ports: ["${WARDEN_ES_PORT:-9200}:9200"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -u elastic:espass http://localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--requirepass", "testpass"]
+    ports: ["${WARDEN_REDIS_PORT:-6379}:6379"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a testpass ping | grep -q PONG"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
