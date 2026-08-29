@@ -63,6 +63,66 @@ def model_path(tier):
     return MODELS_DIR / CATALOG[tier]["file"]
 
 
+# ── "will this run here?" ─────────────────────────────────────────────────────
+# Rough total-RAM a tier wants to be comfortable (weights, mmap, KV cache, plus
+# headroom for the OS and the app). On a Mac the GPU is the unified memory, so
+# these hold there too.
+_TIER_RAM_GB = {"nano": 2, "small": 4, "medium": 8, "large": 16}
+
+
+def _total_ram_gb():
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:  # Windows
+        import ctypes
+
+        class _MS(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+        ms = _MS()
+        ms.dwLength = ctypes.sizeof(_MS)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
+        return ms.ullTotalPhys / 1e9
+    except Exception:
+        return None
+
+
+def machine_report():
+    """Look at the machine and say which size fits. Spec-based, so it's instant
+    and needs nothing downloaded."""
+    import platform
+
+    total = _total_ram_gb()
+    cores = os.cpu_count() or 1
+    metal = platform.system() == "Darwin" and platform.machine() in ("arm64", "aarch64")
+    fits = {t: (total is None or total >= _TIER_RAM_GB[t]) for t in _TIER_RAM_GB}
+
+    # Largest size that fits, but the 7B stays off CPU-only machines (too slow to
+    # be pleasant). If nothing "fits", Nano still runs, just snugly.
+    rec = "nano"
+    for t in ("large", "medium", "small", "nano"):
+        if fits[t] and not (t == "large" and not metal):
+            rec = t
+            break
+
+    ram = f"{round(total)} GB" if total else "an unknown amount of"
+    gpu = "an Apple GPU" if metal else "CPU only"
+    return {
+        "ram_gb": round(total, 1) if total else None,
+        "cores": cores,
+        "gpu": "Apple GPU (Metal)" if metal else "CPU only",
+        "metal": metal,
+        "recommended": rec,
+        "fits": fits,
+        "summary": f"{ram} memory, {cores} cores, {gpu}. Best fit: {CATALOG[rec]['label']}.",
+    }
+
+
 def is_downloaded(tier):
     return tier in CATALOG and model_path(tier).exists()
 

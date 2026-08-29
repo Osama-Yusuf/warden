@@ -205,6 +205,18 @@ def test_local_provider_flags_and_catalog():
     assert isinstance(download_state(), dict)
 
 
+def test_machine_report_shape():
+    from warden_core.ai.local import CATALOG, machine_report
+    r = machine_report()
+    assert r["recommended"] in CATALOG
+    assert set(r["fits"]) == set(CATALOG)
+    assert isinstance(r["cores"], int) and r["cores"] >= 1
+    assert r.get("summary")
+    # a machine that can't run the 7B should never recommend it
+    if not r["fits"]["large"]:
+        assert r["recommended"] != "large"
+
+
 def test_weak_provider_is_not_offered_ask_user(monkeypatch):
     fake = FakeProvider([ChatResult(text="hi")])
     fake.needs_key = False

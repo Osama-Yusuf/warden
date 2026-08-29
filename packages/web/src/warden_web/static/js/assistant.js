@@ -24,6 +24,7 @@ function aiReady() {
 
 let aiThread = [];       // [{role:'user'|'assistant', content}]
 let aiBusy = false;
+let _aiMachine = null;   // last "check my machine" result, if run
 
 // ── dock + panel plumbing ───────────────────────────────────────────────────
 function mountAssistantDock() {
@@ -308,8 +309,23 @@ async function aiRenderLocal() {
 
 function aiLocalHtml(tiers) {
   const cur = aiSettings().model;
-  return `<div class="ai-tiers">${tiers.map(t => aiTierCard(t, cur)).join('')}</div>
+  const m = _aiMachine;
+  const check = (m && !m.error)
+    ? `<div class="ai-machine">${ICONS.pulse || ''}<span><b>Your machine:</b> ${esc(m.summary)}</span>
+         <button type="button" class="ai-machine-re" onclick="aiCheckMachine()" title="Check again">recheck</button></div>`
+    : `<button type="button" id="aiCheckBtn" class="btn ai-check-btn" onclick="aiCheckMachine()">${ICONS.pulse || ''} Which size fits my machine?</button>`;
+  return `${check}
+    <div class="ai-tiers">${tiers.map(t => aiTierCard(t, cur)).join('')}</div>
     <div class="ai-privacy">${ICONS.shield || ''} Nothing leaves your machine. The model runs right here.</div>`;
+}
+
+async function aiCheckMachine() {
+  const btn = document.getElementById('aiCheckBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = 'Checking…'; }
+  const res = await apiPost('/api/ai/check', {});
+  _aiMachine = res.error ? null : res;
+  if (res.error) { toast(res.error, 'error'); return; }
+  aiRenderLocal();
 }
 
 function aiTierCard(t, cur) {
@@ -328,10 +344,13 @@ function aiTierCard(t, cur) {
   } else {
     ctrl = `<button type="button" class="btn" onclick="aiDownloadTier('${t.id}')">Download ${esc(t.size)}</button>`;
   }
+  const m = _aiMachine;
+  const best = (m && m.recommended === t.id) ? `<span class="ai-tier-best">best for you</span>` : '';
+  const heavy = (m && m.fits && m.fits[t.id] === false) ? `<span class="ai-tier-heavy">heavy here</span>` : '';
   const rec = t.recommended ? `<span class="ai-tier-rec">recommended</span>` : '';
-  return `<div class="ai-tier ${cur === t.id ? 'sel' : ''}">
+  return `<div class="ai-tier ${cur === t.id ? 'sel' : ''} ${heavy ? 'dim' : ''}">
     <div class="ai-tier-info">
-      <span class="ai-tier-head"><span class="ai-tier-name">${esc(t.label)}</span>${rec}<span class="ai-tier-size">${esc(t.size)}</span></span>
+      <span class="ai-tier-head"><span class="ai-tier-name">${esc(t.label)}</span>${rec}${best}${heavy}<span class="ai-tier-size">${esc(t.size)}</span></span>
       ${t.note ? `<span class="ai-tier-note">${esc(t.note)}</span>` : ''}
     </div>
     <div class="ai-tier-ctrl">${ctrl}</div></div>`;

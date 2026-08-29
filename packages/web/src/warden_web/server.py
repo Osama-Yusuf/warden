@@ -1351,6 +1351,10 @@ def api_ai_download(body):
     return assistant.download_model(body)
 
 
+def api_ai_check(body):
+    return assistant.check_machine(body)
+
+
 def api_ai_chat(body):
     fam = engine_family(body.get("engine", ""))
     body["_audits"] = [{"id": a["id"], "title": a["title"]}
@@ -1400,6 +1404,7 @@ ROUTES = {
     "/api/audit-log": api_audit_log,
     "/api/ai/models": api_ai_models,
     "/api/ai/download": api_ai_download,
+    "/api/ai/check": api_ai_check,
     "/api/ai/chat": api_ai_chat,
 }
 

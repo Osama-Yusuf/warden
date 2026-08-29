@@ -307,3 +307,8 @@ def download_model(body):
     except AIError as e:
         return {"error": str(e)}
     return {"ok": True, "state": local.download_state().get(body.get("tier", ""), {})}
+
+
+def check_machine(_body=None):
+    """Handler for /api/ai/check: look at this machine and say which size fits."""
+    return local.machine_report()
