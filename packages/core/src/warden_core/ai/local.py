@@ -266,18 +266,23 @@ def _routing_prompt(system, read_tools):
         "",
         "reply: to chat or to answer once you have what you need.",
         "tool: only when you still need data you don't have. After a tool result appears, switch to reply.",
-        "draft: for a change to users, collections, or databases. Fill 'operations', one per step, and one"
-        " per thing when the user names several. kinds: create_user, drop_user, reset_password, grant,"
-        " revoke, toggle_login, create_collection, create_database. grant/revoke need a database and an"
-        " access of read, write, or admin. toggle_login takes enable true or false (false disables login)."
-        " create_collection needs a database and a collection name. create_database puts the new name in"
-        " the database field. Never include a password; generated.",
+        "draft: for a change to users, collections, databases, or data. Fill 'operations', one per step, and"
+        " one per thing when the user names several. kinds: create_user, drop_user, reset_password, grant,"
+        " revoke, toggle_login, create_collection, create_database, insert_data, update_data, delete_data."
+        " grant/revoke need a database and an access of read, write, or admin. toggle_login takes enable true"
+        " or false. create_collection needs a database and a collection name. create_database puts the new"
+        " name in the database field. insert_data adds a document (put its fields in 'document', with the"
+        " database and collection). update_data and delete_data change or remove ONE existing document by its"
+        " 'id', so if you don't already know the id, first use the browse tool to find it, THEN draft."
+        " Never include a password; generated.",
         "ask: only when a required detail like a name is missing. Never ask about passwords or privileges.",
         "",
         "Examples:",
         '- "make user bob read-only on shop" -> {"action": "draft", "draft": {"summary": "Create bob with read on shop", "operations": [{"kind": "create_user", "username": "bob"}, {"kind": "grant", "username": "bob", "database": "shop", "access": "read"}]}}',
         '- "give mamo read on book and write on learn" -> {"action": "draft", "draft": {"summary": "Create mamo with read on book, write on learn", "operations": [{"kind": "create_user", "username": "mamo"}, {"kind": "grant", "username": "mamo", "database": "book", "access": "read"}, {"kind": "grant", "username": "mamo", "database": "learn", "access": "write"}]}}',
         '- "create a collection gg in learn" -> {"action": "draft", "draft": {"summary": "Create collection gg in learn", "operations": [{"kind": "create_collection", "database": "learn", "collection": "gg"}]}}',
+        '- "add a document name=gg age=3 to users in shop" -> {"action": "draft", "draft": {"summary": "Insert a document into shop.users", "operations": [{"kind": "insert_data", "database": "shop", "collection": "users", "document": {"name": "gg", "age": 3}}]}}',
+        '- "delete the document with id 66abc from users in shop" -> {"action": "draft", "draft": {"summary": "Delete document 66abc from shop.users", "operations": [{"kind": "delete_data", "database": "shop", "collection": "users", "id": "66abc"}]}}',
         '- "disable bob login" -> {"action": "draft", "draft": {"summary": "Disable bob login", "operations": [{"kind": "toggle_login", "username": "bob", "enable": false}]}}',
         '- "create okh and bhd as users on shop" -> {"action": "draft", "draft": {"summary": "Create okh and bhd on shop", "operations": [{"kind": "create_user", "username": "okh"}, {"kind": "grant", "username": "okh", "database": "shop", "access": "read"}, {"kind": "create_user", "username": "bhd"}, {"kind": "grant", "username": "bhd", "database": "shop", "access": "read"}]}}',
         '- "create a database named sales" -> {"action": "draft", "draft": {"summary": "Create database sales", "operations": [{"kind": "create_database", "database": "sales"}]}}',
@@ -321,12 +326,19 @@ def _decision_schema(tool_names):
                 "operations": {"type": "array", "items": {"type": "object", "properties": {
                     "kind": {"type": "string", "enum": ["create_user", "drop_user", "reset_password",
                                                         "grant", "revoke", "toggle_login", "create_collection",
-                                                        "create_database"]},
+                                                        "create_database", "insert_data", "update_data",
+                                                        "delete_data"]},
                     "username": {"type": "string"},
                     "database": {"type": "string"},
                     "collection": {"type": "string"},
                     "access": {"type": "string", "enum": ["read", "write", "admin"]},
-                    "enable": {"type": "boolean"}}}},
+                    "enable": {"type": "boolean"},
+                    "document": {"type": "object"},
+                    "id": {"type": "string"},
+                    "changes": {"type": "object"},
+                    "remove": {"type": "array", "items": {"type": "string"}},
+                    "value": {"type": "string"},
+                    "pk": {"type": "object"}}}},
                 "statements": {"type": "array", "items": {"type": "string"}}}},
             "ask": {"type": "object", "properties": {
                 "question": {"type": "string"},

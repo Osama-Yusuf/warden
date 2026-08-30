@@ -270,6 +270,9 @@ function aiOpLine(op) {
     case 'revoke': return `revoke ${a} on ${db} from ${u}`;
     case 'create_collection': return `create collection ${op.collection || '?'} in ${db}`;
     case 'create_database': return `create database ${db}`;
+    case 'insert_data': return `insert into ${op.collection || op.name || db}: ${JSON.stringify(op.document || {}).slice(0, 70)}`;
+    case 'update_data': return `update ${op.collection || op.name || db} #${op.id || '?'}: ${JSON.stringify(op.changes || {}).slice(0, 55)}`;
+    case 'delete_data': return `delete from ${op.collection || op.name || db} #${op.id || '?'}`;
     default: return op.kind || 'operation';
   }
 }
@@ -318,6 +321,7 @@ async function aiRunOps(el) {
   el.querySelector('.ai-op-lines').innerHTML = results.map(r =>
     `<div class="ai-res ${r.ok ? 'ok' : 'bad'}">${r.ok ? '&#10003;' : '&#10007;'} ${esc(r.kind)}${r.target ? ' ' + esc(r.target) : ''}` +
     `${r.error ? ' &mdash; ' + esc(r.error) : ''}` +
+    `${r.info ? ' &middot; ' + esc(Object.entries(r.info).map(([k, v]) => k + '=' + v).join(', ')) : ''}` +
     `${r.password ? ` &middot; password <code class="ai-pw" title="click to copy">${esc(r.password)}</code>` : ''}</div>`).join('');
   const ok = results.filter(r => r.ok).length;
   foot.innerHTML = `<span class="ai-op-note">${ok}/${results.length} done${results.some(r => r.password) ? ' &middot; copy the password now' : ''}.</span>`;

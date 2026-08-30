@@ -109,12 +109,19 @@ VIRTUAL_TOOLS = [
                 "type": "object", "properties": {
                     "kind": {"type": "string",
                              "enum": ["create_user", "drop_user", "reset_password", "grant", "revoke",
-                                      "toggle_login", "create_collection", "create_database"]},
+                                      "toggle_login", "create_collection", "create_database",
+                                      "insert_data", "update_data", "delete_data"]},
                     "username": {"type": "string"},
                     "database": {"type": "string", "description": "The target database (for create_database, the new name)."},
-                    "collection": {"type": "string", "description": "For create_collection: the new collection or index name."},
+                    "collection": {"type": "string", "description": "create_collection: the new name. Data ops: the collection/table/index to write."},
                     "access": {"type": "string", "enum": ["read", "write", "admin"]},
-                    "enable": {"type": "boolean", "description": "For toggle_login: true to enable login, false to disable it."}},
+                    "enable": {"type": "boolean", "description": "toggle_login: true to enable login, false to disable."},
+                    "document": {"type": "object", "description": "insert_data: the row/document as field:value pairs."},
+                    "id": {"type": "string", "description": "update_data/delete_data: the row's _id (Mongo/ES) or key (Redis). Find it by browsing first."},
+                    "changes": {"type": "object", "description": "update_data: the fields to set."},
+                    "remove": {"type": "array", "items": {"type": "string"}, "description": "update_data: field names to remove."},
+                    "value": {"type": "string", "description": "insert/update_data on Redis: the string value."},
+                    "pk": {"type": "object", "description": "update/delete_data on Postgres: the primary key as column:value."}},
                 "required": ["kind"]}}},
             "required": ["summary", "operations"]},
     },
@@ -405,7 +412,11 @@ OP_ROUTE = {
     "revoke": "/api/revoke",
     "create_collection": "/api/create-collection",
     "create_database": "/api/create-database",
+    "insert_data": "/api/row-insert",
+    "update_data": "/api/row-update",
+    "delete_data": "/api/row-delete",
 }
+_DATA_KINDS = {"insert_data", "update_data", "delete_data"}
 
 # A plain access level, translated per engine. Mongo uses one role; SQL engines
 # use a set of privileges (write really means insert+update+delete, and Postgres
@@ -470,6 +481,49 @@ def _grant_bodies(conn, op, fam):
     return [{**base, "database": db, "privilege": p} for p in privs]
 
 
+def _data_op_body(conn, op, fam):
+    """Translate a data op into the per-engine row/doc handler body. Mongo/ES use
+    a document keyed by _id; Postgres column values keyed by primary key; Redis a
+    single key. update/delete need the id/pk, which the model gets by browsing
+    first."""
+    kind = op.get("kind")
+    b = _base_body(conn, op)
+    b["database"] = op.get("database", "")
+    name = op.get("name") or op.get("collection") or op.get("table") or ""
+    if fam in ("documentdb", "elasticsearch"):
+        b["collection"] = name
+        if kind == "insert_data":
+            b["document"] = op.get("document") or {}
+        else:
+            rid = op.get("id", "")
+            # A bare Mongo ObjectId hex needs the {"$oid": ...} wrapper the handler
+            # expects; a non-hex _id (string/number) is passed through as-is.
+            if fam == "documentdb" and isinstance(rid, str) and re.fullmatch(r"[0-9a-fA-F]{24}", rid):
+                rid = {"$oid": rid}
+            b["id"] = rid
+            if kind == "update_data":
+                b["set"] = op.get("changes") or {}
+                b["unset"] = op.get("remove") or []
+    elif fam == "postgresql":
+        b["schema"] = "public"
+        b["table"] = name
+        if kind == "insert_data":
+            b["values"] = op.get("document") or {}
+        else:
+            b["pk"] = op.get("pk") or {}      # {column: value}; handler refuses without it
+            if kind == "update_data":
+                b["changes"] = op.get("changes") or {}
+    elif fam == "redis":
+        key = op.get("id") or name
+        b["id"] = key
+        if kind != "delete_data":
+            b["key"] = key
+            b["ktype"] = "string"
+            v = op.get("value")
+            b["value"] = v if v is not None else op.get("document")
+    return b
+
+
 def _is_prod(body):
     """Prod if the connection is tagged prod (env_kind from the client's own
     tagging) OR the environment name just looks like production. The name check
@@ -500,7 +554,7 @@ def run_operations(body, routes):
         if not handler:
             results.append({"kind": kind, "ok": False, "error": "unsupported operation"})
             continue
-        target = op.get("username") or op.get("collection") or op.get("database")
+        target = op.get("username") or op.get("collection") or op.get("name") or op.get("database")
         if kind in ("grant", "revoke"):
             # An access level fans out to several privilege grants on SQL; roll
             # them into one result so the card reads as one line.
@@ -511,6 +565,12 @@ def run_operations(body, routes):
                     errors.append(res["error"])
             results.append({"kind": kind, "target": target, "ok": not errors,
                             "error": _tidy_error(errors[0], target) if errors else None, "password": None})
+        elif kind in _DATA_KINDS:
+            res = _call(handler, _data_op_body(conn, op, fam))
+            ok = bool(res.get("ok")) and "error" not in res
+            info = {k: res[k] for k in ("inserted_id", "modified", "deleted") if k in res}
+            results.append({"kind": kind, "target": op.get("name") or op.get("id") or target, "ok": ok,
+                            "error": _tidy_error(res.get("error"), target), "info": info or None})
         else:
             res = _call(handler, _op_body(conn, op))
             ok = bool(res.get("ok")) and "error" not in res

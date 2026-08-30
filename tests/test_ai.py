@@ -205,6 +205,24 @@ def test_local_provider_flags_and_catalog():
     assert isinstance(download_state(), dict)
 
 
+def test_data_op_translation():
+    from warden_web.assistant import _data_op_body
+    conn = {"admin_user": "a"}
+    # Mongo: document on insert; a bare ObjectId hex gets the {"$oid"} wrapper on update
+    ins = _data_op_body(conn, {"kind": "insert_data", "database": "shop", "collection": "users",
+                               "document": {"n": 1}}, "documentdb")
+    assert ins["collection"] == "users" and ins["document"] == {"n": 1} and ins["_source"] == "ward"
+    upd = _data_op_body(conn, {"kind": "update_data", "collection": "users", "id": "a" * 24,
+                               "changes": {"n": 2}}, "documentdb")
+    assert upd["id"] == {"$oid": "a" * 24} and upd["set"] == {"n": 2}
+    # ES id is a plain string, left alone
+    assert _data_op_body(conn, {"kind": "delete_data", "collection": "logs", "id": "abc"}, "elasticsearch")["id"] == "abc"
+    # Postgres insert -> column values; Redis insert -> key + value
+    assert _data_op_body(conn, {"kind": "insert_data", "name": "t", "document": {"a": 1}}, "postgresql")["values"] == {"a": 1}
+    rk = _data_op_body(conn, {"kind": "insert_data", "name": "k", "value": "v"}, "redis")
+    assert rk["key"] == "k" and rk["value"] == "v"
+
+
 def test_es_redis_grant_translation():
     from warden_web.assistant import _grant_bodies
     conn = {"admin_user": "a"}
