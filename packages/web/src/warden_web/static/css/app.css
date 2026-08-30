@@ -910,7 +910,9 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .ai-tag-admin { background: var(--danger-soft); color: var(--danger); }
 .ai-tag-write { background: rgba(210, 153, 34, 0.14); color: var(--warning); }
 .ai-tag-read { background: var(--accent-soft); color: var(--accent); }
+.ai-tag-unres { background: rgba(210, 153, 34, 0.14); color: var(--warning); border: 1px dashed var(--warning); }
 .ai-tag-off { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
+.ai-rep-skip { padding: 8px 12px; font-size: 11.5px; color: var(--warning); border-top: 1px solid var(--border); }
 .ai-rep-chips { display: flex; gap: 6px; padding: 10px 12px; flex-wrap: wrap; }
 .ai-sev { font-size: 10px; padding: 1px 8px; border-radius: 999px; letter-spacing: .04em; text-transform: uppercase; }
 .ai-sev-high { background: var(--danger-soft); color: var(--danger); }

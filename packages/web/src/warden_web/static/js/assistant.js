@@ -288,7 +288,8 @@ function aiReport(rep) {
     const rows = (rep.users || []).map(u => {
       const badge = u.admin ? '<span class="ai-tag ai-tag-admin">admin</span>'
         : (u.write ? '<span class="ai-tag ai-tag-write">write</span>'
-          : '<span class="ai-tag ai-tag-read">read</span>');
+          : (u.unresolved ? '<span class="ai-tag ai-tag-unres">unresolved</span>'
+            : '<span class="ai-tag ai-tag-read">read</span>'));
       const login = u.login ? '' : '<span class="ai-tag ai-tag-off">no login</span>';
       return `<tr><td class="ai-rep-user">${esc(u.user)}</td><td>${badge}${login}</td>
               <td class="ai-rep-detail">${esc(u.summary || '')}</td></tr>`;
@@ -297,7 +298,8 @@ function aiReport(rep) {
     body = `<table class="ai-rep-table"><tbody>${rows || empty}</tbody></table>`;
   }
 
-  el.innerHTML = `<div class="ai-rep-h">${esc(rep.title || 'Report')}${prod}</div>${body}`;
+  const skip = rep.skipped ? `<div class="ai-rep-skip">${rep.skipped} account${rep.skipped > 1 ? 's' : ''} couldn't be inspected, so this may be incomplete.</div>` : '';
+  el.innerHTML = `<div class="ai-rep-h">${esc(rep.title || 'Report')}${prod}</div>${body}${skip}`;
   t.appendChild(el);
   aiScroll();
 }

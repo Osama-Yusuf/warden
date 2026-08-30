@@ -142,6 +142,9 @@ VIRTUAL_TOOLS = [
 
 _VIRTUAL = {t["name"] for t in VIRTUAL_TOOLS}
 _REPORT_KINDS = {"access", "write_access", "posture"}
+# A report inspects each account with its own query; bound the fan-out so a huge
+# user list can't tie up a worker. Past this, the report says N weren't inspected.
+_REPORT_MAX_USERS = 200
 _BY_VNAME = {t["name"]: t for t in VIRTUAL_TOOLS}
 
 
@@ -337,15 +340,19 @@ def _build_report(kind, conn, fam, routes, is_prod):
         if isinstance(res, dict) and res.get("error"):
             return {"error": _tidy_error(res["error"], "users")}
         users = (res.get("users") if isinstance(res, dict) else res) or []
-        infos = []
-        for u in users:
+        infos, skipped = [], 0
+        for u in users[:_REPORT_MAX_USERS]:
             name = u.get("user") if isinstance(u, dict) else u
             if not name:
                 continue
             info = _call(ui, {**conn, "username": name})
             if isinstance(info, dict) and "error" not in info:
                 infos.append(info)
-        return reports.build_report(kind, infos, fam, is_prod)
+            else:
+                skipped += 1   # couldn't inspect this account; report says so
+        # Users past the cap are counted as not-inspected rather than dropped silently.
+        skipped += max(0, len(users) - _REPORT_MAX_USERS)
+        return reports.build_report(kind, infos, fam, is_prod, skipped)
     except Exception as e:
         return {"error": _tidy_error(str(e), "users")}
 

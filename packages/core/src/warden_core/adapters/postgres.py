@@ -213,8 +213,22 @@ class PostgresAdapter(EngineAdapter):
                     if p[2] == "t": privs.append("CREATE")
                     db_privs.append({"database": p[0], "privileges": privs})
 
+        # Roles this user is a member of. Their privileges live on the role, not on
+        # this user, so an access report needs to know the memberships exist rather
+        # than reading the user's own grants as the whole story.
+        sql4 = f"""
+            SELECT r.rolname
+            FROM pg_auth_members m
+            JOIN pg_roles r ON r.oid = m.roleid
+            JOIN pg_roles u ON u.oid = m.member
+            WHERE u.rolname = {pg_literal(name)} ORDER BY 1 LIMIT 50
+        """
+        code4, out4, _ = pg_query(self.cfg, self.user, self.pwd, sql4)
+        member_of = [l.strip() for l in out4.strip().split("\n") if l.strip()] if code4 == 0 and out4.strip() else []
+
         info["grants"] = grants
         info["db_privileges"] = db_privs
+        info["member_of"] = member_of
         return info
 
     def create_user(self, name, password, can_login=True, **opts):
