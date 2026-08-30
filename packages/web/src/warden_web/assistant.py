@@ -113,7 +113,8 @@ VIRTUAL_TOOLS = [
                     "username": {"type": "string"},
                     "database": {"type": "string", "description": "The target database (for create_database, the new name)."},
                     "collection": {"type": "string", "description": "For create_collection: the new collection or index name."},
-                    "access": {"type": "string", "enum": ["read", "write", "admin"]}},
+                    "access": {"type": "string", "enum": ["read", "write", "admin"]},
+                    "enable": {"type": "boolean", "description": "For toggle_login: true to enable login, false to disable it."}},
                 "required": ["kind"]}}},
             "required": ["summary", "operations"]},
     },
@@ -308,6 +309,8 @@ def chat_turn(body, routes):
             result = provider.chat(system, messages, decls)
         except AIError as e:
             return {"error": str(e), "steps": steps}
+        except Exception:  # an odd provider wire shape shouldn't 500 the request
+            return {"error": "The model returned something I couldn't read. Try again?", "steps": steps}
 
         if not result.tool_calls:
             reply = _clean_reply(result.text)
@@ -345,7 +348,7 @@ def chat_turn(body, routes):
         reply = _clean_reply(final.text)
         if reply:
             return {"reply": reply, "steps": steps}
-    except AIError:
+    except Exception:
         pass
     return {"reply": "I had a look but couldn't put together a clean answer. Mind rephrasing?", "steps": steps}
 
@@ -368,6 +371,8 @@ def list_models(body):
         return {"models": provider.list_models()}
     except AIError as e:
         return {"error": str(e)}
+    except Exception:
+        return {"error": "Could not list models. Check the provider and key."}
 
 
 def download_model(body):
@@ -404,7 +409,8 @@ OP_ROUTE = {
 
 # A plain access level, translated per engine. Mongo uses one role; SQL engines
 # use a set of privileges (write really means insert+update+delete, and Postgres
-# needs CONNECT before table grants are any use).
+# needs CONNECT before table grants are any use). Elasticsearch uses a built-in
+# role name; Redis a set of ACL rule tokens.
 _MONGO_ROLE = {"read": "read", "write": "readWrite", "admin": "dbOwner"}
 _PG_PRIVS = {"read": ["CONNECT", "SELECT"],
              "write": ["CONNECT", "SELECT", "INSERT", "UPDATE", "DELETE"],
@@ -412,6 +418,10 @@ _PG_PRIVS = {"read": ["CONNECT", "SELECT"],
 _MYSQL_PRIVS = {"read": ["SELECT"],
                 "write": ["SELECT", "INSERT", "UPDATE", "DELETE"],
                 "admin": ["ALL PRIVILEGES"]}
+_ES_ROLE = {"read": "viewer", "write": "editor", "admin": "superuser"}
+_REDIS_RULES = {"read": ["~*", "+@read"],
+                "write": ["~*", "+@read", "+@write"],
+                "admin": ["~*", "+@all"]}
 
 
 def _base_body(conn, op):
@@ -444,16 +454,20 @@ def _grant_bodies(conn, op, fam):
     base = _base_body(conn, op)
     if fam == "documentdb":
         return [{**base, "database": db, "roles": [{"role": _MONGO_ROLE.get(access, "read"), "db": db}]}]
+    if fam == "elasticsearch":
+        return [{**base, "roles": [_ES_ROLE.get(access, "viewer")]}]   # cluster-level built-in role
+    if fam == "redis":
+        return [{**base, "rule": tok} for tok in _REDIS_RULES.get(access, ["~*", "+@read"])]
     privs = (_PG_PRIVS if fam == "postgresql" else _MYSQL_PRIVS).get(access, ["SELECT"])
     return [{**base, "database": db, "privilege": p} for p in privs]
 
 
 def _is_prod(body):
     """Prod if the connection is tagged prod (env_kind from the client's own
-    tagging) or the environment name just looks like production."""
-    kind = body.get("env_kind")
-    if kind:
-        return kind == "prod"
+    tagging) OR the environment name just looks like production. The name check
+    always runs, so a mistagged-but-prod-named env can't slip past the gate."""
+    if body.get("env_kind") == "prod":
+        return True
     return bool(re.search(r"prod", str(body.get("env", "")), re.I))
 
 

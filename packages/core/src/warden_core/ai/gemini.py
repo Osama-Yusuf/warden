@@ -46,6 +46,10 @@ def _model_path(model):
 class GeminiProvider(Provider):
     name = "gemini"
 
+    def _redact(self, s):
+        """Keep the API key out of any error we surface (it rides in the URL)."""
+        return str(s).replace(self.api_key, "***") if self.api_key else str(s)
+
     def _request(self, method, url, body=None):
         if not HAVE_URLLIB3:
             raise AIError("The AI assistant needs the native HTTP driver (urllib3)")
@@ -54,14 +58,14 @@ class GeminiProvider(Provider):
                 method, url, headers={"Content-Type": "application/json"},
                 body=json.dumps(body).encode() if body is not None else None)
         except Exception as e:  # network blip, DNS, timeout
-            raise AIError(f"Could not reach Gemini: {e}")
+            raise AIError(f"Could not reach Gemini: {self._redact(e)}")
         text = r.data.decode("utf-8", "replace")
         try:
             data = json.loads(text) if text[:1] in ("{", "[") else {"raw": text}
         except json.JSONDecodeError:
             raise AIError(f"Gemini sent back something unparseable (HTTP {r.status})")
         if r.status >= 400:
-            msg = data.get("error", {}).get("message", text[:300]) if isinstance(data, dict) else text[:300]
+            msg = self._redact(data.get("error", {}).get("message", text[:300]) if isinstance(data, dict) else text[:300])
             # The key is the thing most likely to be wrong, so name it.
             if r.status in (400, 401, 403) and "key" in msg.lower():
                 raise AIError(f"Gemini rejected the API key: {msg}")

@@ -165,9 +165,12 @@ def _run_download(tier):
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     dst = model_path(tier)
     tmp = dst.with_suffix(dst.suffix + ".part")
+    max_bytes = 12_000_000_000  # sanity cap; our largest model is ~5 GB
     try:
         def hook(block, block_size, total):
             done = block * block_size
+            if total > max_bytes or done > max_bytes:
+                raise OSError("download is larger than expected, stopping")
             _set(tier, done=done, total=total,
                  pct=round(done / total * 100, 1) if total > 0 else 0)
         urllib.request.urlretrieve(_download_url(tier), tmp, hook)
@@ -266,14 +269,16 @@ def _routing_prompt(system, read_tools):
         "draft: for a change to users, collections, or databases. Fill 'operations', one per step, and one"
         " per thing when the user names several. kinds: create_user, drop_user, reset_password, grant,"
         " revoke, toggle_login, create_collection, create_database. grant/revoke need a database and an"
-        " access of read, write, or admin. create_collection needs a database and a collection name."
-        " create_database puts the new name in the database field. Never include a password; generated.",
+        " access of read, write, or admin. toggle_login takes enable true or false (false disables login)."
+        " create_collection needs a database and a collection name. create_database puts the new name in"
+        " the database field. Never include a password; generated.",
         "ask: only when a required detail like a name is missing. Never ask about passwords or privileges.",
         "",
         "Examples:",
         '- "make user bob read-only on shop" -> {"action": "draft", "draft": {"summary": "Create bob with read on shop", "operations": [{"kind": "create_user", "username": "bob"}, {"kind": "grant", "username": "bob", "database": "shop", "access": "read"}]}}',
         '- "give mamo read on book and write on learn" -> {"action": "draft", "draft": {"summary": "Create mamo with read on book, write on learn", "operations": [{"kind": "create_user", "username": "mamo"}, {"kind": "grant", "username": "mamo", "database": "book", "access": "read"}, {"kind": "grant", "username": "mamo", "database": "learn", "access": "write"}]}}',
         '- "create a collection gg in learn" -> {"action": "draft", "draft": {"summary": "Create collection gg in learn", "operations": [{"kind": "create_collection", "database": "learn", "collection": "gg"}]}}',
+        '- "disable bob login" -> {"action": "draft", "draft": {"summary": "Disable bob login", "operations": [{"kind": "toggle_login", "username": "bob", "enable": false}]}}',
         '- "create okh and bhd as users on shop" -> {"action": "draft", "draft": {"summary": "Create okh and bhd on shop", "operations": [{"kind": "create_user", "username": "okh"}, {"kind": "grant", "username": "okh", "database": "shop", "access": "read"}, {"kind": "create_user", "username": "bhd"}, {"kind": "grant", "username": "bhd", "database": "shop", "access": "read"}]}}',
         '- "create a database named sales" -> {"action": "draft", "draft": {"summary": "Create database sales", "operations": [{"kind": "create_database", "database": "sales"}]}}',
         '- "add a user to shop" (no name given) -> {"action": "ask", "ask": {"question": "What should I name them?", "kind": "text"}}',
@@ -320,7 +325,8 @@ def _decision_schema(tool_names):
                     "username": {"type": "string"},
                     "database": {"type": "string"},
                     "collection": {"type": "string"},
-                    "access": {"type": "string", "enum": ["read", "write", "admin"]}}}},
+                    "access": {"type": "string", "enum": ["read", "write", "admin"]},
+                    "enable": {"type": "boolean"}}}},
                 "statements": {"type": "array", "items": {"type": "string"}}}},
             "ask": {"type": "object", "properties": {
                 "question": {"type": "string"},

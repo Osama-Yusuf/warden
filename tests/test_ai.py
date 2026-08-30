@@ -205,6 +205,25 @@ def test_local_provider_flags_and_catalog():
     assert isinstance(download_state(), dict)
 
 
+def test_es_redis_grant_translation():
+    from warden_web.assistant import _grant_bodies
+    conn = {"admin_user": "a"}
+    g = {"username": "u", "database": "logs"}
+    # Elasticsearch: a built-in role name (viewer/editor/superuser)
+    es = _grant_bodies(conn, {**g, "access": "write"}, "elasticsearch")
+    assert len(es) == 1 and es[0]["roles"] == ["editor"]
+    # Redis: space-free ACL rule tokens, one per grant call
+    rd = [b["rule"] for b in _grant_bodies(conn, {**g, "access": "write"}, "redis")]
+    assert rd == ["~*", "+@read", "+@write"] and all(" " not in t for t in rd)
+
+
+def test_is_prod_no_shortcircuit():
+    from warden_web.assistant import _is_prod
+    # a prod-named env sent with a wrong tag still trips the gate
+    assert _is_prod({"env_kind": "staging", "env": "production-main"}) is True
+    assert _is_prod({"env_kind": "dev", "env": "dev-1"}) is False
+
+
 def test_prod_execute_governance():
     from warden_web.assistant import _is_prod, run_operations
     assert _is_prod({"env_kind": "prod"}) is True

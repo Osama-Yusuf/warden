@@ -1541,6 +1541,8 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, ValueError):
             self._json_response({"error": "Invalid JSON"}, 400)
             return
+        if isinstance(body, dict):
+            body.pop("_source", None)   # internal audit marker; a client can't forge "via Ward"
         # SQLite has no accounts; Elasticsearch/Redis may be unauthenticated or
         # password-only, so their drivers handle whatever creds are supplied.
         if path in REQUIRES_CREDS and engine_family(body.get("engine", "")) not in ("sqlite", "elasticsearch", "redis"):
