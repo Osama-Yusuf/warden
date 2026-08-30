@@ -107,9 +107,11 @@ VIRTUAL_TOOLS = [
             "operations": {"type": "array", "description": "The concrete steps.", "items": {
                 "type": "object", "properties": {
                     "kind": {"type": "string",
-                             "enum": ["create_user", "drop_user", "reset_password", "grant", "revoke", "toggle_login"]},
+                             "enum": ["create_user", "drop_user", "reset_password", "grant", "revoke",
+                                      "toggle_login", "create_collection"]},
                     "username": {"type": "string"},
-                    "database": {"type": "string", "description": "For grant/revoke: a real database, exact name."},
+                    "database": {"type": "string", "description": "The target database, exact real name."},
+                    "collection": {"type": "string", "description": "For create_collection: the new collection or index name."},
                     "access": {"type": "string", "enum": ["read", "write", "admin"]}},
                 "required": ["kind"]}}},
             "required": ["summary", "operations"]},
@@ -393,8 +395,8 @@ OP_ROUTE = {
     "toggle_login": "/api/toggle-login",
     "grant": "/api/grant",
     "revoke": "/api/revoke",
+    "create_collection": "/api/create-collection",
 }
-_WRITES_DATA = {"create_user", "drop_user", "reset_password", "toggle_login", "grant", "revoke"}
 
 # A plain access level, translated per engine. Mongo uses one role; SQL engines
 # use a set of privileges (write really means insert+update+delete, and Postgres
@@ -419,8 +421,12 @@ def _base_body(conn, op):
 def _op_body(conn, op):
     """Body for the simple, one-call operations (not grant/revoke)."""
     b = _base_body(conn, op)
-    if op.get("kind") == "toggle_login":
+    kind = op.get("kind")
+    if kind == "toggle_login":
         b["enable"] = bool(op.get("enable", True))
+    elif kind == "create_collection":
+        b["database"] = op.get("database", "")
+        b["collection"] = op.get("collection", "")
     return b
 
 
@@ -454,7 +460,7 @@ def run_operations(body, routes):
         if not handler:
             results.append({"kind": kind, "ok": False, "error": "unsupported operation"})
             continue
-        target = op.get("username") or op.get("database")
+        target = op.get("username") or op.get("collection") or op.get("database")
         if kind in ("grant", "revoke"):
             # An access level fans out to several privilege grants on SQL; roll
             # them into one result so the card reads as one line.

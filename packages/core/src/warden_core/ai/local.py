@@ -263,14 +263,16 @@ def _routing_prompt(system, read_tools):
         "",
         "reply: to chat or to answer once you have what you need.",
         "tool: only when you still need data you don't have. After a tool result appears, switch to reply.",
-        "draft: for any create / grant / revoke / reset / delete on users. Fill 'operations', one entry per"
-        " step. kinds: create_user, drop_user, reset_password, grant, revoke, toggle_login. grant and revoke"
-        " need a database and an access of read, write, or admin. Never include a password; they're generated.",
+        "draft: for a change to users or collections. Fill 'operations', one entry per step. kinds:"
+        " create_user, drop_user, reset_password, grant, revoke, toggle_login, create_collection. grant and"
+        " revoke need a database and an access of read, write, or admin. create_collection needs a database"
+        " and a collection name. Never include a password; they're generated.",
         "ask: only when a required detail like a name is missing. Never ask about passwords or privileges.",
         "",
         "Examples:",
         '- "make user bob read-only on shop" -> {"action": "draft", "draft": {"summary": "Create bob with read on shop", "operations": [{"kind": "create_user", "username": "bob"}, {"kind": "grant", "username": "bob", "database": "shop", "access": "read"}]}}',
         '- "give mamo read on book and write on learn" -> {"action": "draft", "draft": {"summary": "Create mamo with read on book, write on learn", "operations": [{"kind": "create_user", "username": "mamo"}, {"kind": "grant", "username": "mamo", "database": "book", "access": "read"}, {"kind": "grant", "username": "mamo", "database": "learn", "access": "write"}]}}',
+        '- "create a collection gg in learn" -> {"action": "draft", "draft": {"summary": "Create collection gg in learn", "operations": [{"kind": "create_collection", "database": "learn", "collection": "gg"}]}}',
         '- "add a user to shop" (no name given) -> {"action": "ask", "ask": {"question": "What should I name them?", "kind": "text"}}',
         '- "who are the admins?" -> {"action": "tool", "tool": "list_users", "args": {}}',
         '- (after a tool result is shown) -> {"action": "reply", "reply": "Two can write: alice on shop and the admin."}',
@@ -310,9 +312,10 @@ def _decision_schema(tool_names):
                 "summary": {"type": "string"},
                 "operations": {"type": "array", "items": {"type": "object", "properties": {
                     "kind": {"type": "string", "enum": ["create_user", "drop_user", "reset_password",
-                                                        "grant", "revoke", "toggle_login"]},
+                                                        "grant", "revoke", "toggle_login", "create_collection"]},
                     "username": {"type": "string"},
                     "database": {"type": "string"},
+                    "collection": {"type": "string"},
                     "access": {"type": "string", "enum": ["read", "write", "admin"]}}}},
                 "statements": {"type": "array", "items": {"type": "string"}}}},
             "ask": {"type": "object", "properties": {

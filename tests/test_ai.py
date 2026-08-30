@@ -205,6 +205,13 @@ def test_local_provider_flags_and_catalog():
     assert isinstance(download_state(), dict)
 
 
+def test_create_collection_op():
+    from warden_web.assistant import OP_ROUTE, _op_body
+    assert OP_ROUTE["create_collection"] == "/api/create-collection"
+    b = _op_body({"admin_user": "a"}, {"kind": "create_collection", "database": "learn", "collection": "gg"})
+    assert b["database"] == "learn" and b["collection"] == "gg" and b["_source"] == "ward"
+
+
 def test_grant_access_translation():
     from warden_web.assistant import _grant_bodies
     conn = {"admin_user": "a"}

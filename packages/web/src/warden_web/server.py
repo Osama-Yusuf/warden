@@ -346,6 +346,12 @@ def api_list_collections(body):
         return {"error": str(e)}
 
 
+def api_create_collection(body):
+    """Create an empty collection (Mongo) or index (Elasticsearch). Engines that
+    need a column definition (SQL) answer NotSupported."""
+    return _mutate(body, "create_collection", _target(body))
+
+
 BROWSE_MAX_LIMIT = 200
 BROWSE_SEARCH_MAX = 200
 
@@ -471,6 +477,7 @@ RO_BLOCKED_ROUTES = {
     "/api/create-user", "/api/reset-password", "/api/grant",
     "/api/revoke", "/api/drop-user", "/api/toggle-login",
     "/api/row-insert", "/api/row-update", "/api/row-delete",
+    "/api/create-collection",
     "/api/ai/execute",   # Ward running a confirmed change is still a change
 }
 
@@ -1372,7 +1379,7 @@ REQUIRES_CREDS = {
     "/api/connect", "/api/list-users", "/api/user-info",
     "/api/create-user", "/api/reset-password", "/api/grant",
     "/api/revoke", "/api/drop-user", "/api/toggle-login",
-    "/api/list-databases", "/api/list-collections", "/api/browse-data",
+    "/api/list-databases", "/api/list-collections", "/api/create-collection", "/api/browse-data",
     "/api/table-meta", "/api/object-stats", "/api/row-insert", "/api/row-update", "/api/row-delete",
     "/api/query", "/api/query-stream",
     "/api/audit-run", "/api/health",
@@ -1393,6 +1400,7 @@ ROUTES = {
     "/api/toggle-login": api_toggle_login,
     "/api/list-databases": api_list_databases,
     "/api/list-collections": api_list_collections,
+    "/api/create-collection": api_create_collection,
     "/api/browse-data": api_browse_data,
     "/api/table-meta": api_table_meta,
     "/api/object-stats": api_object_stats,

@@ -78,6 +78,11 @@ class MongoAdapter(EngineAdapter):
                                        "db.getCollectionNames()", db=database))
         return [{"name": n, "size_bytes": None} for n in sorted(data or [])]
 
+    def create_collection(self, target):
+        database, collection = self._ns(target, require_collection=True)
+        self._unwrap(mn.create_collection(self.cfg, self.user, self.pwd, database, collection))
+        return Mutation("CREATE COLLECTION", f"{database}.{collection}", {"collection": collection})
+
     def browse(self, target, limit, offset, search):
         database, collection = self._ns(target, require_collection=True)
         if not mn.available():

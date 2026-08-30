@@ -280,6 +280,15 @@ def collection_meta(cfg, user, pwd, database, collection):
     return _run(go)
 
 
+def create_collection(cfg, user, pwd, database, collection):
+    """Create an empty collection. Returns ({created}, error)."""
+    def go():
+        c = get_client(cfg, user, pwd)
+        c[database].create_collection(collection)
+        return {"created": collection}
+    return _run(go)
+
+
 def insert_document(cfg, user, pwd, database, collection, doc):
     """insertOne. Returns ({inserted_id}, error)."""
     def go():

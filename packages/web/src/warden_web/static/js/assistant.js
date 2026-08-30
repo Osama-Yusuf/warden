@@ -268,6 +268,7 @@ function aiOpLine(op) {
     case 'toggle_login': return `${op.enable === false ? 'disable' : 'enable'} login for ${u}`;
     case 'grant': return `grant ${a} on ${db} to ${u}`;
     case 'revoke': return `revoke ${a} on ${db} from ${u}`;
+    case 'create_collection': return `create collection ${op.collection || '?'} in ${db}`;
     default: return op.kind || 'operation';
   }
 }
