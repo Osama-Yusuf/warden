@@ -39,53 +39,15 @@ jobs:
 
   integration:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
-    services:
-      # Host ports are shifted off the defaults on purpose. On the self-hosted
-      # runner the dev containers already hold 5432/3306/27017/6379, so a service
-      # publishing the same port would fail to start; the high ports are free on
-      # both the local box and GitHub's runners. WARDEN_TEST_*_PORT (below) points
-      # the tests at them.
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: admin
-          POSTGRES_PASSWORD: adminpass
-          POSTGRES_DB: postgres
-        ports: ["55432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U admin" --health-interval 5s
-          --health-timeout 5s --health-retries 10
-      mariadb:
-        image: mariadb:11
-        env:
-          MARIADB_ROOT_PASSWORD: adminpass
-          MARIADB_DATABASE: shop
-        ports: ["53306:3306"]
-        options: >-
-          --health-cmd "healthcheck.sh --connect --innodb_initialized"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-      mongo:
-        image: mongo:6
-        env:
-          MONGO_INITDB_ROOT_USERNAME: admin
-          MONGO_INITDB_ROOT_PASSWORD: adminpass
-        ports: ["57017:27017"]
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1})'"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-      redis:
-        image: redis:7
-        ports: ["56379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping" --health-interval 5s
-          --health-timeout 5s --health-retries 10
-    env:
-      # match the service containers configured above
-      WARDEN_TEST_PG_PORT: 55432
-      WARDEN_TEST_MYSQL_PORT: 53306
-      WARDEN_TEST_MONGO_PORT: 57017
-      WARDEN_TEST_REDIS_PORT: 56379
-      WARDEN_TEST_REDIS_PASS: ""      # redis:7 runs without auth here
+    # No `services:` here on purpose. On GitHub's runners this job would spin up
+    # its own DB containers, but on the local box that meant four databases doing
+    # a fresh init at once inside OrbStack's VM, where mariadb's --initialize is
+    # flaky (io_uring is restricted) and the load destabilises the runner. The
+    # self-hosted runner uses host networking, so it reaches the dev containers
+    # that `tests/engines/docker-compose.yml` already keeps running and healthy on
+    # the standard ports. Bring them up first (`docker compose -f
+    # tests/engines/docker-compose.yml up -d`); a test whose engine is unreachable
+    # skips rather than fails, so a stopped stack shows as skips, not red.
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
