@@ -332,6 +332,30 @@ def test_resume_draft_guards():
     assert assistant.resume_draft({"answer": "x"}, {}).get("error")   # no draft
 
 
+def test_username_placeholder_guard():
+    from warden_web import assistant
+    # the invented "user" name is challenged, a real name passes
+    q = assistant._validate_draft_names({"operations": [{"kind": "create_user", "username": "user"}]})
+    assert q and q["kind"] == "text" and q["_resume"]["kind"] == "username"
+    assert assistant._validate_draft_names({"operations": [{"kind": "create_user", "username": "mamo"}]}) is None
+    assert assistant._validate_draft_names({"operations": [{"kind": "create_user", "username": ""}]})  # empty asks too
+    # answering replaces the placeholder across the create AND its grants
+    d = {"operations": [{"kind": "create_user", "username": "user"},
+                        {"kind": "grant", "username": "user", "database": "shop", "access": "read"}]}
+    assistant._apply_answer(d, {"kind": "username", "was": "user"}, "mamo")
+    assert d["operations"][0]["username"] == "mamo" and d["operations"][1]["username"] == "mamo"
+
+
+def test_revoke_all_routed_and_warning_surfaced():
+    from warden_web.assistant import OP_ROUTE, run_operations
+    assert OP_ROUTE["revoke_all"] == "/api/revoke-all"
+    # a warning from a revoke handler is carried into the result, not swallowed
+    routes = {"/api/revoke": lambda b: {"ok": True, "warning": "PUBLIC still allows connect"}}
+    out = run_operations({"engine": "postgresql", "operations": [
+        {"kind": "revoke", "username": "u", "database": "shop", "access": "read"}]}, routes)
+    assert out["results"][0]["warning"] == "PUBLIC still allows connect"
+
+
 def test_es_grounding_and_collection_fallback():
     from warden_web import assistant
     # ES has one cluster and no databases, so don't block a draft whose "database"

@@ -409,7 +409,8 @@ async function aiRunOps(el) {
     `<div class="ai-res ${r.ok ? 'ok' : 'bad'}">${r.ok ? '&#10003;' : '&#10007;'} ${esc(r.kind)}${r.target ? ' ' + esc(r.target) : ''}` +
     `${r.error ? ' &mdash; ' + esc(r.error) : ''}` +
     `${r.info ? ' &middot; ' + esc(Object.entries(r.info).map(([k, v]) => k + '=' + v).join(', ')) : ''}` +
-    `${r.password ? ` &middot; password <code class="ai-pw" title="click to copy">${esc(r.password)}</code>` : ''}</div>`).join('');
+    `${r.password ? ` &middot; password <code class="ai-pw" title="click to copy">${esc(r.password)}</code>` : ''}` +
+    `${r.warning ? `<div class="ai-res-warn">&#9888; ${esc(r.warning)}</div>` : ''}</div>`).join('');
   const ok = results.filter(r => r.ok).length;
   foot.innerHTML = `<span class="ai-op-note">${ok}/${results.length} done${results.some(r => r.password) ? ' &middot; copy the password now' : ''}.</span>`;
   el.querySelectorAll('.ai-pw').forEach(c => { c.onclick = () => copyText(c.textContent); });

@@ -117,6 +117,9 @@ class EngineAdapter:
     def revoke(self, name, **opts):
         raise NotSupported("revoking is not supported here")
 
+    def revoke_all(self, name):
+        raise NotSupported("revoke-all is not supported here")
+
     def drop_user(self, name):
         raise NotSupported("dropping users is not supported here")
 

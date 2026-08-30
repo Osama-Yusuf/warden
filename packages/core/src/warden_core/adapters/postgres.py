@@ -255,43 +255,98 @@ class PostgresAdapter(EngineAdapter):
             raise EngineError(err or out)
         return Mutation("RESET PASSWORD", name, {"password": password})
 
+    def _run_each(self, statements, db=None, strict=True):
+        """Run each statement as its own call. Postgres's driver here (psycopg3)
+        does not run a semicolon-joined string as separate statements reliably, so
+        a REASSIGN;DROP OWNED batch could drop what the REASSIGN just moved. One
+        call per statement keeps the order (and each autocommit) honest."""
+        for s in statements:
+            ok, out, err = pg_exec(self.cfg, self.user, self.pwd, s, db=db)
+            if not ok and strict:
+                raise EngineError(err or out)
+
     def grant(self, name, privilege=None, database=None, schema=None, **opts):
         priv = validate_pg_privilege(privilege or "SELECT")
         database = validate_ident(database or "postgres", "database")
         schema = validate_ident(schema or "public", "schema")
-        # CONNECT/CREATE are database-level and run against the default db;
-        # everything else is table-level and runs against the target database.
         if priv in ("CONNECT", "CREATE"):
-            sql = f"GRANT {priv} ON DATABASE {pg_ident(database)} TO {pg_ident(name)}"
-            run_db = self.cfg.get("default_db", "postgres")
+            # Database-level, run against the default db.
+            self._run_each([f"GRANT {priv} ON DATABASE {pg_ident(database)} TO {pg_ident(name)}"],
+                           db=self.cfg.get("default_db", "postgres"))
         else:
-            sql = f"GRANT {priv} ON ALL TABLES IN SCHEMA {pg_ident(schema)} TO {pg_ident(name)}"
-            run_db = database
-        ok, out, err = pg_exec(self.cfg, self.user, self.pwd, sql, db=run_db)
-        if not ok:
-            raise EngineError(err or out)
+            # Table-level: schema USAGE + the privilege on existing tables + the
+            # same as a default for tables created later, so "read" keeps working
+            # as the schema grows instead of covering only today's tables.
+            self._run_each([
+                f"GRANT USAGE ON SCHEMA {pg_ident(schema)} TO {pg_ident(name)}",
+                f"GRANT {priv} ON ALL TABLES IN SCHEMA {pg_ident(schema)} TO {pg_ident(name)}",
+                f"ALTER DEFAULT PRIVILEGES IN SCHEMA {pg_ident(schema)} GRANT {priv} ON TABLES TO {pg_ident(name)}",
+            ], db=database)
         return Mutation("GRANT", f"{name} += {priv} on {database}.{schema}")
 
     def revoke(self, name, privilege=None, database=None, schema=None, **opts):
         priv = validate_pg_privilege(privilege or "SELECT")
         database = validate_ident(database or "postgres", "database")
         schema = validate_ident(schema or "public", "schema")
+        note = None
         if priv in ("CONNECT", "CREATE"):
-            sql = f"REVOKE {priv} ON DATABASE {pg_ident(database)} FROM {pg_ident(name)}"
-            run_db = self.cfg.get("default_db", "postgres")
+            self._run_each([f"REVOKE {priv} ON DATABASE {pg_ident(database)} FROM {pg_ident(name)}"],
+                           db=self.cfg.get("default_db", "postgres"))
         else:
-            sql = f"REVOKE {priv} ON ALL TABLES IN SCHEMA {pg_ident(schema)} FROM {pg_ident(name)}"
-            run_db = database
-        ok, out, err = pg_exec(self.cfg, self.user, self.pwd, sql, db=run_db)
-        if not ok:
-            raise EngineError(err or out)
-        return Mutation("REVOKE", f"{name} -= {priv} on {database}.{schema}")
+            self._run_each([
+                f"REVOKE {priv} ON ALL TABLES IN SCHEMA {pg_ident(schema)} FROM {pg_ident(name)}",
+                f"ALTER DEFAULT PRIVILEGES IN SCHEMA {pg_ident(schema)} REVOKE {priv} ON TABLES FROM {pg_ident(name)}",
+            ], db=database)
+        # Postgres grants CONNECT to PUBLIC by default, so revoking it from one
+        # user changes nothing on its own. Say so rather than claim it's blocked.
+        if priv == "CONNECT" and self._public_can_connect(database):
+            note = (f"{name} can still connect to {database}: Postgres allows PUBLIC "
+                    f"connections by default. Lock the database down to actually restrict it.")
+        m = Mutation("REVOKE", f"{name} -= {priv} on {database}.{schema}")
+        if note:
+            m.response["warning"] = note
+        return m
+
+    def _public_can_connect(self, database):
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            f"SELECT has_database_privilege('public', {pg_literal(database)}, 'CONNECT')",
+            db=self.cfg.get("default_db", "postgres"))
+        return code == 0 and out.strip().lower() in ("t", "true")
+
+    def _connectable_dbs(self):
+        """Databases the admin can connect to, for cluster-wide role cleanup: a
+        role can't be dropped while it owns or holds anything in any database."""
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate")
+        return [l.strip() for l in out.strip().split("\n") if l.strip()] if code == 0 else []
+
+    def _strip_role(self, name, drop):
+        """Hand back everything a role owns or holds, across every database, so it
+        can be dropped (or fully de-privileged) in one shot instead of failing on
+        the first dependency. Objects are reassigned to the admin, never deleted."""
+        ident = pg_ident(name)
+        admin = pg_ident(self.user)
+        # Close its sessions first, or DROP hits "role is being used by N sessions".
+        pg_exec(self.cfg, self.user, self.pwd,
+                f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = {pg_literal(name)}")
+        for db in self._connectable_dbs():
+            # REASSIGN moves its objects to the admin (kept, not deleted); DROP
+            # OWNED then only clears its privileges. Separate calls, so the reassign
+            # commits before the drop and a table can't be lost.
+            self._run_each([f"REASSIGN OWNED BY {ident} TO {admin}",
+                            f"DROP OWNED BY {ident}"], db=db, strict=False)
+        if drop:
+            ok, out, err = pg_exec(self.cfg, self.user, self.pwd, f"DROP ROLE {ident}")
+            if not ok:
+                raise EngineError(err or out)
 
     def drop_user(self, name):
-        ok, out, err = pg_exec(self.cfg, self.user, self.pwd, f"DROP USER {pg_ident(name)}")
-        if not ok:
-            raise EngineError(err or out)
+        self._strip_role(name, drop=True)
         return Mutation("DROP USER", name)
+
+    def revoke_all(self, name):
+        self._strip_role(name, drop=False)
+        return Mutation("REVOKE ALL", f"{name}: all privileges revoked")
 
     def toggle_login(self, name, enable):
         kw = "LOGIN" if enable else "NOLOGIN"

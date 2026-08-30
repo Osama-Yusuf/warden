@@ -525,10 +525,13 @@ function userPanelSql(res, uAttr, isDocdb) {
   const pgButtons = isDocdb ? '' : (res.can_login
     ? `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, false)">🔒 Disable login</button>`
     : `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, true)">🔓 Enable login</button>`);
+  const revokeAllBtn = isDocdb ? '' :
+    `<button class="btn btn-ghost" data-user="${uAttr}" onclick="confirmRevokeAll(this.dataset.user)">⊘ Revoke all access</button>`;
   html += `<div class="user-toolbar">
     <button class="btn btn-primary" data-user="${uAttr}" onclick="openResetModal(this.dataset.user)">🔑 Reset password</button>
     <button class="btn btn-ghost" data-user="${uAttr}" onclick="openTestLoginModal(this.dataset.user, '')">✓ Test access</button>
     ${pgButtons}
+    ${revokeAllBtn}
     <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">🗑️ Drop user</button>
   </div>`;
   html += '</div>';
