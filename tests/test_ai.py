@@ -234,67 +234,41 @@ def test_mongo_id_guard():
 
 def test_match_resolution():
     from warden_web import assistant
-    def browse_one(_sub):
-        return {"columns": ["name", "role"], "rows": [["bob", "v"], ["alice", "a"]],
-                "ids": [{"$oid": "1" * 24}, {"$oid": "2" * 24}]}
+    # exactly one match -> auto-resolve its id, no question
     d = {"operations": [{"kind": "delete_data", "collection": "u", "match": {"name": "bob"}}]}
-    assert assistant._resolve_draft_matches(d, {}, "documentdb", {"/api/browse-data": browse_one}) is None
-    assert d["operations"][0]["id"] == {"$oid": "1" * 24}   # exactly one -> resolved
-    # ambiguous -> a select question, nothing deleted
+    assert assistant._resolve_draft_matches(d, {}, "documentdb",
+        {"/api/resolve-match": lambda s: {"ids": [{"$oid": "1" * 24}], "truncated": False}}) is None
+    assert d["operations"][0]["id"] == {"$oid": "1" * 24}
+    # several matches -> a select question, nothing resolved
     d2 = {"operations": [{"kind": "delete_data", "collection": "u", "match": {"name": "dup"}}]}
     q2 = assistant._resolve_draft_matches(d2, {}, "documentdb",
-        {"/api/browse-data": lambda s: {"columns": ["name"], "rows": [["dup"], ["dup"]], "ids": [1, 2]}})
+        {"/api/resolve-match": lambda s: {"ids": [1, 2], "truncated": False}})
     assert q2 and q2["kind"] == "select" and len(q2["options"]) == 2 and "id" not in d2["operations"][0]
     # no match -> ask for the id, don't draft a blind delete
     q0 = assistant._resolve_draft_matches({"operations": [{"kind": "delete_data", "collection": "u", "match": {"x": 1}}]},
-        {}, "documentdb", {"/api/browse-data": lambda s: {"columns": [], "rows": [], "ids": []}})
+        {}, "documentdb", {"/api/resolve-match": lambda s: {"ids": [], "truncated": False}})
     assert q0 and q0["kind"] == "text"
 
 
-def test_match_resolution_exact_not_substring():
+def test_match_resolution_truncated_and_stray_match():
     from warden_web import assistant
-    # "bob" must not resolve to "bobby": exact value match, not a substring hit
-    d = {"operations": [{"kind": "delete_data", "collection": "u", "match": {"name": "bob"}}]}
-    assert assistant._resolve_draft_matches(d, {}, "documentdb",
-        {"/api/browse-data": lambda s: {"columns": ["name"], "rows": [["bobby"], ["bob"]],
-                                        "ids": [{"$oid": "a" * 24}, {"$oid": "b" * 24}]}}) is None
-    assert d["operations"][0]["id"] == {"$oid": "b" * 24}
-
-
-def test_match_resolution_large_collection_refuses():
-    from warden_web import assistant
-    # A collection bigger than the scan cap: every page is full and none of the
-    # rows match, so we can't be sure -> must ask, never silently auto-resolve.
-    calls = {"n": 0}
-    def full_pages(_sub):
-        calls["n"] += 1
-        return {"columns": ["name"], "rows": [["x"]] * assistant._MATCH_PAGE,
-                "ids": list(range(assistant._MATCH_PAGE))}
-    q = assistant._resolve_draft_matches(
-        {"operations": [{"kind": "delete_data", "collection": "big", "match": {"name": "bob"}}]},
-        {}, "documentdb", {"/api/browse-data": full_pages})
-    assert q and q["kind"] == "text"                       # refused, asked for the id
-    assert calls["n"] == assistant._MATCH_SCAN_MAX // assistant._MATCH_PAGE   # bounded scan
-    # A stray match on a SQL op is ignored so its pk path still runs
+    # too many matches to be sure -> ask (select), never auto-resolve
+    d = {"operations": [{"kind": "delete_data", "collection": "big", "match": {"name": "bob"}}]}
+    q = assistant._resolve_draft_matches(d, {}, "documentdb",
+        {"/api/resolve-match": lambda s: {"ids": [1, 2, 3], "truncated": True}})
+    assert q and q["kind"] == "select" and "id" not in d["operations"][0]
+    # truncated with nothing surfaced (index too big to read) -> ask for the id
+    q2 = assistant._resolve_draft_matches({"operations": [{"kind": "delete_data", "collection": "big", "match": {"name": "z"}}]},
+        {}, "documentdb", {"/api/resolve-match": lambda s: {"ids": [], "truncated": True}})
+    assert q2 and q2["kind"] == "text"
+    # a lookup error asks rather than guessing
+    q3 = assistant._resolve_draft_matches({"operations": [{"kind": "delete_data", "collection": "u", "match": {"name": "b"}}]},
+        {}, "documentdb", {"/api/resolve-match": lambda s: {"error": "boom"}})
+    assert q3 and q3["kind"] == "text"
+    # a stray match on a SQL op is ignored so its pk path still runs
     assert assistant._resolve_draft_matches(
         {"operations": [{"kind": "delete_data", "table": "t", "pk": {"id": 5}, "match": {"name": "z"}}]},
-        {}, "postgresql", {"/api/browse-data": full_pages}) is None
-
-
-def test_match_resolution_respects_echoed_page_limit():
-    from warden_web import assistant
-    # The handler caps each page at 2 rows (echoes limit=2), smaller than the
-    # requested page. The one match sits on the third page; if completeness were
-    # judged against the requested size, it would stop after page one and miss it.
-    coll = [("alice", "1"), ("bob", "2"), ("carol", "3"), ("dave", "4"), ("target", "5")]
-    def paged(sub):
-        chunk = coll[sub["offset"]:sub["offset"] + 2]
-        return {"columns": ["name", "k"], "limit": 2,
-                "rows": [[n, k] for n, k in chunk],
-                "ids": [{"$oid": k * 24} for _, k in chunk]}
-    d = {"operations": [{"kind": "delete_data", "collection": "u", "match": {"name": "target"}}]}
-    assert assistant._resolve_draft_matches(d, {}, "documentdb", {"/api/browse-data": paged}) is None
-    assert d["operations"][0]["id"] == {"$oid": "5" * 24}
+        {}, "postgresql", {"/api/resolve-match": lambda s: {"ids": [], "truncated": False}}) is None
 
 
 def test_es_grounding_and_collection_fallback():

@@ -135,6 +135,10 @@ class EngineAdapter:
     def delete_row(self, target, body):
         raise NotSupported("row editing isn't available for this engine")
 
+    # ── resolve a {field: value} match to document ids (doc stores only) ──────
+    def find_matching_ids(self, target, match, cap=25):
+        raise NotSupported("matching rows by field isn't supported for this engine")
+
     # ── query console ───────────────────────────────────────────────────────
     def run_query(self, database, query):
         raise NotSupported("the query console isn't wired up for this engine")

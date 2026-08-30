@@ -253,90 +253,57 @@ def _op_collection(op, fam):
     return str(name)
 
 
-# How far we'll scan a collection to resolve a match before giving up and asking
-# for the id. Deleting the wrong row is worse than making the user paste an _id,
-# so a match in a very large collection deliberately falls back to that.
-_MATCH_PAGE = 200
-_MATCH_SCAN_MAX = 2000
-
-
 def _find_by_match(conn, op, fam, routes):
     """Resolve a {field: value} match to the matching document ids in a doc-store
-    collection (Mongo/ES). Pages through the collection applying an exact filter
-    on real document values, rather than the browser's substring search which
-    samples fields and stops at one page: that could hide a second match and turn
-    an ambiguous match into a confident wrong id. Returns (ids, complete, error),
-    where complete is False when the collection was bigger than we'd scan, so the
-    caller knows the list may be partial and must ask rather than act.
-
-    The scan reads a bounded run of pages back to back and assumes the collection
-    isn't being rewritten underneath it. A write landing mid-scan could in theory
-    shift a row across a page edge; the fallout is a match we then ask about, and
-    the user still confirms the resolved id before anything runs."""
+    collection (Mongo/ES). Runs one server-side query through /api/resolve-match:
+    Mongo does an exact find, Elasticsearch one bounded search filtered on the
+    real source values. Because it's a single query, 0/1/many reflects the whole
+    collection and there's no paging to race with a concurrent write. Returns
+    (ids, truncated, error); truncated means there were more matches than we'd
+    list, so the caller must ask rather than act."""
     if fam not in ("documentdb", "elasticsearch"):
-        return [], True, None   # Postgres/Redis identify rows their own way
+        return [], False, None   # Postgres/Redis identify rows their own way
     match = op.get("match")
-    handler = routes.get("/api/browse-data")
+    handler = routes.get("/api/resolve-match")
     if not isinstance(match, dict) or not match or not handler:
-        return [], True, None
+        return [], False, None
     coll = _op_collection(op, fam)
-    out, offset = [], 0
+    sub = dict(conn)
+    sub.update({"database": op.get("database", ""), "collection": coll,
+                "table": coll, "match": match})
     try:
-        while offset < _MATCH_SCAN_MAX:
-            sub = dict(conn)
-            sub.update({"database": op.get("database", ""), "collection": coll,
-                        "table": coll, "limit": _MATCH_PAGE, "offset": offset})
-            res = handler(sub)
-            if not isinstance(res, dict) or "error" in res:
-                return [], False, (res.get("error") if isinstance(res, dict) else "browse failed")
-            rows, ids, cols = res.get("rows") or [], res.get("ids") or [], res.get("columns") or []
-            if len(ids) < len(rows):
-                # rows and ids should line up; if they don't, we can't safely map a
-                # match to an id, so surface it as an error (ask) rather than guess.
-                return [], False, "the browser returned mismatched rows and ids"
-            for i, row in enumerate(rows):
-                rowmap = dict(zip(cols, row))
-                if all(str(rowmap.get(f)) == str(v) for f, v in match.items()):
-                    out.append(ids[i])
-            # A short page means we've seen the whole collection. Trust the page
-            # size the handler actually used (it may cap our request), not the
-            # size we asked for, or a lower cap would look like the end too early.
-            try:
-                page = int(res.get("limit") or _MATCH_PAGE)
-            except (TypeError, ValueError):
-                page = _MATCH_PAGE
-            if not rows or len(rows) < page:
-                return out, True, None
-            offset += len(rows)
-        return out, False, None   # hit the scan cap before running out of rows
+        res = handler(sub)
     except Exception as e:
         return [], False, str(e)
+    if not isinstance(res, dict) or "error" in res:
+        return [], False, (res.get("error") if isinstance(res, dict) else "lookup failed")
+    return list(res.get("ids") or []), bool(res.get("truncated")), None
 
 
 def _resolve_draft_matches(draft, conn, fam, routes):
     """For an update/delete_data op that gives a match instead of an id, find the
     row and fill in its id. Only doc stores (Mongo/ES) resolve this way; a stray
     match on another engine is ignored so its pk/key path still works. The one
-    case we act on is a single match in a collection we scanned end to end;
-    anything else (none, several, or too big to be sure) asks rather than guess."""
+    case we act on is a single unambiguous match; none, several, or too many to be
+    sure all ask rather than guess, so a confirmed delete never hits the wrong row."""
     if fam not in ("documentdb", "elasticsearch"):
         return None
     for op in draft.get("operations") or []:
         if op.get("kind") not in ("update_data", "delete_data") or op.get("id") or not op.get("match"):
             continue
-        ids, complete, err = _find_by_match(conn, op, fam, routes)
+        ids, truncated, err = _find_by_match(conn, op, fam, routes)
         coll = _op_collection(op, fam) or "the collection"
         if err:
             return {"question": f"Couldn't look that up in {coll}: {err}. What's the exact _id?", "kind": "text"}
-        if complete and len(ids) == 1:
+        if not truncated and len(ids) == 1:
             op["id"] = ids[0]
             continue
         if not ids:
-            reason = (f"Nothing in {coll} matches {op['match']}" if complete
-                      else f"{coll} is too large to scan, so I couldn't pin down {op['match']}")
+            reason = (f"Nothing in {coll} matches {op['match']}" if not truncated
+                      else f"{coll} is large, so I couldn't pin down {op['match']}")
             return {"question": f"{reason}. What's the exact _id?", "kind": "text"}
-        head = (f"{len(ids)} documents in {coll} match {op['match']}" if complete
-                else f"{coll} is large; at least {len(ids)} rows match {op['match']}")
+        head = (f"Several documents in {coll} match {op['match']}" if truncated
+                else f"{len(ids)} documents in {coll} match {op['match']}")
         return {"question": f"{head}. Which one?", "kind": "select",
                 "options": [_id_str(x) for x in ids[:12]], "hint": "Pick the _id to change, or type it."}
     return None
