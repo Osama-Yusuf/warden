@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Start the self-hosted GitHub Actions runner(s) in Docker.
+#
+# Why this exists: Actions minutes are metered on a private repo, and when they
+# run out a job is rejected in about a second with zero steps, reported as
+# `failure`, which reads like a broken build. Self-hosted minutes are free.
+#
+# Registration tokens are minted here, passed to each container as an
+# environment variable, and never written to disk. Nothing in this repository
+# is a credential, and the tokens expire within the hour regardless.
+#
+#   scripts/runner-up            start RUNNER_COUNT runners
+#   scripts/runner-up --rebuild  force an image rebuild first
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+IMAGE=warden-runner
+BASE=warden-runner
+REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+REPO_URL="https://github.com/${REPO}"
+ARCH="$(uname -m)"; [ "$ARCH" = "x86_64" ] && ARCH=x64 || ARCH=arm64
+
+# One file holds the whole envelope; see docker/runner/limits.env for why each
+# number is what it is. Sourced so it only fills in what the environment hasn't
+# already set (so `RUNNER_COUNT=1 scripts/runner-up` still means one).
+# shellcheck disable=SC1091
+while IFS='=' read -r k v; do
+  case "$k" in ''|\#*) continue ;; esac
+  [ -n "${!k-}" ] || export "$k=$v"
+done < docker/runner/limits.env
+
+if ! docker info >/dev/null 2>&1; then
+  echo "x Docker is not running. Start Docker/OrbStack and try again." >&2
+  exit 1
+fi
+
+# Refuse to pull the rug from under a job in flight: replacing a container
+# mid-dispatch strands the job on a runner id that no longer exists, and it then
+# sits `queued` forever. Only a runner with a container behind it can be running
+# anything, so count those, not GitHub's busy flag (which lingers after the
+# container is gone).
+if [ "${FORCE:-}" != "1" ]; then
+  live=0
+  for c in $(docker ps --filter "name=${BASE}" --format '{{.Names}}'); do
+    b="$(gh api "repos/${REPO}/actions/runners" \
+          -q '[.runners[] | select(.name=="'"$c"'") | select(.busy)] | length' 2>/dev/null || echo 0)"
+    live=$((live + b))
+  done
+  if [ "$live" != "0" ]; then
+    echo "x ${live} runner(s) are running a job right now. Restarting would strand it." >&2
+    echo "  Wait for it to finish, or re-run with FORCE=1 if you mean it." >&2
+    exit 1
+  fi
+fi
+
+if [ "${1:-}" = "--rebuild" ] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "> building $IMAGE ($ARCH)"
+  docker build --build-arg "RUNNER_ARCH=${ARCH}" -t "$IMAGE" docker/runner
+fi
+
+echo "> starting ${RUNNER_COUNT} runner(s), ${RUNNER_CPUS} CPUs / ${RUNNER_MEMORY} each"
+
+for i in $(seq 1 "$RUNNER_COUNT"); do
+  name="${BASE}-${i}"
+  work="${RUNNER_WORK_DIR}-${i}"
+  mkdir -p "$work"
+  docker rm -f "$name" >/dev/null 2>&1 || true
+
+  token="$(gh api -X POST "repos/${REPO}/actions/runners/registration-token" -q .token)"
+  [ -n "$token" ] || { echo "x could not mint a registration token (needs 'repo' scope)." >&2; exit 1; }
+
+  docker run -d \
+    --name "$name" \
+    --restart unless-stopped \
+    --cpus="$RUNNER_CPUS" \
+    --memory="$RUNNER_MEMORY" \
+    --memory-swap="$RUNNER_MEMORY_SWAP" \
+    --cpu-shares="$RUNNER_CPU_SHARES" \
+    --pids-limit="$RUNNER_PIDS" \
+    `# Sibling containers, not nested: the integration job's DB services are` \
+    `# started through the host daemon via this socket.` \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    `# Same path inside and out, so a service container that mounts $PWD sees it.` \
+    -v "${work}:${work}" \
+    -e RUNNER_WORK_DIR="$work" \
+    `# Host networking so a service container's published port is reachable at` \
+    `# localhost from in here, the way it is on a hosted runner.` \
+    --network host \
+    -e RUNNER_TOKEN="$token" \
+    -e REPO_URL="$REPO_URL" \
+    -e RUNNER_NAME="$name" \
+    -e RUNNER_LABELS="self-hosted,linux,docker" \
+    -e RUNNER_NICE="$RUNNER_NICE" \
+    -e PYTEST_ADDOPTS="-p no:cacheprovider" \
+    "$IMAGE" >/dev/null
+  echo "  started ${name}"
+done
+
+# Generous on purpose. After a restart GitHub holds the previous session for a
+# minute or two before a runner flips to `online`, even though the container is
+# already connected and printing "Listening for Jobs".
+echo "> waiting for them to come online"
+online=0
+for _ in $(seq 1 90); do
+  online="$(gh api "repos/${REPO}/actions/runners" -q '[.runners[] | select(.status=="online")] | length' 2>/dev/null || echo 0)"
+  if [ "${online:-0}" -ge "$RUNNER_COUNT" ]; then
+    echo "ok ${online} runner(s) online"
+    echo
+    echo "  Point the workflows at them (once):"
+    echo "    gh variable set RUNNER_LABEL --body self-hosted --repo ${REPO}"
+    echo "  Back to GitHub's:"
+    echo "    gh variable delete RUNNER_LABEL --repo ${REPO}"
+    echo
+    echo "  Watch:  docker stats \$(docker ps --filter name=${BASE} -q)"
+    echo "  Stop:   scripts/runner-down"
+    exit 0
+  fi
+  sleep 2
+done
+
+echo "x only ${online:-0}/${RUNNER_COUNT} came online. Logs:" >&2
+docker logs "${BASE}-1" 2>&1 | tail -20 >&2
+exit 1

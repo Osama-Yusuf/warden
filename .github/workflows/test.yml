@@ -1,5 +1,16 @@
 name: test
 
+# `runs-on` is the repo variable RUNNER_LABEL, not a literal. Unset it and jobs
+# run on GitHub's paid runners (ubuntu-latest); set it to `self-hosted` and they
+# run on the local Docker fleet from scripts/runner-up. Switching is not a commit:
+#
+#   scripts/runner-up                                 # start the local fleet
+#   gh variable set RUNNER_LABEL --body self-hosted   # ours
+#   gh variable delete RUNNER_LABEL                   # back to GitHub's
+#
+# Note: pull_request runs use the workflow file from the PR's own branch, so a
+# branch cut before this change ignores the variable until it's rebased on main.
+
 on:
   push:
     branches: [main]
@@ -8,7 +19,7 @@ on:
 
 jobs:
   unit:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -17,7 +28,7 @@ jobs:
         run: uv run pytest -q
 
   js:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,45 +38,16 @@ jobs:
         run: node --test 'tests/js/*.test.mjs'
 
   integration:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: admin
-          POSTGRES_PASSWORD: adminpass
-          POSTGRES_DB: postgres
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U admin" --health-interval 5s
-          --health-timeout 5s --health-retries 10
-      mariadb:
-        image: mariadb:11
-        env:
-          MARIADB_ROOT_PASSWORD: adminpass
-          MARIADB_DATABASE: shop
-        ports: ["3306:3306"]
-        options: >-
-          --health-cmd "healthcheck.sh --connect --innodb_initialized"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-      mongo:
-        image: mongo:7
-        env:
-          MONGO_INITDB_ROOT_USERNAME: admin
-          MONGO_INITDB_ROOT_PASSWORD: adminpass
-        ports: ["27017:27017"]
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1})'"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-      redis:
-        image: redis:7
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping" --health-interval 5s
-          --health-timeout 5s --health-retries 10
-    env:
-      # match the service containers configured above
-      WARDEN_TEST_REDIS_PASS: ""      # redis:7 runs without auth here
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # No `services:` here on purpose. On GitHub's runners this job would spin up
+    # its own DB containers, but on the local box that meant four databases doing
+    # a fresh init at once inside OrbStack's VM, where mariadb's --initialize is
+    # flaky (io_uring is restricted) and the load destabilises the runner. The
+    # self-hosted runner uses host networking, so it reaches the dev containers
+    # that `tests/engines/docker-compose.yml` already keeps running and healthy on
+    # the standard ports. Bring them up first (`docker compose -f
+    # tests/engines/docker-compose.yml up -d`); a test whose engine is unreachable
+    # skips rather than fails, so a stopped stack shows as skips, not red.
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
