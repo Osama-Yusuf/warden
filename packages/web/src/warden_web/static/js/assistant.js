@@ -270,8 +270,20 @@ function aiOpLine(op) {
     case 'revoke': return `revoke ${a} on ${db} from ${u}`;
     case 'create_collection': return `create collection ${op.collection || '?'} in ${db}`;
     case 'create_database': return `create database ${db}`;
+    case 'insert_data': return `insert into ${op.collection || op.name || db}: ${JSON.stringify(op.document || {}).slice(0, 70)}`;
+    case 'update_data': return `update ${op.collection || op.name || db} #${aiRowTarget(op)}: ${JSON.stringify(op.changes || {}).slice(0, 50)}`;
+    case 'delete_data': return `delete from ${op.collection || op.name || db} #${aiRowTarget(op)}`;
     default: return op.kind || 'operation';
   }
+}
+
+// The row a data op targets: a resolved _id ({$oid} or string), pk, or match.
+function aiRowTarget(op) {
+  if (op.id && typeof op.id === 'object') return op.id.$oid || JSON.stringify(op.id);
+  if (op.id) return op.id;
+  if (op.pk) return JSON.stringify(op.pk);
+  if (op.match) return JSON.stringify(op.match);
+  return '?';
 }
 
 // The card's footer changes with state: idle -> a restricted confirm -> results.
@@ -318,6 +330,7 @@ async function aiRunOps(el) {
   el.querySelector('.ai-op-lines').innerHTML = results.map(r =>
     `<div class="ai-res ${r.ok ? 'ok' : 'bad'}">${r.ok ? '&#10003;' : '&#10007;'} ${esc(r.kind)}${r.target ? ' ' + esc(r.target) : ''}` +
     `${r.error ? ' &mdash; ' + esc(r.error) : ''}` +
+    `${r.info ? ' &middot; ' + esc(Object.entries(r.info).map(([k, v]) => k + '=' + v).join(', ')) : ''}` +
     `${r.password ? ` &middot; password <code class="ai-pw" title="click to copy">${esc(r.password)}</code>` : ''}</div>`).join('');
   const ok = results.filter(r => r.ok).length;
   foot.innerHTML = `<span class="ai-op-note">${ok}/${results.length} done${results.some(r => r.password) ? ' &middot; copy the password now' : ''}.</span>`;

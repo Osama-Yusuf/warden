@@ -143,6 +143,35 @@ def search_docs(cfg, user, pwd, index, limit=50, offset=0, search=None):
             "total": total_n, "filtered": bool(term)}, None
 
 
+def resolve_match(cfg, user, pwd, index, match, cap=25, scan=2000):
+    """Find the _ids of documents whose source exactly matches every field in
+    `match`. One bounded search over the index, filtered on the real _source
+    values so it doesn't depend on how a field is analysed or mapped, and one
+    request so there's no pagination to race with a concurrent write. Returns
+    (result, error) with result = {ids, truncated}; truncated means there were
+    more matches than `cap`, or the index was bigger than the scan, so the caller
+    must ask rather than act."""
+    body = {"from": 0, "size": max(1, int(scan)), "track_total_hits": True,
+            "query": {"match_all": {}}}
+    data, err = _req(cfg, user, pwd, "POST", f"/{index}/_search", body)
+    if err:
+        return None, err
+    hits = (data or {}).get("hits") or {}
+    docs = hits.get("hits") or []
+    total = hits.get("total")
+    total_n = total.get("value") if isinstance(total, dict) else total
+    want = {str(k): v for k, v in (match or {}).items()}
+    out = []
+    for d in docs:
+        src = d.get("_source") or {}
+        if all(str(src.get(f)) == str(v) for f, v in want.items()):
+            out.append(d.get("_id"))
+    # more matches than we'll list, or an index we couldn't read to the end: either
+    # way we can't be sure of a single answer, so tell the caller to ask.
+    truncated = len(out) > cap or (isinstance(total_n, int) and total_n > len(docs))
+    return {"ids": out[:cap], "truncated": truncated}, None
+
+
 def index_stats(cfg, user, pwd, index):
     data, err = _req(cfg, user, pwd, "GET",
                      f"/{index}/_stats/docs,store,segments")

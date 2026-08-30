@@ -95,6 +95,13 @@ class MongoAdapter(EngineAdapter):
                                          database, collection,
                                          limit, offset, search=search))
 
+    def find_matching_ids(self, target, match, cap=25):
+        database, collection = self._ns(target, require_collection=True)
+        if not mn.available():
+            raise EngineError("Matching rows needs the native MongoDB driver (pymongo)")
+        return self._unwrap(mn.resolve_match(self.cfg, self.user, self.pwd,
+                                             database, collection, match, cap))
+
     def object_stats(self, target):
         if not mn.available():
             return {}

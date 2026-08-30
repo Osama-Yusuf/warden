@@ -109,12 +109,20 @@ VIRTUAL_TOOLS = [
                 "type": "object", "properties": {
                     "kind": {"type": "string",
                              "enum": ["create_user", "drop_user", "reset_password", "grant", "revoke",
-                                      "toggle_login", "create_collection", "create_database"]},
+                                      "toggle_login", "create_collection", "create_database",
+                                      "insert_data", "update_data", "delete_data"]},
                     "username": {"type": "string"},
                     "database": {"type": "string", "description": "The target database (for create_database, the new name)."},
-                    "collection": {"type": "string", "description": "For create_collection: the new collection or index name."},
+                    "collection": {"type": "string", "description": "create_collection: the new name. Data ops: the collection/table/index to write."},
                     "access": {"type": "string", "enum": ["read", "write", "admin"]},
-                    "enable": {"type": "boolean", "description": "For toggle_login: true to enable login, false to disable it."}},
+                    "enable": {"type": "boolean", "description": "toggle_login: true to enable login, false to disable."},
+                    "document": {"type": "object", "description": "insert_data: the row/document as field:value pairs."},
+                    "id": {"type": "string", "description": "update_data/delete_data: the row's _id (Mongo/ES) or key (Redis), if you already know it."},
+                    "match": {"type": "object", "description": "update_data/delete_data (Mongo/ES): pick the document by field:value, e.g. {\"name\":\"bob\"}, and warden finds its id. Use this instead of guessing an id."},
+                    "changes": {"type": "object", "description": "update_data: the fields to set."},
+                    "remove": {"type": "array", "items": {"type": "string"}, "description": "update_data: field names to remove."},
+                    "value": {"type": "string", "description": "insert/update_data on Redis: the string value."},
+                    "pk": {"type": "object", "description": "update/delete_data on Postgres: the primary key as column:value."}},
                 "required": ["kind"]}}},
             "required": ["summary", "operations"]},
     },
@@ -200,11 +208,13 @@ def _database_hint(names):
             " 'database' field. If the user's database isn't an exact match, don't guess.")
 
 
-def _validate_draft_db(draft, names):
+def _validate_draft_db(draft, names, fam=""):
     """Guardrail: if the draft targets a database that doesn't exist, return an
     ask_user question (the close matches to pick from, or a plain 'type it') so
-    the model can't quietly draft against a database that isn't there."""
-    if not names:
+    the model can't quietly draft against a database that isn't there. Skipped on
+    Elasticsearch, which has one cluster and no databases: there the name the
+    model puts in 'database' is really an index, checked as a collection instead."""
+    if not names or fam == "elasticsearch":
         return None
     lows = {n.lower() for n in names}
     # every database the draft touches: the top-level one (legacy) plus each op's
@@ -226,6 +236,76 @@ def _validate_draft_db(draft, names):
                     "hint": "Pick one, or type the exact name."}
         return {"question": f"I don't see a database called '{target}'. What's the exact name?",
                 "kind": "text"}
+    return None
+
+
+def _id_str(rep):
+    return rep["$oid"] if isinstance(rep, dict) and "$oid" in rep else str(rep)
+
+
+def _op_collection(op, fam):
+    """The collection / index / table an op targets. On Elasticsearch the model
+    often puts the index in 'database' (ES has no real databases, so that field
+    is meaningless there), so fall back to it rather than lose the target."""
+    name = op.get("name") or op.get("collection") or op.get("table") or ""
+    if not name and fam == "elasticsearch":
+        name = op.get("database") or ""
+    return str(name)
+
+
+def _find_by_match(conn, op, fam, routes):
+    """Resolve a {field: value} match to the matching document ids in a doc-store
+    collection (Mongo/ES). Runs one server-side query through /api/resolve-match:
+    Mongo does an exact find, Elasticsearch one bounded search filtered on the
+    real source values. Because it's a single query, 0/1/many reflects the whole
+    collection and there's no paging to race with a concurrent write. Returns
+    (ids, truncated, error); truncated means there were more matches than we'd
+    list, so the caller must ask rather than act."""
+    if fam not in ("documentdb", "elasticsearch"):
+        return [], False, None   # Postgres/Redis identify rows their own way
+    match = op.get("match")
+    handler = routes.get("/api/resolve-match")
+    if not isinstance(match, dict) or not match or not handler:
+        return [], False, None
+    coll = _op_collection(op, fam)
+    sub = dict(conn)
+    sub.update({"database": op.get("database", ""), "collection": coll,
+                "table": coll, "match": match})
+    try:
+        res = handler(sub)
+    except Exception as e:
+        return [], False, str(e)
+    if not isinstance(res, dict) or "error" in res:
+        return [], False, (res.get("error") if isinstance(res, dict) else "lookup failed")
+    return list(res.get("ids") or []), bool(res.get("truncated")), None
+
+
+def _resolve_draft_matches(draft, conn, fam, routes):
+    """For an update/delete_data op that gives a match instead of an id, find the
+    row and fill in its id. Only doc stores (Mongo/ES) resolve this way; a stray
+    match on another engine is ignored so its pk/key path still works. The one
+    case we act on is a single unambiguous match; none, several, or too many to be
+    sure all ask rather than guess, so a confirmed delete never hits the wrong row."""
+    if fam not in ("documentdb", "elasticsearch"):
+        return None
+    for op in draft.get("operations") or []:
+        if op.get("kind") not in ("update_data", "delete_data") or op.get("id") or not op.get("match"):
+            continue
+        ids, truncated, err = _find_by_match(conn, op, fam, routes)
+        coll = _op_collection(op, fam) or "the collection"
+        if err:
+            return {"question": f"Couldn't look that up in {coll}: {err}. What's the exact _id?", "kind": "text"}
+        if not truncated and len(ids) == 1:
+            op["id"] = ids[0]
+            continue
+        if not ids:
+            reason = (f"Nothing in {coll} matches {op['match']}" if not truncated
+                      else f"{coll} is large, so I couldn't pin down {op['match']}")
+            return {"question": f"{reason}. What's the exact _id?", "kind": "text"}
+        head = (f"Several documents in {coll} match {op['match']}" if truncated
+                else f"{len(ids)} documents in {coll} match {op['match']}")
+        return {"question": f"{head}. Which one?", "kind": "select",
+                "options": [_id_str(x) for x in ids[:12]], "hint": "Pick the _id to change, or type it."}
     return None
 
 
@@ -293,6 +373,7 @@ def chat_turn(body, routes):
         return {"error": "No model selected. Pick one in Settings."}
 
     conn = _connection(body)
+    fam = engine_family(conn.get("engine", ""))
     real_dbs = _list_databases(conn, routes)
     system = _system_prompt(body) + _database_hint(real_dbs)
     messages = _neutral_messages(body.get("messages", []))
@@ -323,10 +404,14 @@ def chat_turn(body, routes):
             if tc.name == "ask_user":
                 return {"question": tc.args or {}, "steps": steps, "note": _clean_reply(result.text)}
             if tc.name == "draft_operation":
-                dq = _validate_draft_db(tc.args or {}, real_dbs)
+                dargs = tc.args or {}
+                dq = _validate_draft_db(dargs, real_dbs, fam)
                 if dq:  # the draft names a database that doesn't exist: disambiguate first
                     return {"question": dq, "steps": steps}
-                return {"draft": tc.args or {}, "steps": steps, "note": _clean_reply(result.text)}
+                mq = _resolve_draft_matches(dargs, conn, fam, routes)
+                if mq:  # a data op's match hit nothing or several rows: ask, don't guess
+                    return {"question": mq, "steps": steps}
+                return {"draft": dargs, "steps": steps, "note": _clean_reply(result.text)}
 
         # Otherwise run the read-only tools and feed the results back.
         messages.append({"role": "assistant", "content": result.text, "tool_calls": result.tool_calls})
@@ -405,7 +490,11 @@ OP_ROUTE = {
     "revoke": "/api/revoke",
     "create_collection": "/api/create-collection",
     "create_database": "/api/create-database",
+    "insert_data": "/api/row-insert",
+    "update_data": "/api/row-update",
+    "delete_data": "/api/row-delete",
 }
+_DATA_KINDS = {"insert_data", "update_data", "delete_data"}
 
 # A plain access level, translated per engine. Mongo uses one role; SQL engines
 # use a set of privileges (write really means insert+update+delete, and Postgres
@@ -470,6 +559,53 @@ def _grant_bodies(conn, op, fam):
     return [{**base, "database": db, "privilege": p} for p in privs]
 
 
+def _data_op_body(conn, op, fam):
+    """Translate a data op into the per-engine row/doc handler body. Mongo/ES use
+    a document keyed by _id; Postgres column values keyed by primary key; Redis a
+    single key. update/delete need the id/pk, which the model gets by browsing
+    first."""
+    kind = op.get("kind")
+    b = _base_body(conn, op)
+    b["database"] = op.get("database", "")
+    name = _op_collection(op, fam)
+    if fam in ("documentdb", "elasticsearch"):
+        b["collection"] = name
+        if kind == "insert_data":
+            b["document"] = op.get("document") or {}
+        else:
+            rid = op.get("id", "")
+            # A bare Mongo ObjectId hex needs the {"$oid": ...} wrapper the handler
+            # expects; a non-hex _id (string/number) is passed through as-is. Reject
+            # any other dict so a query operator ({"$gt": ...}) can't become the _id.
+            if fam == "documentdb":
+                if isinstance(rid, str) and re.fullmatch(r"[0-9a-fA-F]{24}", rid):
+                    rid = {"$oid": rid}
+                elif isinstance(rid, dict) and set(rid) != {"$oid"}:
+                    rid = ""
+            b["id"] = rid
+            if kind == "update_data":
+                b["set"] = op.get("changes") or {}
+                b["unset"] = op.get("remove") or []
+    elif fam == "postgresql":
+        b["schema"] = "public"
+        b["table"] = name
+        if kind == "insert_data":
+            b["values"] = op.get("document") or {}
+        else:
+            b["pk"] = op.get("pk") or {}      # {column: value}; handler refuses without it
+            if kind == "update_data":
+                b["changes"] = op.get("changes") or {}
+    elif fam == "redis":
+        key = op.get("id") or name
+        b["id"] = key
+        if kind != "delete_data":
+            b["key"] = key
+            b["ktype"] = "string"
+            v = op.get("value")
+            b["value"] = v if v is not None else op.get("document")
+    return b
+
+
 def _is_prod(body):
     """Prod if the connection is tagged prod (env_kind from the client's own
     tagging) OR the environment name just looks like production. The name check
@@ -500,7 +636,7 @@ def run_operations(body, routes):
         if not handler:
             results.append({"kind": kind, "ok": False, "error": "unsupported operation"})
             continue
-        target = op.get("username") or op.get("collection") or op.get("database")
+        target = op.get("username") or op.get("collection") or op.get("name") or op.get("database")
         if kind in ("grant", "revoke"):
             # An access level fans out to several privilege grants on SQL; roll
             # them into one result so the card reads as one line.
@@ -511,6 +647,12 @@ def run_operations(body, routes):
                     errors.append(res["error"])
             results.append({"kind": kind, "target": target, "ok": not errors,
                             "error": _tidy_error(errors[0], target) if errors else None, "password": None})
+        elif kind in _DATA_KINDS:
+            res = _call(handler, _data_op_body(conn, op, fam))
+            ok = bool(res.get("ok")) and "error" not in res
+            info = {k: res[k] for k in ("inserted_id", "modified", "deleted") if k in res}
+            results.append({"kind": kind, "target": op.get("name") or op.get("id") or target, "ok": ok,
+                            "error": _tidy_error(res.get("error"), target), "info": info or None})
         else:
             res = _call(handler, _op_body(conn, op))
             ok = bool(res.get("ok")) and "error" not in res

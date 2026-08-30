@@ -257,6 +257,22 @@ def find_page(cfg, user, pwd, database, collection, limit=50, skip=0,
     return _run(go)
 
 
+def resolve_match(cfg, user, pwd, database, collection, match, cap=25):
+    """Find the _ids of documents that exactly match every field in `match`. This
+    is one server-side query, so the count reflects the whole collection, not a
+    page: there's no scanning or pagination to race with a concurrent write.
+    Returns (result, error) with result = {ids, truncated}; truncated means there
+    were more than `cap` matches, so the caller should ask which rather than act."""
+    def go():
+        c = get_client(cfg, user, pwd)
+        coll = c[database][collection]
+        filt = {str(k): v for k, v in (match or {}).items()}
+        raw = list(coll.find(filt, {"_id": 1}).limit(cap + 1))
+        ids = [id_repr(d.get("_id")) for d in raw]
+        return {"ids": ids[:cap], "truncated": len(ids) > cap}
+    return _run(go)
+
+
 def collection_stats(cfg, user, pwd, database, collection):
     """Header stats for the data browser: document count, data + storage size,
     index count, average document size. Returns (stats, error)."""

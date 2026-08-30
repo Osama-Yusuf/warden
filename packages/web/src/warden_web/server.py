@@ -394,6 +394,32 @@ def api_browse_data(body):
     return out
 
 
+def api_resolve_match(body):
+    """Resolve a {field: value} match to the ids of the documents it matches, so
+    Ward can turn 'delete the doc for bob' into an exact id without guessing one.
+    Read-only (it only reads ids), doc stores only. Returns {ids, truncated}."""
+    match = body.get("match")
+    if not isinstance(match, dict) or not match:
+        return {"error": "match must be a non-empty object"}
+    # Must be plain field:value pairs. A "$"-key ({"$where": ...}, {"$or": ...}) or
+    # a dict/list value would run as a Mongo query operator instead of an equality
+    # test, so a confirmed delete could hit a row the match never named. Refuse it.
+    if any(str(k).startswith("$") for k in match) or any(isinstance(v, (dict, list)) for v in match.values()):
+        return {"error": "match must be plain field:value pairs, without query operators"}
+    adapter, err = _adapter_for(body)
+    if err:
+        return {"error": err}
+    try:
+        cap = max(1, min(100, int(body.get("cap", 25))))
+    except (TypeError, ValueError):
+        cap = 25
+    try:
+        res = adapter.find_matching_ids(_target(body), match, cap)
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
+    return {"ids": res.get("ids", []), "truncated": bool(res.get("truncated"))}
+
+
 def api_table_meta(body):
     """Metadata a safe editor needs: primary key + columns, plus whether the
     object is editable. Each adapter knows its own answer (Postgres/Mongo edit
@@ -1386,6 +1412,7 @@ REQUIRES_CREDS = {
     "/api/create-user", "/api/reset-password", "/api/grant",
     "/api/revoke", "/api/drop-user", "/api/toggle-login",
     "/api/list-databases", "/api/list-collections", "/api/create-collection", "/api/create-database", "/api/browse-data",
+    "/api/resolve-match",
     "/api/table-meta", "/api/object-stats", "/api/row-insert", "/api/row-update", "/api/row-delete",
     "/api/query", "/api/query-stream",
     "/api/audit-run", "/api/health",
@@ -1409,6 +1436,7 @@ ROUTES = {
     "/api/create-collection": api_create_collection,
     "/api/create-database": api_create_database,
     "/api/browse-data": api_browse_data,
+    "/api/resolve-match": api_resolve_match,
     "/api/table-meta": api_table_meta,
     "/api/object-stats": api_object_stats,
     "/api/row-insert": api_row_insert,

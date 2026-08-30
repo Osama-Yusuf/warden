@@ -61,6 +61,12 @@ class ElasticsearchAdapter(EngineAdapter):
         return self._unwrap(esn.search_docs(self.cfg, self.user, self.pwd,
                                              index, limit, offset, search=search))
 
+    def find_matching_ids(self, target, match, cap=25):
+        index = str(target.name).strip()
+        if not index or "\x00" in index or "," in index or index.startswith("_"):
+            raise EngineError("Invalid index name")
+        return self._unwrap(esn.resolve_match(self.cfg, self.user, self.pwd, index, match, cap))
+
     def object_stats(self, target):
         index = str(target.name).strip()
         return self._unwrap(esn.index_stats(self.cfg, self.user, self.pwd, index))

@@ -205,6 +205,104 @@ def test_local_provider_flags_and_catalog():
     assert isinstance(download_state(), dict)
 
 
+def test_data_op_translation():
+    from warden_web.assistant import _data_op_body
+    conn = {"admin_user": "a"}
+    # Mongo: document on insert; a bare ObjectId hex gets the {"$oid"} wrapper on update
+    ins = _data_op_body(conn, {"kind": "insert_data", "database": "shop", "collection": "users",
+                               "document": {"n": 1}}, "documentdb")
+    assert ins["collection"] == "users" and ins["document"] == {"n": 1} and ins["_source"] == "ward"
+    upd = _data_op_body(conn, {"kind": "update_data", "collection": "users", "id": "a" * 24,
+                               "changes": {"n": 2}}, "documentdb")
+    assert upd["id"] == {"$oid": "a" * 24} and upd["set"] == {"n": 2}
+    # ES id is a plain string, left alone
+    assert _data_op_body(conn, {"kind": "delete_data", "collection": "logs", "id": "abc"}, "elasticsearch")["id"] == "abc"
+    # Postgres insert -> column values; Redis insert -> key + value
+    assert _data_op_body(conn, {"kind": "insert_data", "name": "t", "document": {"a": 1}}, "postgresql")["values"] == {"a": 1}
+    rk = _data_op_body(conn, {"kind": "insert_data", "name": "k", "value": "v"}, "redis")
+    assert rk["key"] == "k" and rk["value"] == "v"
+
+
+def test_mongo_id_guard():
+    from warden_web.assistant import _data_op_body
+    c = {"admin_user": "a"}
+    assert _data_op_body(c, {"kind": "delete_data", "collection": "x", "id": "a" * 24}, "documentdb")["id"] == {"$oid": "a" * 24}
+    # a query operator can never become the _id filter
+    assert _data_op_body(c, {"kind": "delete_data", "collection": "x", "id": {"$gt": ""}}, "documentdb")["id"] == ""
+    assert _data_op_body(c, {"kind": "delete_data", "collection": "x", "id": {"$oid": "b" * 24}}, "documentdb")["id"] == {"$oid": "b" * 24}
+
+
+def test_match_resolution():
+    from warden_web import assistant
+    # exactly one match -> auto-resolve its id, no question
+    d = {"operations": [{"kind": "delete_data", "collection": "u", "match": {"name": "bob"}}]}
+    assert assistant._resolve_draft_matches(d, {}, "documentdb",
+        {"/api/resolve-match": lambda s: {"ids": [{"$oid": "1" * 24}], "truncated": False}}) is None
+    assert d["operations"][0]["id"] == {"$oid": "1" * 24}
+    # several matches -> a select question, nothing resolved
+    d2 = {"operations": [{"kind": "delete_data", "collection": "u", "match": {"name": "dup"}}]}
+    q2 = assistant._resolve_draft_matches(d2, {}, "documentdb",
+        {"/api/resolve-match": lambda s: {"ids": [1, 2], "truncated": False}})
+    assert q2 and q2["kind"] == "select" and len(q2["options"]) == 2 and "id" not in d2["operations"][0]
+    # no match -> ask for the id, don't draft a blind delete
+    q0 = assistant._resolve_draft_matches({"operations": [{"kind": "delete_data", "collection": "u", "match": {"x": 1}}]},
+        {}, "documentdb", {"/api/resolve-match": lambda s: {"ids": [], "truncated": False}})
+    assert q0 and q0["kind"] == "text"
+
+
+def test_match_resolution_truncated_and_stray_match():
+    from warden_web import assistant
+    # too many matches to be sure -> ask (select), never auto-resolve
+    d = {"operations": [{"kind": "delete_data", "collection": "big", "match": {"name": "bob"}}]}
+    q = assistant._resolve_draft_matches(d, {}, "documentdb",
+        {"/api/resolve-match": lambda s: {"ids": [1, 2, 3], "truncated": True}})
+    assert q and q["kind"] == "select" and "id" not in d["operations"][0]
+    # truncated with nothing surfaced (index too big to read) -> ask for the id
+    q2 = assistant._resolve_draft_matches({"operations": [{"kind": "delete_data", "collection": "big", "match": {"name": "z"}}]},
+        {}, "documentdb", {"/api/resolve-match": lambda s: {"ids": [], "truncated": True}})
+    assert q2 and q2["kind"] == "text"
+    # a lookup error asks rather than guessing
+    q3 = assistant._resolve_draft_matches({"operations": [{"kind": "delete_data", "collection": "u", "match": {"name": "b"}}]},
+        {}, "documentdb", {"/api/resolve-match": lambda s: {"error": "boom"}})
+    assert q3 and q3["kind"] == "text"
+    # a stray match on a SQL op is ignored so its pk path still runs
+    assert assistant._resolve_draft_matches(
+        {"operations": [{"kind": "delete_data", "table": "t", "pk": {"id": 5}, "match": {"name": "z"}}]},
+        {}, "postgresql", {"/api/resolve-match": lambda s: {"ids": [], "truncated": False}}) is None
+
+
+def test_resolve_match_rejects_operator_values():
+    from warden_web import server
+    # a dict/list match value would be a Mongo query operator; refuse before connecting
+    r = server.api_resolve_match({"engine": "documentdb", "database": "d",
+                                  "collection": "c", "match": {"name": {"$ne": None}}})
+    assert r.get("error") and "operators" in r["error"]
+    r2 = server.api_resolve_match({"engine": "documentdb", "database": "d",
+                                   "collection": "c", "match": {"tags": [1, 2]}})
+    assert r2.get("error") and "operators" in r2["error"]
+    # a "$"-key (scalar value) must also be refused: it would run as an operator
+    r3 = server.api_resolve_match({"engine": "documentdb", "database": "d",
+                                   "collection": "c", "match": {"$where": "true"}})
+    assert r3.get("error") and "operators" in r3["error"]
+    r4 = server.api_resolve_match({"engine": "documentdb", "collection": "c", "match": {}})
+    assert r4.get("error") and "non-empty" in r4["error"]
+
+
+def test_es_grounding_and_collection_fallback():
+    from warden_web import assistant
+    # ES has one cluster and no databases, so don't block a draft whose "database"
+    # is really an index name; other engines still ground against the real list.
+    es_draft = {"operations": [{"kind": "delete_data", "database": "wardidx", "match": {"name": "x"}}]}
+    assert assistant._validate_draft_db(es_draft, ["docker-cluster"], "elasticsearch") is None
+    q = assistant._validate_draft_db({"operations": [{"kind": "delete_data", "database": "nope"}]},
+                                     ["shop"], "documentdb")
+    assert q and q["kind"] in ("select", "text")
+    # on ES an index given in 'database' becomes the collection target; elsewhere never
+    assert assistant._op_collection({"database": "wardidx"}, "elasticsearch") == "wardidx"
+    assert assistant._op_collection({"collection": "c", "database": "wardidx"}, "elasticsearch") == "c"
+    assert assistant._op_collection({"database": "shop"}, "documentdb") == ""
+
+
 def test_es_redis_grant_translation():
     from warden_web.assistant import _grant_bodies
     conn = {"admin_user": "a"}
