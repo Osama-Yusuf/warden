@@ -269,6 +269,7 @@ function aiOpLine(op) {
     case 'grant': return `grant ${a} on ${db} to ${u}`;
     case 'revoke': return `revoke ${a} on ${db} from ${u}`;
     case 'create_collection': return `create collection ${op.collection || '?'} in ${db}`;
+    case 'create_database': return `create database ${db}`;
     default: return op.kind || 'operation';
   }
 }

@@ -50,6 +50,9 @@ class ElasticsearchAdapter(EngineAdapter):
             raise EngineError(err)
         return Mutation("CREATE INDEX", index, {"collection": index})
 
+    def create_database(self, name):
+        raise NotSupported("Elasticsearch has one cluster, not many databases. Create an index instead.")
+
     def browse(self, target, limit, offset, search):
         # Same index-name check the handler ran inline on the collection field.
         index = str(target.name).strip()

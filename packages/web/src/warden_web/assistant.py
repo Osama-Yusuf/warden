@@ -108,9 +108,9 @@ VIRTUAL_TOOLS = [
                 "type": "object", "properties": {
                     "kind": {"type": "string",
                              "enum": ["create_user", "drop_user", "reset_password", "grant", "revoke",
-                                      "toggle_login", "create_collection"]},
+                                      "toggle_login", "create_collection", "create_database"]},
                     "username": {"type": "string"},
-                    "database": {"type": "string", "description": "The target database, exact real name."},
+                    "database": {"type": "string", "description": "The target database (for create_database, the new name)."},
                     "collection": {"type": "string", "description": "For create_collection: the new collection or index name."},
                     "access": {"type": "string", "enum": ["read", "write", "admin"]}},
                 "required": ["kind"]}}},
@@ -210,6 +210,8 @@ def _validate_draft_db(draft, names):
     if draft.get("database"):
         targets.append(str(draft["database"]).strip())
     for op in draft.get("operations") or []:
+        if op.get("kind") == "create_database":
+            continue   # the database is new here; don't check it against existing ones
         if op.get("database"):
             targets.append(str(op["database"]).strip())
     for target in targets:
@@ -396,6 +398,7 @@ OP_ROUTE = {
     "grant": "/api/grant",
     "revoke": "/api/revoke",
     "create_collection": "/api/create-collection",
+    "create_database": "/api/create-database",
 }
 
 # A plain access level, translated per engine. Mongo uses one role; SQL engines
@@ -427,6 +430,8 @@ def _op_body(conn, op):
     elif kind == "create_collection":
         b["database"] = op.get("database", "")
         b["collection"] = op.get("collection", "")
+    elif kind == "create_database":
+        b["database"] = op.get("database", "")   # the NEW database name
     return b
 
 
@@ -464,18 +469,18 @@ def run_operations(body, routes):
         if kind in ("grant", "revoke"):
             # An access level fans out to several privilege grants on SQL; roll
             # them into one result so the card reads as one line.
-            errors, pw = [], None
+            errors = []
             for sub in _grant_bodies(conn, op, fam):
                 res = _call(handler, sub)
                 if res.get("error"):
                     errors.append(res["error"])
             results.append({"kind": kind, "target": target, "ok": not errors,
-                            "error": errors[0] if errors else None, "password": pw})
+                            "error": _tidy_error(errors[0], target) if errors else None, "password": None})
         else:
             res = _call(handler, _op_body(conn, op))
-            results.append({"kind": kind, "target": target,
-                            "ok": bool(res.get("ok")) and "error" not in res,
-                            "error": res.get("error"), "password": res.get("password")})
+            ok = bool(res.get("ok")) and "error" not in res
+            results.append({"kind": kind, "target": target, "ok": ok,
+                            "error": _tidy_error(res.get("error"), target), "password": res.get("password")})
     return {"results": results, "ran": sum(1 for r in results if r["ok"])}
 
 
@@ -484,3 +489,14 @@ def _call(handler, sub):
         return handler(sub)
     except Exception as e:  # a bad op shouldn't abort the rest of the batch
         return {"error": str(e)}
+
+
+def _tidy_error(err, target):
+    """Turn a raw engine error into something the chat card can show without a
+    JSON dump. 'already exists' is the common one worth naming plainly."""
+    if not err:
+        return err
+    e = str(err)
+    if "already exists" in e.lower():
+        return f"{target} already exists"
+    return e.split(", full error")[0].strip()[:200]

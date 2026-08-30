@@ -205,6 +205,21 @@ def test_local_provider_flags_and_catalog():
     assert isinstance(download_state(), dict)
 
 
+def test_create_database_op_and_grounding_exempt():
+    from warden_web.assistant import OP_ROUTE, _op_body, _validate_draft_db
+    assert OP_ROUTE["create_database"] == "/api/create-database"
+    assert _op_body({"admin_user": "a"}, {"kind": "create_database", "database": "sales"})["database"] == "sales"
+    # a new database must NOT trip the "does this db exist?" guardrail
+    draft = {"operations": [{"kind": "create_database", "database": "sales"}]}
+    assert _validate_draft_db(draft, ["shop", "analytics"]) is None
+
+
+def test_tidy_error():
+    from warden_web.assistant import _tidy_error
+    assert _tidy_error('User "alice@admin" already exists, full error: {...}', "alice") == "alice already exists"
+    assert _tidy_error(None, "x") is None
+
+
 def test_create_collection_op():
     from warden_web.assistant import OP_ROUTE, _op_body
     assert OP_ROUTE["create_collection"] == "/api/create-collection"

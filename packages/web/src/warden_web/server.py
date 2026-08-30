@@ -352,6 +352,12 @@ def api_create_collection(body):
     return _mutate(body, "create_collection", _target(body))
 
 
+def api_create_database(body):
+    """Create a database (SQL engines). Mongo/ES answer with a helpful note, since
+    Mongo makes a db implicitly and ES has a single cluster."""
+    return _mutate(body, "create_database", body.get("database", ""))
+
+
 BROWSE_MAX_LIMIT = 200
 BROWSE_SEARCH_MAX = 200
 
@@ -477,7 +483,7 @@ RO_BLOCKED_ROUTES = {
     "/api/create-user", "/api/reset-password", "/api/grant",
     "/api/revoke", "/api/drop-user", "/api/toggle-login",
     "/api/row-insert", "/api/row-update", "/api/row-delete",
-    "/api/create-collection",
+    "/api/create-collection", "/api/create-database",
     "/api/ai/execute",   # Ward running a confirmed change is still a change
 }
 
@@ -1379,7 +1385,7 @@ REQUIRES_CREDS = {
     "/api/connect", "/api/list-users", "/api/user-info",
     "/api/create-user", "/api/reset-password", "/api/grant",
     "/api/revoke", "/api/drop-user", "/api/toggle-login",
-    "/api/list-databases", "/api/list-collections", "/api/create-collection", "/api/browse-data",
+    "/api/list-databases", "/api/list-collections", "/api/create-collection", "/api/create-database", "/api/browse-data",
     "/api/table-meta", "/api/object-stats", "/api/row-insert", "/api/row-update", "/api/row-delete",
     "/api/query", "/api/query-stream",
     "/api/audit-run", "/api/health",
@@ -1401,6 +1407,7 @@ ROUTES = {
     "/api/list-databases": api_list_databases,
     "/api/list-collections": api_list_collections,
     "/api/create-collection": api_create_collection,
+    "/api/create-database": api_create_database,
     "/api/browse-data": api_browse_data,
     "/api/table-meta": api_table_meta,
     "/api/object-stats": api_object_stats,

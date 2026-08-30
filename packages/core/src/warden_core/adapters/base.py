@@ -82,6 +82,9 @@ class EngineAdapter:
     def create_collection(self, target):
         raise NotSupported("creating a collection isn't supported for this engine")
 
+    def create_database(self, name):
+        raise NotSupported("creating a database isn't supported for this engine")
+
     def browse(self, target, limit, offset, search):
         raise NotSupported("browsing rows is not supported here")
 

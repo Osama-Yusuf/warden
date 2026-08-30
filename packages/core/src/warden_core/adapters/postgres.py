@@ -225,6 +225,15 @@ class PostgresAdapter(EngineAdapter):
             raise EngineError(err or out)
         return Mutation("CREATE USER", name, {"password": password})
 
+    def create_database(self, name):
+        name = validate_ident(name, "database")
+        # CREATE DATABASE can't run in a transaction; psql autocommits each stmt.
+        ok, out, err = pg_exec(self.cfg, self.user, self.pwd, f"CREATE DATABASE {pg_ident(name)}",
+                               db=self.cfg.get("default_db", "postgres"))
+        if not ok:
+            raise EngineError(err or out)
+        return Mutation("CREATE DATABASE", name, {})
+
     def set_password(self, name, password):
         sql = f"ALTER USER {pg_ident(name)} WITH PASSWORD {pg_literal(password)}"
         ok, out, err = pg_exec(self.cfg, self.user, self.pwd, sql)
