@@ -49,6 +49,7 @@ jobs:
           uv run pyinstaller --noconfirm --clean --windowed --name warden \
             --icon "${{ matrix.icon }}" \
             --add-data "packages/web/src/warden_web/static${{ matrix.sep }}warden_web/static" \
+            --collect-all llama_cpp \
             packages/desktop/src/warden_desktop/main.py
       - name: Report architecture
         if: runner.os == 'macOS'

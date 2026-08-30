@@ -18,6 +18,7 @@ import re
 from warden_core.ai import AIError, get_provider
 from warden_core.ai import local
 from warden_core.util import engine_family
+from warden_web import reports
 
 MAX_HOPS = 6            # tool round-trips before we stop and answer with what we have
 MAX_TOOL_CHARS = 6000   # trim a tool result before feeding it back, to keep tokens sane
@@ -126,9 +127,24 @@ VIRTUAL_TOOLS = [
                 "required": ["kind"]}}},
             "required": ["summary", "operations"]},
     },
+    {
+        "name": "security_report",
+        "description": ("Produce a read-only access report when the user asks who can access or change "
+                        "what, who can touch prod, whether any accounts look risky or unused, or for a "
+                        "security summary. Pick the kind that fits; warden gathers the data and formats it."),
+        "parameters": {"type": "object", "properties": {
+            "kind": {"type": "string", "enum": ["access", "write_access", "posture"],
+                     "description": ("access = who can access what; write_access = who can change data "
+                                     "(use for 'who can touch prod'); posture = risky or unused accounts.")}},
+            "required": ["kind"]},
+    },
 ]
 
 _VIRTUAL = {t["name"] for t in VIRTUAL_TOOLS}
+_REPORT_KINDS = {"access", "write_access", "posture"}
+# A report inspects each account with its own query; bound the fan-out so a huge
+# user list can't tie up a worker. Past this, the report says N weren't inspected.
+_REPORT_MAX_USERS = 200
 _BY_VNAME = {t["name"]: t for t in VIRTUAL_TOOLS}
 
 
@@ -233,9 +249,10 @@ def _validate_draft_db(draft, names, fam=""):
         if matches:
             return {"question": f"There's no database called '{target}'. Which one did you mean?",
                     "kind": "select", "options": matches[:12],
-                    "hint": "Pick one, or type the exact name."}
+                    "hint": "Pick one, or type the exact name.",
+                    "_resume": {"kind": "db", "wrong": target}}
         return {"question": f"I don't see a database called '{target}'. What's the exact name?",
-                "kind": "text"}
+                "kind": "text", "_resume": {"kind": "db", "wrong": target}}
     return None
 
 
@@ -288,25 +305,118 @@ def _resolve_draft_matches(draft, conn, fam, routes):
     sure all ask rather than guess, so a confirmed delete never hits the wrong row."""
     if fam not in ("documentdb", "elasticsearch"):
         return None
-    for op in draft.get("operations") or []:
+    for i, op in enumerate(draft.get("operations") or []):
         if op.get("kind") not in ("update_data", "delete_data") or op.get("id") or not op.get("match"):
             continue
         ids, truncated, err = _find_by_match(conn, op, fam, routes)
         coll = _op_collection(op, fam) or "the collection"
+        rz = {"kind": "match", "op_index": i}
         if err:
-            return {"question": f"Couldn't look that up in {coll}: {err}. What's the exact _id?", "kind": "text"}
+            return {"question": f"Couldn't look that up in {coll}: {err}. What's the exact _id?",
+                    "kind": "text", "_resume": rz}
         if not truncated and len(ids) == 1:
             op["id"] = ids[0]
+            op.pop("match", None)
             continue
         if not ids:
             reason = (f"Nothing in {coll} matches {op['match']}" if not truncated
                       else f"{coll} is large, so I couldn't pin down {op['match']}")
-            return {"question": f"{reason}. What's the exact _id?", "kind": "text"}
+            return {"question": f"{reason}. What's the exact _id?", "kind": "text", "_resume": rz}
         head = (f"Several documents in {coll} match {op['match']}" if truncated
                 else f"{len(ids)} documents in {coll} match {op['match']}")
         return {"question": f"{head}. Which one?", "kind": "select",
-                "options": [_id_str(x) for x in ids[:12]], "hint": "Pick the _id to change, or type it."}
+                "options": [_id_str(x) for x in ids[:12]], "hint": "Pick the _id to change, or type it.",
+                "_resume": rz}
     return None
+
+
+def _disambiguate(draft, conn, fam, routes, real_dbs):
+    """Run the two draft guardrails (unknown database, unresolved row match). If one
+    needs the user, return (question, resume) where resume carries the draft plus
+    what's being filled, so the answer can be applied without the model. Otherwise
+    (None, None) and the draft is ready (matches resolved in place as a side effect)."""
+    for check in (_validate_draft_db(draft, real_dbs, fam),
+                  _resolve_draft_matches(draft, conn, fam, routes)):
+        if check:
+            resume = check.pop("_resume", {})
+            resume["draft"] = draft
+            return check, resume
+    return None, None
+
+
+def _apply_answer(draft, resume, answer):
+    """Splice the user's answer to a disambiguation into the held draft. Same
+    resolution the model used to redo, but exact: for a database we swap the
+    mistyped name everywhere it appears; for a match we set the chosen id and drop
+    the now-answered match so it isn't looked up again."""
+    kind = resume.get("kind")
+    if kind == "db":
+        wrong = resume.get("wrong")
+        if draft.get("database") == wrong:
+            draft["database"] = answer
+        for op in draft.get("operations") or []:
+            if op.get("database") == wrong:
+                op["database"] = answer
+    elif kind == "match":
+        i = resume.get("op_index")
+        ops = draft.get("operations") or []
+        if isinstance(i, int) and 0 <= i < len(ops):
+            ops[i]["id"] = answer
+            ops[i].pop("match", None)
+
+
+def resume_draft(body, routes):
+    """Handler for /api/ai/resume: the user answered a disambiguation warden itself
+    raised, so apply it and re-check deterministically, no model. Returns the ready
+    draft, or the next question if the draft still needs something."""
+    resume = body.get("resume") or {}
+    draft = resume.get("draft")
+    answer = str(body.get("answer", "")).strip()
+    if not isinstance(draft, dict) or not answer:
+        return {"error": "Nothing to resume."}
+    conn = _connection(body)
+    fam = engine_family(conn.get("engine", ""))
+    try:
+        _apply_answer(draft, resume, answer)
+        real_dbs = _list_databases(conn, routes)
+        q, rz = _disambiguate(draft, conn, fam, routes, real_dbs)
+    except Exception as e:
+        return {"error": _tidy_error(str(e), "the draft")}
+    if q:
+        return {"question": q, "resume": rz}
+    return {"draft": draft}
+
+
+def _build_report(kind, conn, fam, routes, is_prod):
+    """Gather users and their access through the read handlers, then hand it to
+    the reports module. One list-users call plus one user-info call per user; it's
+    a report, not a hot path, so that's fine. Returns a report dict or an error."""
+    if kind not in _REPORT_KINDS:
+        kind = "access"
+    lu = routes.get("/api/list-users")
+    ui = routes.get("/api/user-info")
+    if not lu or not ui:
+        return {"error": "This engine has no user accounts to report on."}
+    try:
+        res = _call(lu, dict(conn))
+        if isinstance(res, dict) and res.get("error"):
+            return {"error": _tidy_error(res["error"], "users")}
+        users = (res.get("users") if isinstance(res, dict) else res) or []
+        infos, skipped = [], 0
+        for u in users[:_REPORT_MAX_USERS]:
+            name = u.get("user") if isinstance(u, dict) else u
+            if not name:
+                continue
+            info = _call(ui, {**conn, "username": name})
+            if isinstance(info, dict) and "error" not in info:
+                infos.append(info)
+            else:
+                skipped += 1   # couldn't inspect this account; report says so
+        # Users past the cap are counted as not-inspected rather than dropped silently.
+        skipped += max(0, len(users) - _REPORT_MAX_USERS)
+        return reports.build_report(kind, infos, fam, is_prod, skipped)
+    except Exception as e:
+        return {"error": _tidy_error(str(e), "users")}
 
 
 def _connection(body):
@@ -403,14 +513,20 @@ def chat_turn(body, routes):
         for tc in result.tool_calls:
             if tc.name == "ask_user":
                 return {"question": tc.args or {}, "steps": steps, "note": _clean_reply(result.text)}
+            if tc.name == "security_report":
+                kind = (tc.args or {}).get("kind", "access")
+                rep = _build_report(kind, conn, fam, routes, _is_prod(body))
+                if rep.get("error"):
+                    return {"reply": rep["error"], "steps": steps}
+                return {"report": rep, "steps": steps, "note": _clean_reply(result.text)}
             if tc.name == "draft_operation":
                 dargs = tc.args or {}
-                dq = _validate_draft_db(dargs, real_dbs, fam)
-                if dq:  # the draft names a database that doesn't exist: disambiguate first
-                    return {"question": dq, "steps": steps}
-                mq = _resolve_draft_matches(dargs, conn, fam, routes)
-                if mq:  # a data op's match hit nothing or several rows: ask, don't guess
-                    return {"question": mq, "steps": steps}
+                # A bad database or an unresolved match is asked about here; the
+                # answer comes back to /api/ai/resume and is applied without the
+                # model, so a picked db or row lands exactly as chosen.
+                q, resume = _disambiguate(dargs, conn, fam, routes, real_dbs)
+                if q:
+                    return {"question": q, "resume": resume, "steps": steps}
                 return {"draft": dargs, "steps": steps, "note": _clean_reply(result.text)}
 
         # Otherwise run the read-only tools and feed the results back.
