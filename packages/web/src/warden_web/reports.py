@@ -12,6 +12,15 @@ membership whose privileges live elsewhere, a custom role, a bare list of
 commands — is marked `unresolved` (write "unknown"), never quietly downgraded to
 read. Under-reporting who can write is the one failure a "who can touch prod"
 report must not make, so when in doubt we say "unresolved", not "safe".
+
+Known coverage gaps (the report is about named user accounts, per connection):
+  - Postgres privileges granted to PUBLIC (every role) aren't attributed to each
+    user, so a PUBLIC table-write grant would not show up per user. Database-level
+    PUBLIC CONNECT/CREATE is caught (has_database_privilege honours PUBLIC).
+  - Elasticsearch API keys and run-as aren't users, so a write-capable API key is
+    out of scope here.
+These are gaps to widen later, not silent downgrades; nothing above turns real
+write access into a read-only or "unused" verdict.
 """
 from __future__ import annotations
 
@@ -29,7 +38,10 @@ _MONGO_ADMIN = {"root", "dbowner", "dbadmin", "dbadminanydatabase", "useradmin",
 _SQL_WRITE = {"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "TRUNCATE",
               "REFERENCES", "INDEX", "ALL", "ALL PRIVILEGES", "CREATE ROUTINE",
               "ALTER ROUTINE", "EVENT", "TRIGGER", "LOCK TABLES", "CREATE VIEW"}
-_SQL_READ = {"SELECT", "SHOW VIEW", "USAGE", "CONNECT", "TEMPORARY", "TEMP", "EXECUTE"}
+_SQL_READ = {"SELECT", "SHOW VIEW", "USAGE", "CONNECT", "TEMPORARY", "TEMP"}
+# Not read, not plainly write: PROXY lets you become another account, EXECUTE can
+# run a definer-rights routine that writes. Neither is safe to call read-only.
+_SQL_ESCALATE = {"PROXY", "EXECUTE"}
 
 # Redis command categories/commands we treat as confidently read-only.
 _REDIS_READ_CATS = {"+@read", "+@keyspace", "+@connection", "+@scripting"}
@@ -113,7 +125,7 @@ def _strip_parens(s):
 
 
 def _normalize_mysql(info):
-    scopes, admin, write, roles = [], False, False, []
+    scopes, admin, write, roles, escalate = [], False, False, [], False
     for stmt in info.get("grant_statements") or []:
         g = _parse_mysql_grant(stmt)
         if not g:
@@ -122,6 +134,11 @@ def _normalize_mysql(info):
             roles.append(g["role"])   # membership; its privileges live in the role
             continue
         privs = g["privs"]
+        w = bool(privs & _SQL_WRITE)
+        if not w and (privs & _SQL_ESCALATE):
+            escalate = True           # PROXY/EXECUTE: can act as / run definer routines
+            scopes.append({"scope": g["scope"], "level": "?"})
+            continue
         if privs <= _SQL_READ:
             if privs - {"USAGE"}:
                 scopes.append({"scope": g["scope"], "level": "read"})
@@ -129,11 +146,10 @@ def _normalize_mysql(info):
         global_all = g["scope"] == "*" and ("ALL PRIVILEGES" in privs or "ALL" in privs)
         if global_all or (g["scope"] == "*" and g["grant_option"]):
             admin = True
-        w = bool(privs & _SQL_WRITE)
         write = write or w
         level = "admin" if (global_all or (g["grant_option"] and g["scope"] != "*")) else ("write" if w else "read")
         scopes.append({"scope": g["scope"], "level": level})
-    unresolved = bool(roles) and not (write or admin)
+    unresolved = (bool(roles) or escalate) and not (write or admin)
     flags = (["superuser"] if admin else []) + (["locked"] if info.get("locked") else [])
     if roles:
         flags.append("roles:" + ",".join(roles[:4]))

@@ -56,6 +56,14 @@ def test_mysql_grants_roles_and_columns():
           "grant_statements": ["GRANT SELECT ON `shop`.* TO `rep`@`%`"]}
     assert not norm(ro, "mysql")["write"] and not norm(ro, "mysql")["unresolved"]
 
+    # PROXY / EXECUTE are escalation, not read: unresolved, never a confident "read"
+    prox = {"user": "p@%", "can_login": True, "locked": False,
+            "grant_statements": ["GRANT PROXY ON `admin`@`%` TO `p`@`%`"]}
+    assert norm(prox, "mysql")["unresolved"] and not norm(prox, "mysql")["write"]
+    exe = {"user": "e@%", "can_login": True, "locked": False,
+           "grant_statements": ["GRANT EXECUTE ON `shop`.* TO `e`@`%`"]}
+    assert norm(exe, "mysql")["unresolved"]
+
 
 def test_mongo_builtin_custom_and_admin():
     assert not norm({"user": "r", "roles": [{"role": "read", "db": "shop"}]}, "documentdb")["write"]
