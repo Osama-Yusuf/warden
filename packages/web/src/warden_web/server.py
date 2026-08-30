@@ -1400,6 +1400,10 @@ def api_ai_execute(body):
     return assistant.run_operations(body, ROUTES)
 
 
+def api_ai_resume(body):
+    return assistant.resume_draft(body, ROUTES)
+
+
 def api_ai_chat(body):
     fam = engine_family(body.get("engine", ""))
     body["_audits"] = [{"id": a["id"], "title": a["title"]}
@@ -1416,7 +1420,7 @@ REQUIRES_CREDS = {
     "/api/table-meta", "/api/object-stats", "/api/row-insert", "/api/row-update", "/api/row-delete",
     "/api/query", "/api/query-stream",
     "/api/audit-run", "/api/health",
-    "/api/ai/execute",
+    "/api/ai/execute", "/api/ai/resume",
 }
 
 ROUTES = {
@@ -1456,6 +1460,7 @@ ROUTES = {
     "/api/ai/download": api_ai_download,
     "/api/ai/check": api_ai_check,
     "/api/ai/chat": api_ai_chat,
+    "/api/ai/resume": api_ai_resume,
     "/api/ai/execute": api_ai_execute,
 }
 

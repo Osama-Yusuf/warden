@@ -288,6 +288,50 @@ def test_resolve_match_rejects_operator_values():
     assert r4.get("error") and "non-empty" in r4["error"]
 
 
+def test_apply_answer():
+    from warden_web.assistant import _apply_answer
+    # a picked database replaces the mistyped name everywhere it appears
+    d = {"database": "shp", "operations": [{"kind": "grant", "database": "shp"}, {"kind": "grant", "database": "learn"}]}
+    _apply_answer(d, {"kind": "db", "wrong": "shp"}, "shop")
+    assert d["database"] == "shop" and d["operations"][0]["database"] == "shop" and d["operations"][1]["database"] == "learn"
+    # a picked row sets the id and drops the now-answered match
+    d2 = {"operations": [{"kind": "delete_data", "match": {"name": "bob"}}]}
+    _apply_answer(d2, {"kind": "match", "op_index": 0}, "abc123")
+    assert d2["operations"][0]["id"] == "abc123" and "match" not in d2["operations"][0]
+
+
+def test_resume_draft_db_ready_and_reask():
+    from warden_web import assistant
+    dbs = {"/api/list-databases": lambda c: {"databases": [{"name": "shop"}, {"name": "analytics"}]}}
+    # picking a real db applies it and the draft is ready, no model
+    ready = assistant.resume_draft({"engine": "postgresql", "answer": "shop", "resume": {
+        "kind": "db", "wrong": "shp",
+        "draft": {"operations": [{"kind": "grant", "username": "u", "database": "shp", "access": "read"}]}}}, dbs)
+    assert "draft" in ready and ready["draft"]["operations"][0]["database"] == "shop"
+    # a still-wrong answer asks again, deterministically, with a fresh resume token
+    again = assistant.resume_draft({"engine": "postgresql", "answer": "sho", "resume": {
+        "kind": "db", "wrong": "shp", "draft": {"operations": [{"kind": "grant", "database": "shp"}]}}}, dbs)
+    assert "question" in again and again["resume"]["kind"] == "db" and again["resume"]["wrong"] == "sho"
+
+
+def test_resume_draft_match_ready():
+    from warden_web import assistant
+    routes = {"/api/list-databases": lambda c: {"databases": [{"name": "shop"}]},
+              "/api/resolve-match": lambda c: {"ids": [], "truncated": False}}
+    out = assistant.resume_draft({"engine": "documentdb", "answer": "6a9300000000000000000001", "resume": {
+        "kind": "match", "op_index": 0,
+        "draft": {"operations": [{"kind": "delete_data", "database": "shop", "collection": "u",
+                                  "match": {"name": "bob"}}]}}}, routes)
+    op = out["draft"]["operations"][0]
+    assert op["id"] == "6a9300000000000000000001" and "match" not in op
+
+
+def test_resume_draft_guards():
+    from warden_web import assistant
+    assert assistant.resume_draft({"resume": {}, "answer": ""}, {}).get("error")
+    assert assistant.resume_draft({"answer": "x"}, {}).get("error")   # no draft
+
+
 def test_es_grounding_and_collection_fallback():
     from warden_web import assistant
     # ES has one cluster and no databases, so don't block a draft whose "database"

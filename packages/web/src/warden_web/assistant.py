@@ -249,9 +249,10 @@ def _validate_draft_db(draft, names, fam=""):
         if matches:
             return {"question": f"There's no database called '{target}'. Which one did you mean?",
                     "kind": "select", "options": matches[:12],
-                    "hint": "Pick one, or type the exact name."}
+                    "hint": "Pick one, or type the exact name.",
+                    "_resume": {"kind": "db", "wrong": target}}
         return {"question": f"I don't see a database called '{target}'. What's the exact name?",
-                "kind": "text"}
+                "kind": "text", "_resume": {"kind": "db", "wrong": target}}
     return None
 
 
@@ -304,25 +305,86 @@ def _resolve_draft_matches(draft, conn, fam, routes):
     sure all ask rather than guess, so a confirmed delete never hits the wrong row."""
     if fam not in ("documentdb", "elasticsearch"):
         return None
-    for op in draft.get("operations") or []:
+    for i, op in enumerate(draft.get("operations") or []):
         if op.get("kind") not in ("update_data", "delete_data") or op.get("id") or not op.get("match"):
             continue
         ids, truncated, err = _find_by_match(conn, op, fam, routes)
         coll = _op_collection(op, fam) or "the collection"
+        rz = {"kind": "match", "op_index": i}
         if err:
-            return {"question": f"Couldn't look that up in {coll}: {err}. What's the exact _id?", "kind": "text"}
+            return {"question": f"Couldn't look that up in {coll}: {err}. What's the exact _id?",
+                    "kind": "text", "_resume": rz}
         if not truncated and len(ids) == 1:
             op["id"] = ids[0]
+            op.pop("match", None)
             continue
         if not ids:
             reason = (f"Nothing in {coll} matches {op['match']}" if not truncated
                       else f"{coll} is large, so I couldn't pin down {op['match']}")
-            return {"question": f"{reason}. What's the exact _id?", "kind": "text"}
+            return {"question": f"{reason}. What's the exact _id?", "kind": "text", "_resume": rz}
         head = (f"Several documents in {coll} match {op['match']}" if truncated
                 else f"{len(ids)} documents in {coll} match {op['match']}")
         return {"question": f"{head}. Which one?", "kind": "select",
-                "options": [_id_str(x) for x in ids[:12]], "hint": "Pick the _id to change, or type it."}
+                "options": [_id_str(x) for x in ids[:12]], "hint": "Pick the _id to change, or type it.",
+                "_resume": rz}
     return None
+
+
+def _disambiguate(draft, conn, fam, routes, real_dbs):
+    """Run the two draft guardrails (unknown database, unresolved row match). If one
+    needs the user, return (question, resume) where resume carries the draft plus
+    what's being filled, so the answer can be applied without the model. Otherwise
+    (None, None) and the draft is ready (matches resolved in place as a side effect)."""
+    for check in (_validate_draft_db(draft, real_dbs, fam),
+                  _resolve_draft_matches(draft, conn, fam, routes)):
+        if check:
+            resume = check.pop("_resume", {})
+            resume["draft"] = draft
+            return check, resume
+    return None, None
+
+
+def _apply_answer(draft, resume, answer):
+    """Splice the user's answer to a disambiguation into the held draft. Same
+    resolution the model used to redo, but exact: for a database we swap the
+    mistyped name everywhere it appears; for a match we set the chosen id and drop
+    the now-answered match so it isn't looked up again."""
+    kind = resume.get("kind")
+    if kind == "db":
+        wrong = resume.get("wrong")
+        if draft.get("database") == wrong:
+            draft["database"] = answer
+        for op in draft.get("operations") or []:
+            if op.get("database") == wrong:
+                op["database"] = answer
+    elif kind == "match":
+        i = resume.get("op_index")
+        ops = draft.get("operations") or []
+        if isinstance(i, int) and 0 <= i < len(ops):
+            ops[i]["id"] = answer
+            ops[i].pop("match", None)
+
+
+def resume_draft(body, routes):
+    """Handler for /api/ai/resume: the user answered a disambiguation warden itself
+    raised, so apply it and re-check deterministically, no model. Returns the ready
+    draft, or the next question if the draft still needs something."""
+    resume = body.get("resume") or {}
+    draft = resume.get("draft")
+    answer = str(body.get("answer", "")).strip()
+    if not isinstance(draft, dict) or not answer:
+        return {"error": "Nothing to resume."}
+    conn = _connection(body)
+    fam = engine_family(conn.get("engine", ""))
+    try:
+        _apply_answer(draft, resume, answer)
+        real_dbs = _list_databases(conn, routes)
+        q, rz = _disambiguate(draft, conn, fam, routes, real_dbs)
+    except Exception as e:
+        return {"error": _tidy_error(str(e), "the draft")}
+    if q:
+        return {"question": q, "resume": rz}
+    return {"draft": draft}
 
 
 def _build_report(kind, conn, fam, routes, is_prod):
@@ -459,12 +521,12 @@ def chat_turn(body, routes):
                 return {"report": rep, "steps": steps, "note": _clean_reply(result.text)}
             if tc.name == "draft_operation":
                 dargs = tc.args or {}
-                dq = _validate_draft_db(dargs, real_dbs, fam)
-                if dq:  # the draft names a database that doesn't exist: disambiguate first
-                    return {"question": dq, "steps": steps}
-                mq = _resolve_draft_matches(dargs, conn, fam, routes)
-                if mq:  # a data op's match hit nothing or several rows: ask, don't guess
-                    return {"question": mq, "steps": steps}
+                # A bad database or an unresolved match is asked about here; the
+                # answer comes back to /api/ai/resume and is applied without the
+                # model, so a picked db or row lands exactly as chosen.
+                q, resume = _disambiguate(dargs, conn, fam, routes, real_dbs)
+                if q:
+                    return {"question": q, "resume": resume, "steps": steps}
                 return {"draft": dargs, "steps": steps, "note": _clean_reply(result.text)}
 
         # Otherwise run the read-only tools and feed the results back.

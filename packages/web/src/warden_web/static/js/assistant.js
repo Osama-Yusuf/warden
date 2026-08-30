@@ -143,7 +143,7 @@ async function aiAsk(text) {
 function aiHandle(res) {
   if (!res || res.error) { aiBubble('err', res?.error || 'Something went wrong.'); return; }
   if (res.steps && res.steps.length) aiSteps(res.steps);
-  if (res.question) { aiThread.push({ role: 'assistant', content: res.question.question || 'A question' }); aiQuestion(res.question); return; }
+  if (res.question) { aiThread.push({ role: 'assistant', content: res.question.question || 'A question' }); aiQuestion(res.question, res.resume); return; }
   if (res.draft) { aiThread.push({ role: 'assistant', content: 'Proposed: ' + (res.draft.summary || 'an operation') }); aiDraft(res.draft); return; }
   if (res.report) {
     aiThread.push({ role: 'assistant', content: res.note || res.report.title || 'Report' });
@@ -186,7 +186,7 @@ function aiSteps(steps) {
   t.appendChild(d); aiScroll();
 }
 
-function aiQuestion(q) {
+function aiQuestion(q, resume) {
   const t = aiThreadEl();
   const wrap = document.createElement('div');
   wrap.className = 'ai-ask';
@@ -212,7 +212,15 @@ function aiQuestion(q) {
   }
   wrap.innerHTML = `<div class="ai-ask-q">${esc(q.question || '')}</div>${controls}${q.hint ? `<div class="ai-ask-hint">${esc(q.hint)}</div>` : ''}`;
   // Wire option buttons by index so we never have to escape a value into inline JS.
-  wrap.querySelectorAll('.ai-opt').forEach(b => { b.onclick = () => aiAnswer(opts[+b.dataset.i]); });
+  // When there's a resume token (a disambiguation warden raised), the answer is
+  // applied deterministically instead of going back through the model.
+  wrap.querySelectorAll('.ai-opt').forEach(b => { b.onclick = () => aiAnswer(opts[+b.dataset.i], resume); });
+  if (resume) {
+    const input = wrap.querySelector('.ai-ask-input');
+    const send = wrap.querySelector('.ai-chip-btn.primary');
+    if (input) input.onkeydown = e => { if (e.key === 'Enter') aiAnswer(input.value, resume); };
+    if (send && input) send.onclick = () => aiAnswer(input.value, resume);
+  }
   const typeBtn = wrap.querySelector('.ai-typeout-btn');
   if (typeBtn) typeBtn.onclick = () => {
     const row = wrap.querySelector('.ai-typeout-row');
@@ -232,12 +240,34 @@ function aiTypeOut() {
     </div>`;
 }
 
-function aiAnswer(val) {
+function aiAnswer(val, resume) {
   val = (val || '').toString().trim();
   if (!val) return;
   // disable the widget that asked
   aiThreadEl().querySelectorAll('.ai-ask').forEach(el => el.classList.add('answered'));
-  aiAsk(val);
+  if (resume) aiResume(resume, val); else aiAsk(val);
+}
+
+// Answer a disambiguation warden raised: warden applies it to the held draft and
+// re-checks, no model, so a chosen db or row lands exactly as picked.
+async function aiResume(resume, answer) {
+  if (!aiReady()) { aiNeedsSetup(); return; }
+  aiThread.push({ role: 'user', content: answer });
+  aiBubble('me', answer);
+  aiBusy = true;
+  const work = aiWorking();
+  let res;
+  try {
+    res = await apiPost('/api/ai/resume', {
+      resume, answer,
+      context: { engine: currentEngine, env: aiEnvValue(), page: currentView, connected: !!connected },
+    });
+  } catch (err) {
+    res = { error: 'Could not reach the server.' };
+  }
+  work.remove();
+  aiBusy = false;
+  aiHandle(res);
 }
 function aiAnswerMulti(btn) {
   const picks = [...btn.parentElement.querySelectorAll('input:checked')].map(i => i.value);
