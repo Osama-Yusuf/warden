@@ -418,10 +418,17 @@ _PG_PRIVS = {"read": ["CONNECT", "SELECT"],
 _MYSQL_PRIVS = {"read": ["SELECT"],
                 "write": ["SELECT", "INSERT", "UPDATE", "DELETE"],
                 "admin": ["ALL PRIVILEGES"]}
-_ES_ROLE = {"read": "viewer", "write": "editor", "admin": "superuser"}
+# ES built-in roles are cluster-wide (there's no safe per-index "admin"), so
+# admin maps to editor, never superuser: Ward must never hand out cluster root.
+_ES_ROLE = {"read": "viewer", "write": "editor", "admin": "editor"}
+# Redis rule direction lives in the token, and the adapter's revoke is additive,
+# so grant uses '+' and revoke uses '-' (never re-adding '~*' on a revoke).
 _REDIS_RULES = {"read": ["~*", "+@read"],
                 "write": ["~*", "+@read", "+@write"],
                 "admin": ["~*", "+@all"]}
+_REDIS_REVOKE = {"read": ["-@read"],
+                 "write": ["-@write"],
+                 "admin": ["-@all", "resetkeys"]}
 
 
 def _base_body(conn, op):
@@ -457,7 +464,8 @@ def _grant_bodies(conn, op, fam):
     if fam == "elasticsearch":
         return [{**base, "roles": [_ES_ROLE.get(access, "viewer")]}]   # cluster-level built-in role
     if fam == "redis":
-        return [{**base, "rule": tok} for tok in _REDIS_RULES.get(access, ["~*", "+@read"])]
+        table = _REDIS_REVOKE if op.get("kind") == "revoke" else _REDIS_RULES
+        return [{**base, "rule": tok} for tok in table.get(access, table["read"])]
     privs = (_PG_PRIVS if fam == "postgresql" else _MYSQL_PRIVS).get(access, ["SELECT"])
     return [{**base, "database": db, "privilege": p} for p in privs]
 

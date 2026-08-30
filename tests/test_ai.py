@@ -209,12 +209,15 @@ def test_es_redis_grant_translation():
     from warden_web.assistant import _grant_bodies
     conn = {"admin_user": "a"}
     g = {"username": "u", "database": "logs"}
-    # Elasticsearch: a built-in role name (viewer/editor/superuser)
-    es = _grant_bodies(conn, {**g, "access": "write"}, "elasticsearch")
-    assert len(es) == 1 and es[0]["roles"] == ["editor"]
-    # Redis: space-free ACL rule tokens, one per grant call
-    rd = [b["rule"] for b in _grant_bodies(conn, {**g, "access": "write"}, "redis")]
-    assert rd == ["~*", "+@read", "+@write"] and all(" " not in t for t in rd)
+    # Elasticsearch: built-in role; admin must NEVER be superuser (no cluster root)
+    assert _grant_bodies(conn, {**g, "kind": "grant", "access": "write"}, "elasticsearch")[0]["roles"] == ["editor"]
+    assert _grant_bodies(conn, {**g, "kind": "grant", "access": "admin"}, "elasticsearch")[0]["roles"] == ["editor"]
+    # Redis GRANT: positive tokens, space-free
+    gr = [b["rule"] for b in _grant_bodies(conn, {**g, "kind": "grant", "access": "write"}, "redis")]
+    assert gr == ["~*", "+@read", "+@write"] and all(" " not in t for t in gr)
+    # Redis REVOKE: negative tokens and NO '~*' (must not re-grant key access)
+    rv = [b["rule"] for b in _grant_bodies(conn, {**g, "kind": "revoke", "access": "read"}, "redis")]
+    assert rv == ["-@read"] and "~*" not in rv
 
 
 def test_is_prod_no_shortcircuit():
