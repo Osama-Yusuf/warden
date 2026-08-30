@@ -205,6 +205,20 @@ def test_local_provider_flags_and_catalog():
     assert isinstance(download_state(), dict)
 
 
+def test_prod_execute_governance():
+    from warden_web.assistant import _is_prod, run_operations
+    assert _is_prod({"env_kind": "prod"}) is True
+    assert _is_prod({"env": "production-db"}) is True
+    assert _is_prod({"env": "staging"}) is False
+    assert _is_prod({"env_kind": "dev"}) is False
+    # prod without opt-in: refused before any op runs
+    out = run_operations({"env_kind": "prod", "operations": [{"kind": "create_user", "username": "x"}]}, routes={})
+    assert "error" in out and "prod" in out["error"].lower()
+    # opting in gets past the prod gate (empty op list then trips the normal guard)
+    out2 = run_operations({"env_kind": "prod", "allow_prod": True, "operations": []}, routes={})
+    assert out2.get("error") == "Nothing to run."
+
+
 def test_create_database_op_and_grounding_exempt():
     from warden_web.assistant import OP_ROUTE, _op_body, _validate_draft_db
     assert OP_ROUTE["create_database"] == "/api/create-database"

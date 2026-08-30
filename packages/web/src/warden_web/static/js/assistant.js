@@ -288,6 +288,10 @@ function aiDraftFoot(el, state) {
     foot.innerHTML = `<span class="ai-op-note ai-warn">Read-only mode is on. Turn it off in the top bar to let Ward run this.</span>`;
     return;
   }
+  if (envKind(aiEnvValue()) === 'prod' && !aiSettings().allowProd) {
+    foot.innerHTML = `<span class="ai-op-note ai-warn">This looks like production. Ward drafts only here, run it yourself. (You can allow prod runs on the Ward page.)</span>`;
+    return;
+  }
   if (state === 'confirm') {
     foot.innerHTML = `<span class="ai-op-note ai-warn">This changes data. Sure?</span>
       <button type="button" class="ai-chip-btn">Cancel</button>
@@ -305,7 +309,8 @@ function aiDraftFoot(el, state) {
 async function aiRunOps(el) {
   el.querySelector('.ai-op-foot').innerHTML =
     `<span class="ai-op-note"><span class="ai-bars"><i></i><i></i><i></i></span> running</span>`;
-  const res = await apiPost('/api/ai/execute', { operations: el._ops });
+  const res = await apiPost('/api/ai/execute', { operations: el._ops,
+    env_kind: envKind(aiEnvValue()), allow_prod: !!aiSettings().allowProd });
   const foot = el.querySelector('.ai-op-foot');
   el.classList.add('done');
   if (!res || res.error) { foot.innerHTML = `<span class="ai-op-note ai-warn">${esc(res && res.error || 'Failed to run.')}</span>`; return; }
@@ -358,7 +363,9 @@ function aiRenderConfig() {
     </div>
     <div id="aiProviderBody"></div>
     <div class="card ai-card">
-      <div class="ai-field"><label>Custom behavior <span class="muted">(optional)</span></label>
+      <label class="ai-prod-toggle"><input type="checkbox" id="aiAllowProd" ${s.allowProd ? 'checked' : ''} onchange="aiSaveAllowProd(this.checked)">
+        <span>Let Ward run changes on <b>production</b> environments. Off by default, Ward only drafts there and you run it yourself.</span></label>
+      <div class="ai-field" style="margin-top:16px"><label>Custom behavior <span class="muted">(optional)</span></label>
         <textarea id="aiPersona" rows="2" placeholder="e.g. keep answers to one line, prefer names over ids…">${esc(s.persona || '')}</textarea></div>
       <div class="ai-actions"><button type="button" class="btn" onclick="aiSavePersona()">Save behavior</button></div>
     </div>`;
@@ -506,4 +513,10 @@ function aiSaveGemini() {
 function aiSavePersona() {
   saveAiSettings({ persona: document.getElementById('aiPersona').value.trim() });
   toast('Saved', 'success');
+}
+
+function aiSaveAllowProd(on) {
+  saveAiSettings({ allowProd: !!on });
+  toast(on ? 'Ward can now run changes on prod. Tread carefully.' : 'Ward is draft-only on prod again.',
+        on ? 'info' : 'success');
 }

@@ -13,6 +13,7 @@ buttons use.
 from __future__ import annotations
 
 import json
+import re
 
 from warden_core.ai import AIError, get_provider
 from warden_core.ai import local
@@ -447,11 +448,23 @@ def _grant_bodies(conn, op, fam):
     return [{**base, "database": db, "privilege": p} for p in privs]
 
 
+def _is_prod(body):
+    """Prod if the connection is tagged prod (env_kind from the client's own
+    tagging) or the environment name just looks like production."""
+    kind = body.get("env_kind")
+    if kind:
+        return kind == "prod"
+    return bool(re.search(r"prod", str(body.get("env", "")), re.I))
+
+
 def run_operations(body, routes):
     """Handler for /api/ai/execute: run the operations the user confirmed, in
-    order, each through its real handler. Refuses in read-only mode."""
+    order, each through its real handler. Refuses in read-only mode, and stays
+    draft-only on prod unless the operator has opted in."""
     if body.get("read_only"):
         return {"error": "Read-only mode is on. Turn it off in the top bar to let Ward make changes."}
+    if _is_prod(body) and not body.get("allow_prod"):
+        return {"error": "Ward is draft-only on production. Run this yourself, or allow prod runs on the Ward page."}
     ops = body.get("operations") or []
     if not ops:
         return {"error": "Nothing to run."}

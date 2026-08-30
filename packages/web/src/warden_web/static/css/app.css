@@ -970,3 +970,8 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .ai-res.bad { color: var(--danger); }
 .ai-res code, .ai-pw { color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; cursor: pointer; }
 .ai-pw:hover { border-color: var(--accent); }
+
+/* Ward prod-execution toggle */
+.ai-prod-toggle { display: flex; align-items: flex-start; gap: 10px; font-size: 13.5px; color: var(--text); cursor: pointer; line-height: 1.5; }
+.ai-prod-toggle input { margin-top: 3px; flex: none; }
+.ai-prod-toggle b { color: var(--warning); }
