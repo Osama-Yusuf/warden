@@ -271,10 +271,19 @@ function aiOpLine(op) {
     case 'create_collection': return `create collection ${op.collection || '?'} in ${db}`;
     case 'create_database': return `create database ${db}`;
     case 'insert_data': return `insert into ${op.collection || op.name || db}: ${JSON.stringify(op.document || {}).slice(0, 70)}`;
-    case 'update_data': return `update ${op.collection || op.name || db} #${op.id || '?'}: ${JSON.stringify(op.changes || {}).slice(0, 55)}`;
-    case 'delete_data': return `delete from ${op.collection || op.name || db} #${op.id || '?'}`;
+    case 'update_data': return `update ${op.collection || op.name || db} #${aiRowTarget(op)}: ${JSON.stringify(op.changes || {}).slice(0, 50)}`;
+    case 'delete_data': return `delete from ${op.collection || op.name || db} #${aiRowTarget(op)}`;
     default: return op.kind || 'operation';
   }
+}
+
+// The row a data op targets: a resolved _id ({$oid} or string), pk, or match.
+function aiRowTarget(op) {
+  if (op.id && typeof op.id === 'object') return op.id.$oid || JSON.stringify(op.id);
+  if (op.id) return op.id;
+  if (op.pk) return JSON.stringify(op.pk);
+  if (op.match) return JSON.stringify(op.match);
+  return '?';
 }
 
 // The card's footer changes with state: idle -> a restricted confirm -> results.

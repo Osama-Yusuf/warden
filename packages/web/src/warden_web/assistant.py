@@ -117,7 +117,8 @@ VIRTUAL_TOOLS = [
                     "access": {"type": "string", "enum": ["read", "write", "admin"]},
                     "enable": {"type": "boolean", "description": "toggle_login: true to enable login, false to disable."},
                     "document": {"type": "object", "description": "insert_data: the row/document as field:value pairs."},
-                    "id": {"type": "string", "description": "update_data/delete_data: the row's _id (Mongo/ES) or key (Redis). Find it by browsing first."},
+                    "id": {"type": "string", "description": "update_data/delete_data: the row's _id (Mongo/ES) or key (Redis), if you already know it."},
+                    "match": {"type": "object", "description": "update_data/delete_data (Mongo/ES): pick the document by field:value, e.g. {\"name\":\"bob\"}, and warden finds its id. Use this instead of guessing an id."},
                     "changes": {"type": "object", "description": "update_data: the fields to set."},
                     "remove": {"type": "array", "items": {"type": "string"}, "description": "update_data: field names to remove."},
                     "value": {"type": "string", "description": "insert/update_data on Redis: the string value."},
@@ -207,11 +208,13 @@ def _database_hint(names):
             " 'database' field. If the user's database isn't an exact match, don't guess.")
 
 
-def _validate_draft_db(draft, names):
+def _validate_draft_db(draft, names, fam=""):
     """Guardrail: if the draft targets a database that doesn't exist, return an
     ask_user question (the close matches to pick from, or a plain 'type it') so
-    the model can't quietly draft against a database that isn't there."""
-    if not names:
+    the model can't quietly draft against a database that isn't there. Skipped on
+    Elasticsearch, which has one cluster and no databases: there the name the
+    model puts in 'database' is really an index, checked as a collection instead."""
+    if not names or fam == "elasticsearch":
         return None
     lows = {n.lower() for n in names}
     # every database the draft touches: the top-level one (legacy) plus each op's
@@ -233,6 +236,109 @@ def _validate_draft_db(draft, names):
                     "hint": "Pick one, or type the exact name."}
         return {"question": f"I don't see a database called '{target}'. What's the exact name?",
                 "kind": "text"}
+    return None
+
+
+def _id_str(rep):
+    return rep["$oid"] if isinstance(rep, dict) and "$oid" in rep else str(rep)
+
+
+def _op_collection(op, fam):
+    """The collection / index / table an op targets. On Elasticsearch the model
+    often puts the index in 'database' (ES has no real databases, so that field
+    is meaningless there), so fall back to it rather than lose the target."""
+    name = op.get("name") or op.get("collection") or op.get("table") or ""
+    if not name and fam == "elasticsearch":
+        name = op.get("database") or ""
+    return str(name)
+
+
+# How far we'll scan a collection to resolve a match before giving up and asking
+# for the id. Deleting the wrong row is worse than making the user paste an _id,
+# so a match in a very large collection deliberately falls back to that.
+_MATCH_PAGE = 200
+_MATCH_SCAN_MAX = 2000
+
+
+def _find_by_match(conn, op, fam, routes):
+    """Resolve a {field: value} match to the matching document ids in a doc-store
+    collection (Mongo/ES). Pages through the collection applying an exact filter
+    on real document values, rather than the browser's substring search which
+    samples fields and stops at one page: that could hide a second match and turn
+    an ambiguous match into a confident wrong id. Returns (ids, complete, error),
+    where complete is False when the collection was bigger than we'd scan, so the
+    caller knows the list may be partial and must ask rather than act.
+
+    The scan reads a bounded run of pages back to back and assumes the collection
+    isn't being rewritten underneath it. A write landing mid-scan could in theory
+    shift a row across a page edge; the fallout is a match we then ask about, and
+    the user still confirms the resolved id before anything runs."""
+    if fam not in ("documentdb", "elasticsearch"):
+        return [], True, None   # Postgres/Redis identify rows their own way
+    match = op.get("match")
+    handler = routes.get("/api/browse-data")
+    if not isinstance(match, dict) or not match or not handler:
+        return [], True, None
+    coll = _op_collection(op, fam)
+    out, offset = [], 0
+    try:
+        while offset < _MATCH_SCAN_MAX:
+            sub = dict(conn)
+            sub.update({"database": op.get("database", ""), "collection": coll,
+                        "table": coll, "limit": _MATCH_PAGE, "offset": offset})
+            res = handler(sub)
+            if not isinstance(res, dict) or "error" in res:
+                return [], False, (res.get("error") if isinstance(res, dict) else "browse failed")
+            rows, ids, cols = res.get("rows") or [], res.get("ids") or [], res.get("columns") or []
+            if len(ids) < len(rows):
+                # rows and ids should line up; if they don't, we can't safely map a
+                # match to an id, so surface it as an error (ask) rather than guess.
+                return [], False, "the browser returned mismatched rows and ids"
+            for i, row in enumerate(rows):
+                rowmap = dict(zip(cols, row))
+                if all(str(rowmap.get(f)) == str(v) for f, v in match.items()):
+                    out.append(ids[i])
+            # A short page means we've seen the whole collection. Trust the page
+            # size the handler actually used (it may cap our request), not the
+            # size we asked for, or a lower cap would look like the end too early.
+            try:
+                page = int(res.get("limit") or _MATCH_PAGE)
+            except (TypeError, ValueError):
+                page = _MATCH_PAGE
+            if not rows or len(rows) < page:
+                return out, True, None
+            offset += len(rows)
+        return out, False, None   # hit the scan cap before running out of rows
+    except Exception as e:
+        return [], False, str(e)
+
+
+def _resolve_draft_matches(draft, conn, fam, routes):
+    """For an update/delete_data op that gives a match instead of an id, find the
+    row and fill in its id. Only doc stores (Mongo/ES) resolve this way; a stray
+    match on another engine is ignored so its pk/key path still works. The one
+    case we act on is a single match in a collection we scanned end to end;
+    anything else (none, several, or too big to be sure) asks rather than guess."""
+    if fam not in ("documentdb", "elasticsearch"):
+        return None
+    for op in draft.get("operations") or []:
+        if op.get("kind") not in ("update_data", "delete_data") or op.get("id") or not op.get("match"):
+            continue
+        ids, complete, err = _find_by_match(conn, op, fam, routes)
+        coll = _op_collection(op, fam) or "the collection"
+        if err:
+            return {"question": f"Couldn't look that up in {coll}: {err}. What's the exact _id?", "kind": "text"}
+        if complete and len(ids) == 1:
+            op["id"] = ids[0]
+            continue
+        if not ids:
+            reason = (f"Nothing in {coll} matches {op['match']}" if complete
+                      else f"{coll} is too large to scan, so I couldn't pin down {op['match']}")
+            return {"question": f"{reason}. What's the exact _id?", "kind": "text"}
+        head = (f"{len(ids)} documents in {coll} match {op['match']}" if complete
+                else f"{coll} is large; at least {len(ids)} rows match {op['match']}")
+        return {"question": f"{head}. Which one?", "kind": "select",
+                "options": [_id_str(x) for x in ids[:12]], "hint": "Pick the _id to change, or type it."}
     return None
 
 
@@ -300,6 +406,7 @@ def chat_turn(body, routes):
         return {"error": "No model selected. Pick one in Settings."}
 
     conn = _connection(body)
+    fam = engine_family(conn.get("engine", ""))
     real_dbs = _list_databases(conn, routes)
     system = _system_prompt(body) + _database_hint(real_dbs)
     messages = _neutral_messages(body.get("messages", []))
@@ -330,10 +437,14 @@ def chat_turn(body, routes):
             if tc.name == "ask_user":
                 return {"question": tc.args or {}, "steps": steps, "note": _clean_reply(result.text)}
             if tc.name == "draft_operation":
-                dq = _validate_draft_db(tc.args or {}, real_dbs)
+                dargs = tc.args or {}
+                dq = _validate_draft_db(dargs, real_dbs, fam)
                 if dq:  # the draft names a database that doesn't exist: disambiguate first
                     return {"question": dq, "steps": steps}
-                return {"draft": tc.args or {}, "steps": steps, "note": _clean_reply(result.text)}
+                mq = _resolve_draft_matches(dargs, conn, fam, routes)
+                if mq:  # a data op's match hit nothing or several rows: ask, don't guess
+                    return {"question": mq, "steps": steps}
+                return {"draft": dargs, "steps": steps, "note": _clean_reply(result.text)}
 
         # Otherwise run the read-only tools and feed the results back.
         messages.append({"role": "assistant", "content": result.text, "tool_calls": result.tool_calls})
@@ -489,7 +600,7 @@ def _data_op_body(conn, op, fam):
     kind = op.get("kind")
     b = _base_body(conn, op)
     b["database"] = op.get("database", "")
-    name = op.get("name") or op.get("collection") or op.get("table") or ""
+    name = _op_collection(op, fam)
     if fam in ("documentdb", "elasticsearch"):
         b["collection"] = name
         if kind == "insert_data":
@@ -497,9 +608,13 @@ def _data_op_body(conn, op, fam):
         else:
             rid = op.get("id", "")
             # A bare Mongo ObjectId hex needs the {"$oid": ...} wrapper the handler
-            # expects; a non-hex _id (string/number) is passed through as-is.
-            if fam == "documentdb" and isinstance(rid, str) and re.fullmatch(r"[0-9a-fA-F]{24}", rid):
-                rid = {"$oid": rid}
+            # expects; a non-hex _id (string/number) is passed through as-is. Reject
+            # any other dict so a query operator ({"$gt": ...}) can't become the _id.
+            if fam == "documentdb":
+                if isinstance(rid, str) and re.fullmatch(r"[0-9a-fA-F]{24}", rid):
+                    rid = {"$oid": rid}
+                elif isinstance(rid, dict) and set(rid) != {"$oid"}:
+                    rid = ""
             b["id"] = rid
             if kind == "update_data":
                 b["set"] = op.get("changes") or {}

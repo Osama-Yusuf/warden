@@ -223,6 +223,95 @@ def test_data_op_translation():
     assert rk["key"] == "k" and rk["value"] == "v"
 
 
+def test_mongo_id_guard():
+    from warden_web.assistant import _data_op_body
+    c = {"admin_user": "a"}
+    assert _data_op_body(c, {"kind": "delete_data", "collection": "x", "id": "a" * 24}, "documentdb")["id"] == {"$oid": "a" * 24}
+    # a query operator can never become the _id filter
+    assert _data_op_body(c, {"kind": "delete_data", "collection": "x", "id": {"$gt": ""}}, "documentdb")["id"] == ""
+    assert _data_op_body(c, {"kind": "delete_data", "collection": "x", "id": {"$oid": "b" * 24}}, "documentdb")["id"] == {"$oid": "b" * 24}
+
+
+def test_match_resolution():
+    from warden_web import assistant
+    def browse_one(_sub):
+        return {"columns": ["name", "role"], "rows": [["bob", "v"], ["alice", "a"]],
+                "ids": [{"$oid": "1" * 24}, {"$oid": "2" * 24}]}
+    d = {"operations": [{"kind": "delete_data", "collection": "u", "match": {"name": "bob"}}]}
+    assert assistant._resolve_draft_matches(d, {}, "documentdb", {"/api/browse-data": browse_one}) is None
+    assert d["operations"][0]["id"] == {"$oid": "1" * 24}   # exactly one -> resolved
+    # ambiguous -> a select question, nothing deleted
+    d2 = {"operations": [{"kind": "delete_data", "collection": "u", "match": {"name": "dup"}}]}
+    q2 = assistant._resolve_draft_matches(d2, {}, "documentdb",
+        {"/api/browse-data": lambda s: {"columns": ["name"], "rows": [["dup"], ["dup"]], "ids": [1, 2]}})
+    assert q2 and q2["kind"] == "select" and len(q2["options"]) == 2 and "id" not in d2["operations"][0]
+    # no match -> ask for the id, don't draft a blind delete
+    q0 = assistant._resolve_draft_matches({"operations": [{"kind": "delete_data", "collection": "u", "match": {"x": 1}}]},
+        {}, "documentdb", {"/api/browse-data": lambda s: {"columns": [], "rows": [], "ids": []}})
+    assert q0 and q0["kind"] == "text"
+
+
+def test_match_resolution_exact_not_substring():
+    from warden_web import assistant
+    # "bob" must not resolve to "bobby": exact value match, not a substring hit
+    d = {"operations": [{"kind": "delete_data", "collection": "u", "match": {"name": "bob"}}]}
+    assert assistant._resolve_draft_matches(d, {}, "documentdb",
+        {"/api/browse-data": lambda s: {"columns": ["name"], "rows": [["bobby"], ["bob"]],
+                                        "ids": [{"$oid": "a" * 24}, {"$oid": "b" * 24}]}}) is None
+    assert d["operations"][0]["id"] == {"$oid": "b" * 24}
+
+
+def test_match_resolution_large_collection_refuses():
+    from warden_web import assistant
+    # A collection bigger than the scan cap: every page is full and none of the
+    # rows match, so we can't be sure -> must ask, never silently auto-resolve.
+    calls = {"n": 0}
+    def full_pages(_sub):
+        calls["n"] += 1
+        return {"columns": ["name"], "rows": [["x"]] * assistant._MATCH_PAGE,
+                "ids": list(range(assistant._MATCH_PAGE))}
+    q = assistant._resolve_draft_matches(
+        {"operations": [{"kind": "delete_data", "collection": "big", "match": {"name": "bob"}}]},
+        {}, "documentdb", {"/api/browse-data": full_pages})
+    assert q and q["kind"] == "text"                       # refused, asked for the id
+    assert calls["n"] == assistant._MATCH_SCAN_MAX // assistant._MATCH_PAGE   # bounded scan
+    # A stray match on a SQL op is ignored so its pk path still runs
+    assert assistant._resolve_draft_matches(
+        {"operations": [{"kind": "delete_data", "table": "t", "pk": {"id": 5}, "match": {"name": "z"}}]},
+        {}, "postgresql", {"/api/browse-data": full_pages}) is None
+
+
+def test_match_resolution_respects_echoed_page_limit():
+    from warden_web import assistant
+    # The handler caps each page at 2 rows (echoes limit=2), smaller than the
+    # requested page. The one match sits on the third page; if completeness were
+    # judged against the requested size, it would stop after page one and miss it.
+    coll = [("alice", "1"), ("bob", "2"), ("carol", "3"), ("dave", "4"), ("target", "5")]
+    def paged(sub):
+        chunk = coll[sub["offset"]:sub["offset"] + 2]
+        return {"columns": ["name", "k"], "limit": 2,
+                "rows": [[n, k] for n, k in chunk],
+                "ids": [{"$oid": k * 24} for _, k in chunk]}
+    d = {"operations": [{"kind": "delete_data", "collection": "u", "match": {"name": "target"}}]}
+    assert assistant._resolve_draft_matches(d, {}, "documentdb", {"/api/browse-data": paged}) is None
+    assert d["operations"][0]["id"] == {"$oid": "5" * 24}
+
+
+def test_es_grounding_and_collection_fallback():
+    from warden_web import assistant
+    # ES has one cluster and no databases, so don't block a draft whose "database"
+    # is really an index name; other engines still ground against the real list.
+    es_draft = {"operations": [{"kind": "delete_data", "database": "wardidx", "match": {"name": "x"}}]}
+    assert assistant._validate_draft_db(es_draft, ["docker-cluster"], "elasticsearch") is None
+    q = assistant._validate_draft_db({"operations": [{"kind": "delete_data", "database": "nope"}]},
+                                     ["shop"], "documentdb")
+    assert q and q["kind"] in ("select", "text")
+    # on ES an index given in 'database' becomes the collection target; elsewhere never
+    assert assistant._op_collection({"database": "wardidx"}, "elasticsearch") == "wardidx"
+    assert assistant._op_collection({"collection": "c", "database": "wardidx"}, "elasticsearch") == "c"
+    assert assistant._op_collection({"database": "shop"}, "documentdb") == ""
+
+
 def test_es_redis_grant_translation():
     from warden_web.assistant import _grant_bodies
     conn = {"admin_user": "a"}

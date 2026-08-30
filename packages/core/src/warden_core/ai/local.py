@@ -272,8 +272,8 @@ def _routing_prompt(system, read_tools):
         " grant/revoke need a database and an access of read, write, or admin. toggle_login takes enable true"
         " or false. create_collection needs a database and a collection name. create_database puts the new"
         " name in the database field. insert_data adds a document (put its fields in 'document', with the"
-        " database and collection). update_data and delete_data change or remove ONE existing document by its"
-        " 'id', so if you don't already know the id, first use the browse tool to find it, THEN draft."
+        " database and collection). update_data and delete_data change or remove ONE document: give a 'match'"
+        " like {\"name\": \"bob\"} to pick it and warden finds it (preferred), or an 'id' if you already know it."
         " Never include a password; generated.",
         "ask: only when a required detail like a name is missing. Never ask about passwords or privileges.",
         "",
@@ -282,7 +282,7 @@ def _routing_prompt(system, read_tools):
         '- "give mamo read on book and write on learn" -> {"action": "draft", "draft": {"summary": "Create mamo with read on book, write on learn", "operations": [{"kind": "create_user", "username": "mamo"}, {"kind": "grant", "username": "mamo", "database": "book", "access": "read"}, {"kind": "grant", "username": "mamo", "database": "learn", "access": "write"}]}}',
         '- "create a collection gg in learn" -> {"action": "draft", "draft": {"summary": "Create collection gg in learn", "operations": [{"kind": "create_collection", "database": "learn", "collection": "gg"}]}}',
         '- "add a document name=gg age=3 to users in shop" -> {"action": "draft", "draft": {"summary": "Insert a document into shop.users", "operations": [{"kind": "insert_data", "database": "shop", "collection": "users", "document": {"name": "gg", "age": 3}}]}}',
-        '- "delete the document with id 66abc from users in shop" -> {"action": "draft", "draft": {"summary": "Delete document 66abc from shop.users", "operations": [{"kind": "delete_data", "database": "shop", "collection": "users", "id": "66abc"}]}}',
+        '- "delete the document for bob in users in shop" -> {"action": "draft", "draft": {"summary": "Delete bob from shop.users", "operations": [{"kind": "delete_data", "database": "shop", "collection": "users", "match": {"name": "bob"}}]}}',
         '- "disable bob login" -> {"action": "draft", "draft": {"summary": "Disable bob login", "operations": [{"kind": "toggle_login", "username": "bob", "enable": false}]}}',
         '- "create okh and bhd as users on shop" -> {"action": "draft", "draft": {"summary": "Create okh and bhd on shop", "operations": [{"kind": "create_user", "username": "okh"}, {"kind": "grant", "username": "okh", "database": "shop", "access": "read"}, {"kind": "create_user", "username": "bhd"}, {"kind": "grant", "username": "bhd", "database": "shop", "access": "read"}]}}',
         '- "create a database named sales" -> {"action": "draft", "draft": {"summary": "Create database sales", "operations": [{"kind": "create_database", "database": "sales"}]}}',
@@ -335,6 +335,7 @@ def _decision_schema(tool_names):
                     "enable": {"type": "boolean"},
                     "document": {"type": "object"},
                     "id": {"type": "string"},
+                    "match": {"type": "object"},
                     "changes": {"type": "object"},
                     "remove": {"type": "array", "items": {"type": "string"}},
                     "value": {"type": "string"},
