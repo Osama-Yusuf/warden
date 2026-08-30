@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Stop every runner and deregister it.
+#
+# Stopping without deregistering leaves a runner listed as offline, and jobs
+# pointed at its label then queue against a machine that isn't there, which
+# looks exactly like the no-runner failure this was built to fix. Each
+# container's own trap handles removal; this gives it the chance to run.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+BASE=warden-runner
+REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+
+# Count only runners that still have a container (same reasoning as runner-up).
+busy=0
+if [ "${FORCE:-}" != "1" ]; then
+  for c in $(docker ps --filter "name=${BASE}" --format '{{.Names}}'); do
+    b="$(gh api "repos/${REPO}/actions/runners" \
+          -q '[.runners[] | select(.name=="'"$c"'") | select(.busy)] | length' 2>/dev/null || echo 0)"
+    busy=$((busy + b))
+  done
+fi
+if [ "${busy:-0}" != "0" ] && [ "${FORCE:-}" != "1" ]; then
+  echo "x ${busy} runner(s) are running a job right now." >&2
+  echo "  Stopping strands it; the next start then hits \"a session already exists\"." >&2
+  echo "  Wait for it to finish, or FORCE=1." >&2
+  exit 1
+fi
+
+# Each container stopped independently, so one non-zero doesn't abort the rest
+# (that once stopped one of three and reported success).
+found=0
+for c in $(docker ps -a --filter "name=${BASE}" --format '{{.Names}}'); do
+  found=$((found + 1))
+  echo "> stopping ${c} (it deregisters itself on the way out)"
+  if ! docker stop -t 30 "$c" >/dev/null 2>&1; then
+    echo "  ! could not stop ${c}, forcing"
+    docker kill "$c" >/dev/null 2>&1 || true
+  fi
+  docker rm -f "$c" >/dev/null 2>&1 || echo "  ! could not remove ${c}"
+done
+[ "$found" = "0" ] && echo "No runner containers are running."
+
+# Belt and braces: the container's SIGTERM trap does the deregister, but it
+# won't run if docker had to SIGKILL it, and a runner left listed makes jobs
+# queue against a machine that isn't there. So clear anything still listed.
+for rid in $(gh api "repos/${REPO}/actions/runners" \
+      -q '.runners[] | select(.name|startswith("'"$BASE"'")) | .id' 2>/dev/null); do
+  if gh api -X DELETE "repos/${REPO}/actions/runners/${rid}" >/dev/null 2>&1; then
+    echo "  deregistered leftover runner ${rid}"
+  else
+    echo "  ! runner ${rid} would not deregister (GitHub still thinks it has a job)"
+  fi
+done
+
+left="$(gh api "repos/${REPO}/actions/runners" -q '[.runners[] | select(.name|startswith("'"$BASE"'"))] | length' 2>/dev/null || echo 0)"
+containers="$(docker ps -a --filter "name=${BASE}" --format '{{.Names}}' | wc -l | tr -d ' ')"
+if [ "${left:-0}" != "0" ] || [ "$containers" != "0" ]; then
+  echo "! not fully clean: ${containers} container(s), ${left} registration(s) left"
+  exit 1
+fi
+echo "ok ${found} stopped, nothing left registered"
+
+echo
+echo "  Workflows still target the self-hosted label until you clear it:"
+echo "    gh variable delete RUNNER_LABEL --repo ${REPO}"

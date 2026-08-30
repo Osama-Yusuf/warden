@@ -1,5 +1,16 @@
 name: test
 
+# `runs-on` is the repo variable RUNNER_LABEL, not a literal. Unset it and jobs
+# run on GitHub's paid runners (ubuntu-latest); set it to `self-hosted` and they
+# run on the local Docker fleet from scripts/runner-up. Switching is not a commit:
+#
+#   scripts/runner-up                                 # start the local fleet
+#   gh variable set RUNNER_LABEL --body self-hosted   # ours
+#   gh variable delete RUNNER_LABEL                   # back to GitHub's
+#
+# Note: pull_request runs use the workflow file from the PR's own branch, so a
+# branch cut before this change ignores the variable until it's rebased on main.
+
 on:
   push:
     branches: [main]
@@ -8,7 +19,7 @@ on:
 
 jobs:
   unit:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -17,7 +28,7 @@ jobs:
         run: uv run pytest -q
 
   js:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,15 +38,20 @@ jobs:
         run: node --test 'tests/js/*.test.mjs'
 
   integration:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     services:
+      # Host ports are shifted off the defaults on purpose. On the self-hosted
+      # runner the dev containers already hold 5432/3306/27017/6379, so a service
+      # publishing the same port would fail to start; the high ports are free on
+      # both the local box and GitHub's runners. WARDEN_TEST_*_PORT (below) points
+      # the tests at them.
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: admin
           POSTGRES_PASSWORD: adminpass
           POSTGRES_DB: postgres
-        ports: ["5432:5432"]
+        ports: ["55432:5432"]
         options: >-
           --health-cmd "pg_isready -U admin" --health-interval 5s
           --health-timeout 5s --health-retries 10
@@ -44,7 +60,7 @@ jobs:
         env:
           MARIADB_ROOT_PASSWORD: adminpass
           MARIADB_DATABASE: shop
-        ports: ["3306:3306"]
+        ports: ["53306:3306"]
         options: >-
           --health-cmd "healthcheck.sh --connect --innodb_initialized"
           --health-interval 5s --health-timeout 5s --health-retries 10
@@ -53,18 +69,22 @@ jobs:
         env:
           MONGO_INITDB_ROOT_USERNAME: admin
           MONGO_INITDB_ROOT_PASSWORD: adminpass
-        ports: ["27017:27017"]
+        ports: ["57017:27017"]
         options: >-
           --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1})'"
           --health-interval 5s --health-timeout 5s --health-retries 10
       redis:
         image: redis:7
-        ports: ["6379:6379"]
+        ports: ["56379:6379"]
         options: >-
           --health-cmd "redis-cli ping" --health-interval 5s
           --health-timeout 5s --health-retries 10
     env:
       # match the service containers configured above
+      WARDEN_TEST_PG_PORT: 55432
+      WARDEN_TEST_MYSQL_PORT: 53306
+      WARDEN_TEST_MONGO_PORT: 57017
+      WARDEN_TEST_REDIS_PORT: 56379
       WARDEN_TEST_REDIS_PASS: ""      # redis:7 runs without auth here
     steps:
       - uses: actions/checkout@v4
