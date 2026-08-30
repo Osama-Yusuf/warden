@@ -21,7 +21,11 @@ from .base import AIError, ChatResult, Provider, ToolCall
 try:
     from llama_cpp import Llama
     HAVE_LLAMA = True
-except ImportError:  # pragma: no cover
+except Exception:  # pragma: no cover
+    # Not just ImportError: when the package is present but its native library
+    # isn't (a frozen build that didn't bundle libllama, an arch mismatch), the
+    # import raises FileNotFoundError/OSError. Ward should still run on remote
+    # providers, so treat any failure here as "no local model", never a crash.
     HAVE_LLAMA = False
 
 MODELS_DIR = Path.home() / ".warden" / "models"
