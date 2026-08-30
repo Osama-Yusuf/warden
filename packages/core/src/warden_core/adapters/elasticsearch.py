@@ -41,6 +41,18 @@ class ElasticsearchAdapter(EngineAdapter):
         return [{"name": d["name"], "size_bytes": d.get("size_bytes"),
                  "docs": d.get("docs")} for d in (data or [])]
 
+    def create_collection(self, target):
+        index = str(target.name).strip().lower()   # ES index names must be lowercase
+        if not index or "\x00" in index or "," in index or " " in index or index.startswith("_"):
+            raise EngineError("Invalid index name")
+        ok, err = esn.create_index(self.cfg, self.user, self.pwd, index)
+        if not ok:
+            raise EngineError(err)
+        return Mutation("CREATE INDEX", index, {"collection": index})
+
+    def create_database(self, name):
+        raise NotSupported("Elasticsearch has one cluster, not many databases. Create an index instead.")
+
     def browse(self, target, limit, offset, search):
         # Same index-name check the handler ran inline on the collection field.
         index = str(target.name).strip()

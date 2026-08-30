@@ -53,6 +53,7 @@ from warden_core import redis_native as rdn
 # it needs directly. Everything else moved into the per-engine adapters.
 from warden_core.validation import MYSQL_PRIVILEGES, is_mariadb, validate_target
 from warden_core.adapters import EngineError, Target, get_adapter
+from warden_web import assistant
 
 USE_NATIVE_MONGO = mn.available()
 USE_NATIVE_PG = pn.available()
@@ -213,7 +214,8 @@ def _mutate(body, method, *args, env_default="production", **kwargs):
         m = getattr(adapter, method)(*args, **kwargs)
     except (EngineError, ValueError) as e:
         return {"error": str(e)}
-    audit(body.get("env", env_default), adapter.family, m.action, m.detail)
+    detail = f"{m.detail} · via Ward" if body.get("_source") == "ward" else m.detail
+    audit(body.get("env", env_default), adapter.family, m.action, detail)
     return {"ok": True, **m.response}
 
 
@@ -344,6 +346,18 @@ def api_list_collections(body):
         return {"error": str(e)}
 
 
+def api_create_collection(body):
+    """Create an empty collection (Mongo) or index (Elasticsearch). Engines that
+    need a column definition (SQL) answer NotSupported."""
+    return _mutate(body, "create_collection", _target(body))
+
+
+def api_create_database(body):
+    """Create a database (SQL engines). Mongo/ES answer with a helpful note, since
+    Mongo makes a db implicitly and ES has a single cluster."""
+    return _mutate(body, "create_database", body.get("database", ""))
+
+
 BROWSE_MAX_LIMIT = 200
 BROWSE_SEARCH_MAX = 200
 
@@ -469,6 +483,8 @@ RO_BLOCKED_ROUTES = {
     "/api/create-user", "/api/reset-password", "/api/grant",
     "/api/revoke", "/api/drop-user", "/api/toggle-login",
     "/api/row-insert", "/api/row-update", "/api/row-delete",
+    "/api/create-collection", "/api/create-database",
+    "/api/ai/execute",   # Ward running a confirmed change is still a change
 }
 
 RO_DOCDB_BLOCK = re.compile(
@@ -1335,14 +1351,45 @@ def api_audit_log(body):
     return {"entries": lines[:100]}
 
 
+# ---------------------------------------------------------------------------
+# AI assistant (off by default; none of this runs unless the user turns it on
+# and supplies a key). The heavy lifting lives in assistant.py; these two are
+# thin wrappers so the assistant can reuse the same read-only handlers and the
+# same route table the rest of the app uses.
+# ---------------------------------------------------------------------------
+
+def api_ai_models(body):
+    return assistant.list_models(body)
+
+
+def api_ai_download(body):
+    return assistant.download_model(body)
+
+
+def api_ai_check(body):
+    return assistant.check_machine(body)
+
+
+def api_ai_execute(body):
+    return assistant.run_operations(body, ROUTES)
+
+
+def api_ai_chat(body):
+    fam = engine_family(body.get("engine", ""))
+    body["_audits"] = [{"id": a["id"], "title": a["title"]}
+                       for a in AUDIT_DEFS if a["engine"] == fam]
+    return assistant.chat_turn(body, ROUTES)
+
+
 REQUIRES_CREDS = {
     "/api/connect", "/api/list-users", "/api/user-info",
     "/api/create-user", "/api/reset-password", "/api/grant",
     "/api/revoke", "/api/drop-user", "/api/toggle-login",
-    "/api/list-databases", "/api/list-collections", "/api/browse-data",
+    "/api/list-databases", "/api/list-collections", "/api/create-collection", "/api/create-database", "/api/browse-data",
     "/api/table-meta", "/api/object-stats", "/api/row-insert", "/api/row-update", "/api/row-delete",
     "/api/query", "/api/query-stream",
     "/api/audit-run", "/api/health",
+    "/api/ai/execute",
 }
 
 ROUTES = {
@@ -1359,6 +1406,8 @@ ROUTES = {
     "/api/toggle-login": api_toggle_login,
     "/api/list-databases": api_list_databases,
     "/api/list-collections": api_list_collections,
+    "/api/create-collection": api_create_collection,
+    "/api/create-database": api_create_database,
     "/api/browse-data": api_browse_data,
     "/api/table-meta": api_table_meta,
     "/api/object-stats": api_object_stats,
@@ -1375,6 +1424,11 @@ ROUTES = {
     "/api/keychain-get": api_keychain_get,
     "/api/keychain-delete": api_keychain_delete,
     "/api/audit-log": api_audit_log,
+    "/api/ai/models": api_ai_models,
+    "/api/ai/download": api_ai_download,
+    "/api/ai/check": api_ai_check,
+    "/api/ai/chat": api_ai_chat,
+    "/api/ai/execute": api_ai_execute,
 }
 
 
@@ -1487,6 +1541,8 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, ValueError):
             self._json_response({"error": "Invalid JSON"}, 400)
             return
+        if isinstance(body, dict):
+            body.pop("_source", None)   # internal audit marker; a client can't forge "via Ward"
         # SQLite has no accounts; Elasticsearch/Redis may be unauthenticated or
         # password-only, so their drivers handle whatever creds are supplied.
         if path in REQUIRES_CREDS and engine_family(body.get("engine", "")) not in ("sqlite", "elasticsearch", "redis"):

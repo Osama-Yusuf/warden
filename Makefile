@@ -66,7 +66,7 @@ build: check-uv
 	@ls -1 dist/*.whl
 
 build-desktop: $(PY)
-	uv pip install pyinstaller
+	uv pip install pyinstaller llama-cpp-python
 	$(VENV)/bin/pyinstaller --noconfirm --clean --windowed --name warden \
 		--icon packages/desktop/assets/warden.icns \
 		--add-data "packages/web/src/warden_web/static:warden_web/static" \
@@ -74,9 +74,11 @@ build-desktop: $(PY)
 		--collect-submodules psycopg --collect-submodules psycopg_pool \
 		--collect-all psycopg_binary \
 		--collect-submodules redis --collect-submodules urllib3 \
+		--collect-all llama_cpp \
 		packages/desktop/src/warden_desktop/main.py
 	@rm -f warden.spec
 	@echo "\nBundle: dist/warden.app (macOS) / dist/warden/ (other OS)"
+	@echo "Includes Ward's on-device models (llama.cpp bundled)."
 
 dmg:
 	@test -d dist/warden.app || $(MAKE) build-desktop

@@ -12,6 +12,12 @@ dependencies = [
     "urllib3>=2",
 ]
 
+# On-device AI models (the "download & go" tier). Optional: warden runs fine
+# without it, and Ward degrades to a plain message until it's installed.
+#   uv pip install "warden-core[local]"   (or install llama-cpp-python directly)
+[project.optional-dependencies]
+local = ["llama-cpp-python>=0.3"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

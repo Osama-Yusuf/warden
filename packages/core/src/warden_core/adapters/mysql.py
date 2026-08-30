@@ -203,6 +203,13 @@ class MysqlAdapter(EngineAdapter):
             raise EngineError(err or out)
         return Mutation("CREATE USER", name, {"password": password})
 
+    def create_database(self, name):
+        db = validate_ident(name, "database")
+        ok, out, err = my_exec(self.cfg, self.user, self.pwd, f"CREATE DATABASE `{db}`")
+        if not ok:
+            raise EngineError(err or out)
+        return Mutation("CREATE DATABASE", db, {})
+
     def set_password(self, name, password):
         acct = mysql_account(name)
         pwd_lit = password.replace("\\", "\\\\").replace("'", "\\'")

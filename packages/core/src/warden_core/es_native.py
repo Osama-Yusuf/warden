@@ -284,6 +284,12 @@ def list_roles(cfg, user, pwd):
     return (sorted((data or {}).keys()) if not err else None), err
 
 
+def create_index(cfg, user, pwd, index):
+    """Create an empty index. Returns (ok, error)."""
+    _d, err = _req(cfg, user, pwd, "PUT", f"/{index}")
+    return (bool(not err), err)
+
+
 def create_user(cfg, user, pwd, name, password, roles):
     if _is_opensearch(cfg, user, pwd):
         body = {"password": password, "backend_roles": roles or []}

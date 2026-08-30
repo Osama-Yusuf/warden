@@ -14,7 +14,7 @@ from warden_core import validation
 from warden_core.docdb import docdb_eval, docdb_exec
 from warden_core.util import js_string, validate_ident
 
-from .base import EngineAdapter, EngineError, Mutation, register
+from .base import EngineAdapter, EngineError, Mutation, NotSupported, register
 
 
 def _clean_mongosh_noise(text):
@@ -77,6 +77,15 @@ class MongoAdapter(EngineAdapter):
         data = self._unwrap(docdb_eval(self.cfg, self.user, self.pwd,
                                        "db.getCollectionNames()", db=database))
         return [{"name": n, "size_bytes": None} for n in sorted(data or [])]
+
+    def create_collection(self, target):
+        database, collection = self._ns(target, require_collection=True)
+        self._unwrap(mn.create_collection(self.cfg, self.user, self.pwd, database, collection))
+        return Mutation("CREATE COLLECTION", f"{database}.{collection}", {"collection": collection})
+
+    def create_database(self, name):
+        raise NotSupported("MongoDB makes a database the moment you add a collection to it. "
+                           "Ask me to create a collection instead.")
 
     def browse(self, target, limit, offset, search):
         database, collection = self._ns(target, require_collection=True)

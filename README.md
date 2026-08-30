@@ -40,6 +40,12 @@ They all sit on the same footing: connect, browse, query, health, in-grid CRUD, 
 
 **Insight.** Security audits (who's admin, who can write where, dead accounts) and cluster health (connections, slow queries, cache hit, replication lag), so you spot the problem before it spots you.
 
+## Meet Ward
+
+warden's nephew. Knows the house, still learning the ropes, and allowed to look but never touch. Ward is an optional assistant that explains who can reach what, reads you a report, or drafts a change for you to run. He proposes; you dispose.
+
+He's **off by default** and invisible until you switch him on (Ward in the sidebar). Power him however you like: download a small model that runs right here on your machine (private, no key), point him at a local Ollama, or paste an API key for Gemini, Claude, or GPT. Either way he only ever reads. A change he suggests goes through the same preview, read-only gate, and confirm as the buttons do, and lands in the audit log stamped as his idea.
+
 ## Run it
 
 You'll need [uv](https://docs.astral.sh/uv/).

@@ -1,0 +1,351 @@
+"""On-device models: download one, run it, done. No key, no Ollama, no terminal.
+
+warden downloads a small GGUF from Hugging Face into ~/.warden/models and runs it
+in-process with llama.cpp (Metal on a Mac, CPU elsewhere). Three sizes, labelled
+by what they can actually do rather than by a number, so nobody picks the tiny
+one and expects a research report.
+
+llama-cpp-python is an optional extra (install with `warden[local]`). If it isn't
+there, this provider says so plainly instead of blowing up.
+"""
+from __future__ import annotations
+
+import json
+import os
+import threading
+import urllib.request
+from pathlib import Path
+
+from .base import AIError, ChatResult, Provider, ToolCall
+
+try:
+    from llama_cpp import Llama
+    HAVE_LLAMA = True
+except ImportError:  # pragma: no cover
+    HAVE_LLAMA = False
+
+MODELS_DIR = Path.home() / ".warden" / "models"
+
+# The download-and-go catalog. Same family (Qwen2.5 instruct) at three sizes, so
+# behaviour is consistent and only the capability changes.
+# Sizes labelled by what they can actually do, with an honest one-liner (shown
+# in the UI) so nobody's surprised. Qwen2.5 instruct at three sizes; behaviour is
+# consistent, only the capability grows.
+CATALOG = {
+    "nano": {
+        "label": "Nano", "size": "~0.4 GB",
+        "note": "Tiny and instant. Handles a simple ask or draft, but gets muddled easily. A quick taste of Ward.",
+        "repo": "bartowski/Qwen2.5-0.5B-Instruct-GGUF",
+        "file": "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf",
+    },
+    "small": {
+        "label": "Small", "size": "~1 GB",
+        "note": "Chats and drafts changes nicely. Reads are usually right, just a touch over-eager sometimes.",
+        "repo": "bartowski/Qwen2.5-1.5B-Instruct-GGUF",
+        "file": "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+    },
+    "medium": {
+        "label": "Medium", "size": "~2 GB", "recommended": True,
+        "note": "The dependable one. Reads results, writes reports, drafts changes. Best pick for a laptop.",
+        "repo": "bartowski/Qwen2.5-3B-Instruct-GGUF",
+        "file": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+    },
+    "large": {
+        "label": "Large", "size": "~4.7 GB",
+        "note": "The sharpest on-device brain. Best answers and reports, but slower and hungrier for RAM.",
+        "repo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
+        "file": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    },
+}
+
+
+def model_path(tier):
+    return MODELS_DIR / CATALOG[tier]["file"]
+
+
+# ── "will this run here?" ─────────────────────────────────────────────────────
+# Rough total-RAM a tier wants to be comfortable (weights, mmap, KV cache, plus
+# headroom for the OS and the app). On a Mac the GPU is the unified memory, so
+# these hold there too.
+_TIER_RAM_GB = {"nano": 2, "small": 4, "medium": 8, "large": 16}
+
+
+def _total_ram_gb():
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:  # Windows
+        import ctypes
+
+        class _MS(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+        ms = _MS()
+        ms.dwLength = ctypes.sizeof(_MS)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
+        return ms.ullTotalPhys / 1e9
+    except Exception:
+        return None
+
+
+def machine_report():
+    """Look at the machine and say which size fits. Spec-based, so it's instant
+    and needs nothing downloaded."""
+    import platform
+
+    total = _total_ram_gb()
+    cores = os.cpu_count() or 1
+    metal = platform.system() == "Darwin" and platform.machine() in ("arm64", "aarch64")
+    fits = {t: (total is None or total >= _TIER_RAM_GB[t]) for t in _TIER_RAM_GB}
+
+    # Largest size that fits, but the 7B stays off CPU-only machines (too slow to
+    # be pleasant). If nothing "fits", Nano still runs, just snugly.
+    rec = "nano"
+    for t in ("large", "medium", "small", "nano"):
+        if fits[t] and not (t == "large" and not metal):
+            rec = t
+            break
+
+    ram = f"{round(total)} GB" if total else "an unknown amount of"
+    gpu = "an Apple GPU" if metal else "CPU only"
+    return {
+        "ram_gb": round(total, 1) if total else None,
+        "cores": cores,
+        "gpu": "Apple GPU (Metal)" if metal else "CPU only",
+        "metal": metal,
+        "recommended": rec,
+        "fits": fits,
+        "summary": f"{ram} memory, {cores} cores, {gpu}. Best fit: {CATALOG[rec]['label']}.",
+    }
+
+
+def is_downloaded(tier):
+    return tier in CATALOG and model_path(tier).exists()
+
+
+def _download_url(tier):
+    c = CATALOG[tier]
+    return f"https://huggingface.co/{c['repo']}/resolve/main/{c['file']}"
+
+
+# ── download manager ─────────────────────────────────────────────────────────
+# One download at a time, progress tracked so the UI can show a bar. Downloads
+# to a .part file and renames on success, so a half-finished file never looks
+# "downloaded".
+_dl = {}                       # tier -> {status, pct, done, total, error}
+_dl_lock = threading.Lock()
+
+
+def download_state():
+    with _dl_lock:
+        return {t: dict(s) for t, s in _dl.items()}
+
+
+def start_download(tier):
+    if tier not in CATALOG:
+        raise AIError(f"Unknown model size: {tier}")
+    with _dl_lock:
+        cur = _dl.get(tier)
+        if cur and cur.get("status") == "downloading":
+            return  # already going
+        _dl[tier] = {"status": "downloading", "pct": 0, "done": 0, "total": 0, "error": ""}
+    threading.Thread(target=_run_download, args=(tier,), daemon=True).start()
+
+
+def _set(tier, **patch):
+    with _dl_lock:
+        _dl.setdefault(tier, {}).update(patch)
+
+
+def _run_download(tier):
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    dst = model_path(tier)
+    tmp = dst.with_suffix(dst.suffix + ".part")
+    max_bytes = 12_000_000_000  # sanity cap; our largest model is ~5 GB
+    try:
+        def hook(block, block_size, total):
+            done = block * block_size
+            if total > max_bytes or done > max_bytes:
+                raise OSError("download is larger than expected, stopping")
+            _set(tier, done=done, total=total,
+                 pct=round(done / total * 100, 1) if total > 0 else 0)
+        urllib.request.urlretrieve(_download_url(tier), tmp, hook)
+        os.replace(tmp, dst)
+        _set(tier, status="done", pct=100)
+    except Exception as e:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        _set(tier, status="error", error=str(e))
+
+
+# ── inference ────────────────────────────────────────────────────────────────
+# Loading a model costs a few seconds and a chunk of RAM, so keep exactly one
+# loaded and swap when the tier changes.
+_loaded = {"path": None, "llm": None}
+_load_lock = threading.Lock()
+
+
+def _llm_for(path):
+    with _load_lock:
+        if _loaded["path"] != path:
+            # Plain ChatML (Qwen's native format). We don't use llama.cpp's
+            # function-calling handler; tool use is driven by a JSON-schema
+            # grammar instead, which small models follow far more reliably.
+            _loaded["llm"] = Llama(model_path=path, n_ctx=8192, n_gpu_layers=-1,
+                                   chat_format="chatml", verbose=False)
+            _loaded["path"] = path
+        return _loaded["llm"]
+
+
+class LocalProvider(Provider):
+    name = "local"
+    needs_key = False
+    strong = False   # small on-device models: give them fewer, simpler tools
+
+    def list_models(self):
+        """The catalog, each marked with whether it's downloaded and any progress."""
+        prog = download_state()
+        out = []
+        for tier, c in CATALOG.items():
+            row = {"id": tier, "label": c["label"], "size": c["size"],
+                   "note": c.get("note", ""), "recommended": c.get("recommended", False),
+                   "downloaded": is_downloaded(tier)}
+            if tier in prog:
+                row["download"] = prog[tier]
+            out.append(row)
+        return out
+
+    def chat(self, system, messages, tools=None):
+        if not HAVE_LLAMA:
+            raise AIError("On-device models need the llama-cpp-python engine (install warden's 'local' extra).")
+        tier = self.model or "small"
+        if not is_downloaded(tier):
+            raise AIError(f"The {tier} model isn't downloaded yet.")
+        llm = _llm_for(str(model_path(tier)))
+
+        # We don't hand a small model open-ended function-calling. Instead we ask
+        # for ONE decision as JSON, constrained by a grammar so it's always valid
+        # and always one of a fixed set of actions. The model just fills a form.
+        read = [t for t in (tools or []) if t["name"] not in ("draft_operation", "ask_user")]
+        names = [t["name"] for t in read]
+        convo = [{"role": "system", "content": _routing_prompt(system, read)}] + _render(messages)
+        try:
+            resp = llm.create_chat_completion(
+                messages=convo, temperature=0.2, max_tokens=768,
+                response_format={"type": "json_object", "schema": _decision_schema(names)})
+        except Exception as e:
+            raise AIError(f"The local model errored: {e}")
+
+        raw = (resp["choices"][0]["message"].get("content") or "").strip()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return ChatResult(text=raw)  # grammar should prevent this, but be safe
+        return _decision_to_result(data, names)
+
+
+def _routing_prompt(system, read_tools):
+    lines = [system, "", "Tools you can call to look things up (read-only):"]
+    for t in read_tools:
+        props = (t.get("parameters") or {}).get("properties") or {}
+        args = ", ".join(props) if props else "no arguments"
+        lines.append(f"- {t['name']}({args}): {t.get('description', '')}")
+    lines += [
+        "",
+        "Reply with exactly ONE JSON object and nothing else. Choose one action:",
+        '  {"action": "reply", "reply": "<your answer, in plain words>"}',
+        '  {"action": "tool", "tool": "<a tool name above>", "args": { ... }}',
+        '  {"action": "draft", "draft": {"summary": "<one line>", "operations": [{"kind": "create_user", "username": "..."}, {"kind": "grant", "username": "...", "database": "<exact db>", "access": "read"}]}}',
+        '  {"action": "ask", "ask": {"question": "<one question>", "kind": "text"}}',
+        "",
+        "reply: to chat or to answer once you have what you need.",
+        "tool: only when you still need data you don't have. After a tool result appears, switch to reply.",
+        "draft: for a change to users, collections, or databases. Fill 'operations', one per step, and one"
+        " per thing when the user names several. kinds: create_user, drop_user, reset_password, grant,"
+        " revoke, toggle_login, create_collection, create_database. grant/revoke need a database and an"
+        " access of read, write, or admin. toggle_login takes enable true or false (false disables login)."
+        " create_collection needs a database and a collection name. create_database puts the new name in"
+        " the database field. Never include a password; generated.",
+        "ask: only when a required detail like a name is missing. Never ask about passwords or privileges.",
+        "",
+        "Examples:",
+        '- "make user bob read-only on shop" -> {"action": "draft", "draft": {"summary": "Create bob with read on shop", "operations": [{"kind": "create_user", "username": "bob"}, {"kind": "grant", "username": "bob", "database": "shop", "access": "read"}]}}',
+        '- "give mamo read on book and write on learn" -> {"action": "draft", "draft": {"summary": "Create mamo with read on book, write on learn", "operations": [{"kind": "create_user", "username": "mamo"}, {"kind": "grant", "username": "mamo", "database": "book", "access": "read"}, {"kind": "grant", "username": "mamo", "database": "learn", "access": "write"}]}}',
+        '- "create a collection gg in learn" -> {"action": "draft", "draft": {"summary": "Create collection gg in learn", "operations": [{"kind": "create_collection", "database": "learn", "collection": "gg"}]}}',
+        '- "disable bob login" -> {"action": "draft", "draft": {"summary": "Disable bob login", "operations": [{"kind": "toggle_login", "username": "bob", "enable": false}]}}',
+        '- "create okh and bhd as users on shop" -> {"action": "draft", "draft": {"summary": "Create okh and bhd on shop", "operations": [{"kind": "create_user", "username": "okh"}, {"kind": "grant", "username": "okh", "database": "shop", "access": "read"}, {"kind": "create_user", "username": "bhd"}, {"kind": "grant", "username": "bhd", "database": "shop", "access": "read"}]}}',
+        '- "create a database named sales" -> {"action": "draft", "draft": {"summary": "Create database sales", "operations": [{"kind": "create_database", "database": "sales"}]}}',
+        '- "add a user to shop" (no name given) -> {"action": "ask", "ask": {"question": "What should I name them?", "kind": "text"}}',
+        '- "who are the admins?" -> {"action": "tool", "tool": "list_users", "args": {}}',
+        '- (after a tool result is shown) -> {"action": "reply", "reply": "Two can write: alice on shop and the admin."}',
+    ]
+    return "\n".join(lines)
+
+
+def _render(messages):
+    """Neutral messages -> a plain chat transcript the routing model can read.
+    Tool calls and their results become readable lines, not a wire protocol."""
+    out = []
+    for m in messages:
+        role = m.get("role")
+        if role == "user":
+            out.append({"role": "user", "content": m.get("content", "")})
+        elif role == "assistant":
+            if m.get("tool_calls"):
+                looked = ", ".join(tc.name for tc in m["tool_calls"])
+                out.append({"role": "assistant", "content": f"(looked up: {looked})"})
+            elif m.get("content"):
+                out.append({"role": "assistant", "content": m["content"]})
+        elif role == "tool":
+            out.append({"role": "user",
+                        "content": f"Result of {m.get('name', 'tool')}: {m.get('content', '')}"})
+    return out
+
+
+def _decision_schema(tool_names):
+    return {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["reply", "tool", "draft", "ask"]},
+            "reply": {"type": "string"},
+            "tool": {"type": "string", "enum": tool_names or ["none"]},
+            "args": {"type": "object"},
+            "draft": {"type": "object", "properties": {
+                "summary": {"type": "string"},
+                "operations": {"type": "array", "items": {"type": "object", "properties": {
+                    "kind": {"type": "string", "enum": ["create_user", "drop_user", "reset_password",
+                                                        "grant", "revoke", "toggle_login", "create_collection",
+                                                        "create_database"]},
+                    "username": {"type": "string"},
+                    "database": {"type": "string"},
+                    "collection": {"type": "string"},
+                    "access": {"type": "string", "enum": ["read", "write", "admin"]},
+                    "enable": {"type": "boolean"}}}},
+                "statements": {"type": "array", "items": {"type": "string"}}}},
+            "ask": {"type": "object", "properties": {
+                "question": {"type": "string"},
+                "kind": {"type": "string", "enum": ["text", "select", "multiselect", "boolean"]},
+                "options": {"type": "array", "items": {"type": "string"}},
+                "hint": {"type": "string"}}},
+        },
+        "required": ["action"],
+    }
+
+
+def _decision_to_result(data, tool_names):
+    action = data.get("action")
+    if action == "tool" and data.get("tool") in tool_names:
+        return ChatResult(tool_calls=[ToolCall(id="call_0", name=data["tool"], args=data.get("args") or {})])
+    if action == "draft" and isinstance(data.get("draft"), dict):
+        draft = dict(data["draft"])
+        draft.setdefault("writes", True)
+        return ChatResult(tool_calls=[ToolCall(id="draft_0", name="draft_operation", args=draft)])
+    if action == "ask" and isinstance(data.get("ask"), dict):
+        return ChatResult(tool_calls=[ToolCall(id="ask_0", name="ask_user", args=data["ask"])])
+    return ChatResult(text=(data.get("reply") or "").strip())

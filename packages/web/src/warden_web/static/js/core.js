@@ -39,6 +39,7 @@ const ICONS = {
   users: I('<circle cx="9" cy="8" r="3.2"/><path d="M3 19.5c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9.5" r="2.3"/><path d="M21 19.5c0-2.6-1.7-4.8-4-5.6"/>'),
   search: I('<circle cx="11" cy="11" r="6.2"/><path d="M15.8 15.8L21 21"/>'),
   plus: I('<path d="M12 5v14M5 12h14"/>'),
+  assistant: I('<circle cx="10.5" cy="10" r="3"/><path d="M10.5 13v3.2"/><path d="M18 4.5l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z"/>'),
   key: I('<circle cx="8.5" cy="14.5" r="4"/><path d="M11.5 11.5L20 3M16.5 6.5l3 3"/>'),
   shield: I('<path d="M12 3l7.5 2.8v5.4c0 4.6-3.2 7.7-7.5 9.8-4.3-2.1-7.5-5.2-7.5-9.8V5.8z"/><path d="M8.7 12l2.4 2.4 4.2-4.8"/>'),
   ban: I('<circle cx="12" cy="12" r="8.2"/><path d="M6.3 6.3l11.4 11.4"/>'),
@@ -301,6 +302,7 @@ async function init() {
   // Prefill the saved credentials for this target. Connecting stays manual
   await loadCredsForTarget();
   renderWelcome();
+  if (typeof mountAssistantDock === 'function') mountAssistantDock();
 }
 
 function updateEngines(restoring = false) {
@@ -338,6 +340,7 @@ function navModel() {
       { id: 'query', icon: ICONS.term, label: 'Query' },
       { id: 'audit', icon: ICONS.scroll, label: 'Activity', always: true },
       { id: 'envs', icon: ICONS.sliders, label: 'Connections', always: true },
+      { id: 'assistant', icon: ICONS.assistant, label: 'Ward', always: true },
     ];
   }
   return [
@@ -347,6 +350,7 @@ function navModel() {
     { id: 'audits', icon: ICONS.shield, label: 'Audits', badge: 'audits' },
     { id: 'audit', icon: ICONS.scroll, label: 'Activity', always: true },
     { id: 'envs', icon: ICONS.sliders, label: 'Connections', always: true },
+    { id: 'assistant', icon: ICONS.assistant, label: 'Ward', always: true },
   ];
 }
 
@@ -359,6 +363,7 @@ const VIEWS = {
   audits: () => viewAudits(),
   audit: () => viewAuditLog(),
   envs: () => viewEnvs(),
+  assistant: () => viewAssistant(),
 };
 
 function renderNav() {
