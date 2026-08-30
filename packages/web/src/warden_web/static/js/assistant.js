@@ -145,6 +145,12 @@ function aiHandle(res) {
   if (res.steps && res.steps.length) aiSteps(res.steps);
   if (res.question) { aiThread.push({ role: 'assistant', content: res.question.question || 'A question' }); aiQuestion(res.question); return; }
   if (res.draft) { aiThread.push({ role: 'assistant', content: 'Proposed: ' + (res.draft.summary || 'an operation') }); aiDraft(res.draft); return; }
+  if (res.report) {
+    aiThread.push({ role: 'assistant', content: res.note || res.report.title || 'Report' });
+    if (res.note) aiBubble('ai', res.note);
+    aiReport(res.report);
+    return;
+  }
   const reply = res.reply || '(no answer)';
   aiThread.push({ role: 'assistant', content: reply });
   aiBubble('ai', reply);
@@ -253,6 +259,46 @@ function aiDraft(d) {
     <div class="ai-op-foot"></div>`;
   t.appendChild(el);
   aiDraftFoot(el, 'idle');
+  aiScroll();
+}
+
+// A read-only access report: a users table (access / write_access) or a list of
+// posture findings. All server-computed; this only lays it out.
+function aiReport(rep) {
+  const t = aiThreadEl();
+  const el = document.createElement('div');
+  el.className = 'ai-rep';
+  const prod = rep.is_prod ? '<span class="ai-rep-prod">prod</span>' : '';
+  let body = '';
+
+  if (rep.kind === 'posture') {
+    const c = rep.counts || {};
+    const chips = ['high', 'med', 'low']
+      .filter(s => c[s]).map(s => `<span class="ai-sev ai-sev-${s}">${c[s]} ${s}</span>`).join('');
+    const rows = (rep.findings || []).map(f => `
+      <div class="ai-rep-find">
+        <span class="ai-sev ai-sev-${f.severity}">${esc(f.severity)}</span>
+        <span class="ai-rep-user">${esc(f.user)}</span>
+        <span class="ai-rep-issue">${esc(f.issue)}</span>
+        <span class="ai-rep-detail">${esc(f.detail || '')}</span>
+      </div>`).join('');
+    body = `<div class="ai-rep-chips">${chips || '<span class="ai-sev ai-sev-low">nothing flagged</span>'}</div>
+            <div class="ai-rep-finds">${rows}</div>`;
+  } else {
+    const rows = (rep.users || []).map(u => {
+      const badge = u.admin ? '<span class="ai-tag ai-tag-admin">admin</span>'
+        : (u.write ? '<span class="ai-tag ai-tag-write">write</span>'
+          : '<span class="ai-tag ai-tag-read">read</span>');
+      const login = u.login ? '' : '<span class="ai-tag ai-tag-off">no login</span>';
+      return `<tr><td class="ai-rep-user">${esc(u.user)}</td><td>${badge}${login}</td>
+              <td class="ai-rep-detail">${esc(u.summary || '')}</td></tr>`;
+    }).join('');
+    const empty = (rep.users || []).length ? '' : '<tr><td colspan="3" class="ai-rep-detail">no one</td></tr>';
+    body = `<table class="ai-rep-table"><tbody>${rows || empty}</tbody></table>`;
+  }
+
+  el.innerHTML = `<div class="ai-rep-h">${esc(rep.title || 'Report')}${prod}</div>${body}`;
+  t.appendChild(el);
   aiScroll();
 }
 

@@ -18,6 +18,7 @@ import re
 from warden_core.ai import AIError, get_provider
 from warden_core.ai import local
 from warden_core.util import engine_family
+from warden_web import reports
 
 MAX_HOPS = 6            # tool round-trips before we stop and answer with what we have
 MAX_TOOL_CHARS = 6000   # trim a tool result before feeding it back, to keep tokens sane
@@ -126,9 +127,21 @@ VIRTUAL_TOOLS = [
                 "required": ["kind"]}}},
             "required": ["summary", "operations"]},
     },
+    {
+        "name": "security_report",
+        "description": ("Produce a read-only access report when the user asks who can access or change "
+                        "what, who can touch prod, whether any accounts look risky or unused, or for a "
+                        "security summary. Pick the kind that fits; warden gathers the data and formats it."),
+        "parameters": {"type": "object", "properties": {
+            "kind": {"type": "string", "enum": ["access", "write_access", "posture"],
+                     "description": ("access = who can access what; write_access = who can change data "
+                                     "(use for 'who can touch prod'); posture = risky or unused accounts.")}},
+            "required": ["kind"]},
+    },
 ]
 
 _VIRTUAL = {t["name"] for t in VIRTUAL_TOOLS}
+_REPORT_KINDS = {"access", "write_access", "posture"}
 _BY_VNAME = {t["name"]: t for t in VIRTUAL_TOOLS}
 
 
@@ -309,6 +322,34 @@ def _resolve_draft_matches(draft, conn, fam, routes):
     return None
 
 
+def _build_report(kind, conn, fam, routes, is_prod):
+    """Gather users and their access through the read handlers, then hand it to
+    the reports module. One list-users call plus one user-info call per user; it's
+    a report, not a hot path, so that's fine. Returns a report dict or an error."""
+    if kind not in _REPORT_KINDS:
+        kind = "access"
+    lu = routes.get("/api/list-users")
+    ui = routes.get("/api/user-info")
+    if not lu or not ui:
+        return {"error": "This engine has no user accounts to report on."}
+    try:
+        res = _call(lu, dict(conn))
+        if isinstance(res, dict) and res.get("error"):
+            return {"error": _tidy_error(res["error"], "users")}
+        users = (res.get("users") if isinstance(res, dict) else res) or []
+        infos = []
+        for u in users:
+            name = u.get("user") if isinstance(u, dict) else u
+            if not name:
+                continue
+            info = _call(ui, {**conn, "username": name})
+            if isinstance(info, dict) and "error" not in info:
+                infos.append(info)
+        return reports.build_report(kind, infos, fam, is_prod)
+    except Exception as e:
+        return {"error": _tidy_error(str(e), "users")}
+
+
 def _connection(body):
     """The connection context handlers need, without the AI or control fields."""
     drop = {"messages", "ai_provider", "ai_key", "ai_model", "persona",
@@ -403,6 +444,12 @@ def chat_turn(body, routes):
         for tc in result.tool_calls:
             if tc.name == "ask_user":
                 return {"question": tc.args or {}, "steps": steps, "note": _clean_reply(result.text)}
+            if tc.name == "security_report":
+                kind = (tc.args or {}).get("kind", "access")
+                rep = _build_report(kind, conn, fam, routes, _is_prod(body))
+                if rep.get("error"):
+                    return {"reply": rep["error"], "steps": steps}
+                return {"report": rep, "steps": steps, "note": _clean_reply(result.text)}
             if tc.name == "draft_operation":
                 dargs = tc.args or {}
                 dq = _validate_draft_db(dargs, real_dbs, fam)

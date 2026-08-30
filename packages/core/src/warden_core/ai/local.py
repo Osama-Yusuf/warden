@@ -263,6 +263,7 @@ def _routing_prompt(system, read_tools):
         '  {"action": "tool", "tool": "<a tool name above>", "args": { ... }}',
         '  {"action": "draft", "draft": {"summary": "<one line>", "operations": [{"kind": "create_user", "username": "..."}, {"kind": "grant", "username": "...", "database": "<exact db>", "access": "read"}]}}',
         '  {"action": "ask", "ask": {"question": "<one question>", "kind": "text"}}',
+        '  {"action": "report", "report": {"kind": "access"}}',
         "",
         "reply: to chat or to answer once you have what you need.",
         "tool: only when you still need data you don't have. After a tool result appears, switch to reply.",
@@ -276,6 +277,10 @@ def _routing_prompt(system, read_tools):
         " like {\"name\": \"bob\"} to pick it and warden finds it (preferred), or an 'id' if you already know it."
         " Never include a password; generated.",
         "ask: only when a required detail like a name is missing. Never ask about passwords or privileges.",
+        "report: when the user wants an access overview, who can change data or touch prod, or which"
+        " accounts look risky or unused. kind is 'access' (who can access what), 'write_access' (who can"
+        " change data, and for 'who can touch prod'), or 'posture' (risky or unused accounts). warden"
+        " gathers the data, so don't call tools first.",
         "",
         "Examples:",
         '- "make user bob read-only on shop" -> {"action": "draft", "draft": {"summary": "Create bob with read on shop", "operations": [{"kind": "create_user", "username": "bob"}, {"kind": "grant", "username": "bob", "database": "shop", "access": "read"}]}}',
@@ -288,6 +293,9 @@ def _routing_prompt(system, read_tools):
         '- "create a database named sales" -> {"action": "draft", "draft": {"summary": "Create database sales", "operations": [{"kind": "create_database", "database": "sales"}]}}',
         '- "add a user to shop" (no name given) -> {"action": "ask", "ask": {"question": "What should I name them?", "kind": "text"}}',
         '- "who are the admins?" -> {"action": "tool", "tool": "list_users", "args": {}}',
+        '- "who can touch prod?" -> {"action": "report", "report": {"kind": "write_access"}}',
+        '- "show me who can access what" -> {"action": "report", "report": {"kind": "access"}}',
+        '- "any risky or unused accounts?" -> {"action": "report", "report": {"kind": "posture"}}',
         '- (after a tool result is shown) -> {"action": "reply", "reply": "Two can write: alice on shop and the admin."}',
     ]
     return "\n".join(lines)
@@ -317,8 +325,10 @@ def _decision_schema(tool_names):
     return {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["reply", "tool", "draft", "ask"]},
+            "action": {"type": "string", "enum": ["reply", "tool", "draft", "ask", "report"]},
             "reply": {"type": "string"},
+            "report": {"type": "object", "properties": {
+                "kind": {"type": "string", "enum": ["access", "write_access", "posture"]}}},
             "tool": {"type": "string", "enum": tool_names or ["none"]},
             "args": {"type": "object"},
             "draft": {"type": "object", "properties": {
@@ -361,4 +371,6 @@ def _decision_to_result(data, tool_names):
         return ChatResult(tool_calls=[ToolCall(id="draft_0", name="draft_operation", args=draft)])
     if action == "ask" and isinstance(data.get("ask"), dict):
         return ChatResult(tool_calls=[ToolCall(id="ask_0", name="ask_user", args=data["ask"])])
+    if action == "report" and isinstance(data.get("report"), dict):
+        return ChatResult(tool_calls=[ToolCall(id="report_0", name="security_report", args=data["report"])])
     return ChatResult(text=(data.get("reply") or "").strip())

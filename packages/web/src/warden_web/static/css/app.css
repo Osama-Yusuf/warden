@@ -897,6 +897,30 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .ai-op-foot { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--border); }
 .ai-op-note { flex: 1; font-size: 11px; color: var(--text-muted); }
 
+/* Access reports (read-only). */
+.ai-rep { align-self: stretch; background: var(--surface-2); border: 1px solid var(--accent); border-radius: 12px; overflow: hidden; }
+.ai-rep-h { font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); padding: 8px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+.ai-rep-prod { font-size: 9.5px; padding: 1px 6px; border-radius: 999px; background: var(--danger-soft); color: var(--danger); letter-spacing: .08em; }
+.ai-rep-table { width: 100%; border-collapse: collapse; font-size: 12.8px; }
+.ai-rep-table td { padding: 7px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.ai-rep-table tr:last-child td { border-bottom: none; }
+.ai-rep-user { font-family: var(--mono); color: var(--text-strong); white-space: nowrap; }
+.ai-rep-detail { color: var(--text-muted); }
+.ai-tag { display: inline-block; font-size: 10px; padding: 1px 7px; border-radius: 999px; margin-right: 5px; letter-spacing: .04em; }
+.ai-tag-admin { background: var(--danger-soft); color: var(--danger); }
+.ai-tag-write { background: rgba(210, 153, 34, 0.14); color: var(--warning); }
+.ai-tag-read { background: var(--accent-soft); color: var(--accent); }
+.ai-tag-off { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
+.ai-rep-chips { display: flex; gap: 6px; padding: 10px 12px; flex-wrap: wrap; }
+.ai-sev { font-size: 10px; padding: 1px 8px; border-radius: 999px; letter-spacing: .04em; text-transform: uppercase; }
+.ai-sev-high { background: var(--danger-soft); color: var(--danger); }
+.ai-sev-med { background: rgba(210, 153, 34, 0.14); color: var(--warning); }
+.ai-sev-low { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
+.ai-rep-finds { padding: 0 12px 8px; display: flex; flex-direction: column; }
+.ai-rep-find { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--border); font-size: 12.6px; }
+.ai-rep-find .ai-rep-detail { grid-column: 3; }
+.ai-rep-issue { color: var(--text-strong); }
+
 .ai-compose { display: flex; align-items: flex-end; gap: 8px; padding: 12px; border-top: 1px solid var(--border); }
 .ai-compose textarea { flex: 1; resize: none; background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px; padding: 10px 12px; color: var(--text); font: inherit; font-size: 13.5px; max-height: 140px; }
 .ai-compose textarea:focus { outline: none; border-color: var(--accent); }
