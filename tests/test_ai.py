@@ -271,6 +271,23 @@ def test_match_resolution_truncated_and_stray_match():
         {}, "postgresql", {"/api/resolve-match": lambda s: {"ids": [], "truncated": False}}) is None
 
 
+def test_resolve_match_rejects_operator_values():
+    from warden_web import server
+    # a dict/list match value would be a Mongo query operator; refuse before connecting
+    r = server.api_resolve_match({"engine": "documentdb", "database": "d",
+                                  "collection": "c", "match": {"name": {"$ne": None}}})
+    assert r.get("error") and "operators" in r["error"]
+    r2 = server.api_resolve_match({"engine": "documentdb", "database": "d",
+                                   "collection": "c", "match": {"tags": [1, 2]}})
+    assert r2.get("error") and "operators" in r2["error"]
+    # a "$"-key (scalar value) must also be refused: it would run as an operator
+    r3 = server.api_resolve_match({"engine": "documentdb", "database": "d",
+                                   "collection": "c", "match": {"$where": "true"}})
+    assert r3.get("error") and "operators" in r3["error"]
+    r4 = server.api_resolve_match({"engine": "documentdb", "collection": "c", "match": {}})
+    assert r4.get("error") and "non-empty" in r4["error"]
+
+
 def test_es_grounding_and_collection_fallback():
     from warden_web import assistant
     # ES has one cluster and no databases, so don't block a draft whose "database"

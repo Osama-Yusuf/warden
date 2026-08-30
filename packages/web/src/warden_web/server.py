@@ -398,12 +398,17 @@ def api_resolve_match(body):
     """Resolve a {field: value} match to the ids of the documents it matches, so
     Ward can turn 'delete the doc for bob' into an exact id without guessing one.
     Read-only (it only reads ids), doc stores only. Returns {ids, truncated}."""
-    adapter, err = _adapter_for(body)
-    if err:
-        return {"error": err}
     match = body.get("match")
     if not isinstance(match, dict) or not match:
         return {"error": "match must be a non-empty object"}
+    # Must be plain field:value pairs. A "$"-key ({"$where": ...}, {"$or": ...}) or
+    # a dict/list value would run as a Mongo query operator instead of an equality
+    # test, so a confirmed delete could hit a row the match never named. Refuse it.
+    if any(str(k).startswith("$") for k in match) or any(isinstance(v, (dict, list)) for v in match.values()):
+        return {"error": "match must be plain field:value pairs, without query operators"}
+    adapter, err = _adapter_for(body)
+    if err:
+        return {"error": err}
     try:
         cap = max(1, min(100, int(body.get("cap", 25))))
     except (TypeError, ValueError):
