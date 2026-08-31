@@ -231,6 +231,22 @@ function toggleLoginDirect(username, enable) {
   ]);
 }
 
+function confirmRevokeAll(username) {
+  showModal('Revoke all access', `
+    <p style="margin-bottom:8px">
+      Revoke every privilege from <strong>${esc(username)}</strong> across all databases on
+      <strong>${esc(creds().env)}</strong>? The user stays; anything they own is reassigned to the admin.
+    </p>
+  `, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Revoke all', cls: 'btn-danger', fn: async () => {
+      const res = await apiPost('/api/revoke-all', { username });
+      if (res.ok) { toast(`Revoked all access from ${username}`, 'success'); invalidateCache('users'); refreshCache(); viewUserInfoFor(username); }
+      else { toast(res.error || 'Failed', 'error'); }
+    }},
+  ]);
+}
+
 function confirmDropUser(username) {
   showModal('Confirm Delete', `
     <p style="color:var(--danger); font-weight:600; margin-bottom:8px">

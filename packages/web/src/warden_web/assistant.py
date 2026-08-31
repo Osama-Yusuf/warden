@@ -330,12 +330,35 @@ def _resolve_draft_matches(draft, conn, fam, routes):
     return None
 
 
+# Names the model reaches for when a request didn't actually give one. A
+# create_user with one of these gets confirmed rather than run as-is, since
+# "create a user with read on X" should never silently make a user called "user".
+_PLACEHOLDER_NAMES = {"", "user", "username", "newuser", "new_user", "name",
+                      "myuser", "test", "example", "someone", "thing"}
+
+
+def _validate_draft_names(draft):
+    """create_user needs a real name. The model sometimes invents one (usually
+    'user') when the request didn't give it, so a missing or obviously-placeholder
+    username asks instead of creating the wrong account."""
+    for i, op in enumerate(draft.get("operations") or []):
+        if op.get("kind") != "create_user":
+            continue
+        u = str(op.get("username", "")).strip()
+        if u.lower() in _PLACEHOLDER_NAMES:
+            return {"question": "What should I name the user?", "kind": "text",
+                    "_resume": {"kind": "username", "was": u}}
+    return None
+
+
 def _disambiguate(draft, conn, fam, routes, real_dbs):
-    """Run the two draft guardrails (unknown database, unresolved row match). If one
-    needs the user, return (question, resume) where resume carries the draft plus
-    what's being filled, so the answer can be applied without the model. Otherwise
-    (None, None) and the draft is ready (matches resolved in place as a side effect)."""
-    for check in (_validate_draft_db(draft, real_dbs, fam),
+    """Run the draft guardrails (missing username, unknown database, unresolved row
+    match). If one needs the user, return (question, resume) where resume carries
+    the draft plus what's being filled, so the answer can be applied without the
+    model. Otherwise (None, None) and the draft is ready (matches resolved in place
+    as a side effect)."""
+    for check in (_validate_draft_names(draft),
+                  _validate_draft_db(draft, real_dbs, fam),
                   _resolve_draft_matches(draft, conn, fam, routes)):
         if check:
             resume = check.pop("_resume", {})
@@ -363,6 +386,13 @@ def _apply_answer(draft, resume, answer):
         if isinstance(i, int) and 0 <= i < len(ops):
             ops[i]["id"] = answer
             ops[i].pop("match", None)
+    elif kind == "username":
+        # Replace the placeholder name everywhere: the create_user op and any
+        # grant/revoke/toggle that referenced the same not-yet-real user.
+        was = resume.get("was", "")
+        for op in draft.get("operations") or []:
+            if str(op.get("username", "")).strip() == was:
+                op["username"] = answer
 
 
 def resume_draft(body, routes):
@@ -604,6 +634,7 @@ OP_ROUTE = {
     "toggle_login": "/api/toggle-login",
     "grant": "/api/grant",
     "revoke": "/api/revoke",
+    "revoke_all": "/api/revoke-all",
     "create_collection": "/api/create-collection",
     "create_database": "/api/create-database",
     "insert_data": "/api/row-insert",
@@ -755,14 +786,19 @@ def run_operations(body, routes):
         target = op.get("username") or op.get("collection") or op.get("name") or op.get("database")
         if kind in ("grant", "revoke"):
             # An access level fans out to several privilege grants on SQL; roll
-            # them into one result so the card reads as one line.
-            errors = []
+            # them into one result so the card reads as one line. A warning (e.g.
+            # "revoke didn't actually block them, PUBLIC still allows connect") is
+            # carried through so the result tells the truth, not just "done".
+            errors, warnings = [], []
             for sub in _grant_bodies(conn, op, fam):
                 res = _call(handler, sub)
                 if res.get("error"):
                     errors.append(res["error"])
+                if res.get("warning"):
+                    warnings.append(res["warning"])
             results.append({"kind": kind, "target": target, "ok": not errors,
-                            "error": _tidy_error(errors[0], target) if errors else None, "password": None})
+                            "error": _tidy_error(errors[0], target) if errors else None,
+                            "password": None, "warning": warnings[0] if warnings else None})
         elif kind in _DATA_KINDS:
             res = _call(handler, _data_op_body(conn, op, fam))
             ok = bool(res.get("ok")) and "error" not in res
@@ -773,7 +809,8 @@ def run_operations(body, routes):
             res = _call(handler, _op_body(conn, op))
             ok = bool(res.get("ok")) and "error" not in res
             results.append({"kind": kind, "target": target, "ok": ok,
-                            "error": _tidy_error(res.get("error"), target), "password": res.get("password")})
+                            "error": _tidy_error(res.get("error"), target),
+                            "password": res.get("password"), "warning": res.get("warning")})
     return {"results": results, "ran": sum(1 for r in results if r["ok"])}
 
 

@@ -994,6 +994,7 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .ai-res { font-family: var(--mono); font-size: 12px; line-height: 1.5; padding: 1px 0; }
 .ai-res.ok { color: var(--success); }
 .ai-res.bad { color: var(--danger); }
+.ai-res-warn { color: var(--warning); font-size: 11px; margin: 2px 0 4px 16px; line-height: 1.4; white-space: normal; }
 .ai-res code, .ai-pw { color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; cursor: pointer; }
 .ai-pw:hover { border-color: var(--accent); }
 

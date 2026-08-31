@@ -314,6 +314,10 @@ def api_revoke(body):
                    rule=body.get("rule"))
 
 
+def api_revoke_all(body):
+    return _mutate(body, "revoke_all", _named_user(body))
+
+
 def api_drop_user(body):
     name = _named_user(body)
     return _mutate(body, "drop_user", name)
@@ -507,7 +511,7 @@ CURSOR_CONSUMED_RE = re.compile(r'\.(toArray|forEach|itcount|explain|next|size|m
 
 RO_BLOCKED_ROUTES = {
     "/api/create-user", "/api/reset-password", "/api/grant",
-    "/api/revoke", "/api/drop-user", "/api/toggle-login",
+    "/api/revoke", "/api/revoke-all", "/api/drop-user", "/api/toggle-login",
     "/api/row-insert", "/api/row-update", "/api/row-delete",
     "/api/create-collection", "/api/create-database",
     "/api/ai/execute",   # Ward running a confirmed change is still a change
@@ -1414,7 +1418,7 @@ def api_ai_chat(body):
 REQUIRES_CREDS = {
     "/api/connect", "/api/list-users", "/api/user-info",
     "/api/create-user", "/api/reset-password", "/api/grant",
-    "/api/revoke", "/api/drop-user", "/api/toggle-login",
+    "/api/revoke", "/api/revoke-all", "/api/drop-user", "/api/toggle-login",
     "/api/list-databases", "/api/list-collections", "/api/create-collection", "/api/create-database", "/api/browse-data",
     "/api/resolve-match",
     "/api/table-meta", "/api/object-stats", "/api/row-insert", "/api/row-update", "/api/row-delete",
@@ -1434,6 +1438,7 @@ ROUTES = {
     "/api/grant": api_grant,
     "/api/revoke": api_revoke,
     "/api/drop-user": api_drop_user,
+    "/api/revoke-all": api_revoke_all,
     "/api/toggle-login": api_toggle_login,
     "/api/list-databases": api_list_databases,
     "/api/list-collections": api_list_collections,
