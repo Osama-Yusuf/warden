@@ -792,6 +792,61 @@ def prewarm_docdb(cfg, user, pwd):
     threading.Thread(target=_go, daemon=True).start()
 
 
+def _dryrun_wrap(fam, query):
+    """Wrap a query so it runs inside a transaction that always rolls back. The
+    console then shows real results and affected-row counts ('UPDATE 3') without
+    persisting anything. Multiple statements are covered by the one transaction."""
+    q = query.strip().rstrip(";")
+    begin = "START TRANSACTION" if fam == "mysql" else "BEGIN"
+    return f"{begin};\n{q};\nROLLBACK;"
+
+
+_MONGO_COUNT_METHODS = {"deletemany", "deleteone", "remove", "updatemany", "updateone",
+                        "update", "replaceone", "findoneandupdate", "findoneanddelete",
+                        "findoneandreplace"}
+_MONGO_READ_METHODS = {"find", "findone", "aggregate", "countdocuments", "count",
+                       "estimateddocumentcount", "distinct"}
+_MONGO_CALL_RE = re.compile(
+    r'^\s*db\s*\.\s*(?:getCollection\(\s*[\'"]([^\'"]+)[\'"]\s*\)|(\w+))\s*\.\s*(\w+)\s*\((.*)\)\s*$',
+    re.DOTALL)
+
+
+def _mongo_first_arg(args):
+    """The first top-level argument of a call's argument string (brace-aware), so
+    updateMany(FILTER, update) yields just FILTER."""
+    depth, out = 0, []
+    for ch in args:
+        if ch in "{[(":
+            depth += 1
+        elif ch in "}])":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            break
+        out.append(ch)
+    return "".join(out).strip()
+
+
+def _mongo_dryrun(query):
+    """Turn a Mongo write into a preview. Returns (preview_query, note): a write
+    becomes a countDocuments of its filter so the console can say how many docs it
+    WOULD touch without touching them; a read runs as-is (note=None). Returns
+    (None, reason) when there's nothing safe to preview."""
+    m = _MONGO_CALL_RE.match(query.strip())
+    if not m:
+        return None, "Dry run needs a single db.collection.method(...) call."
+    coll, method, args = (m.group(1) or m.group(2)), m.group(3).lower(), m.group(4)
+    if method in _MONGO_READ_METHODS:
+        return query, None
+    if method in _MONGO_COUNT_METHODS:
+        filt = _mongo_first_arg(args) or "{}"
+        verb = "delete" if ("delete" in method or "remove" in method) else \
+               ("replace" if "replace" in method else "update")
+        return f'db["{coll}"].countDocuments({filt})', f"would {verb} the matching document(s)"
+    if method in ("insertone", "insertmany", "insert", "save"):
+        return None, "Insert adds new document(s); there's nothing existing to preview."
+    return None, f"Dry run isn't available for {method}()."
+
+
 def api_query(body):
     cfg, err = get_config(body)
     if err:
@@ -811,8 +866,11 @@ def api_query(body):
     database = body.get("database") or ""
     if database:
         database = validate_ident(database, "database")
+    # A dry run wraps writes in a transaction that always rolls back, so it's safe
+    # even in read-only mode: nothing is committed.
+    dry_run = bool(body.get("dry_run"))
 
-    if body.get("read_only"):
+    if body.get("read_only") and not dry_run:
         violation = read_only_violation(engine, query)
         if violation:
             return {"ok": False, "database": database, "data": None, "output": "",
@@ -862,6 +920,27 @@ def api_query(body):
                     "truncated": False, "mode": "syntax"}
         q_stripped = query.rstrip().rstrip(";")
         single_expr = ";" not in q_stripped and "//" not in q_stripped
+        if dry_run:
+            # No transactions on a standalone server, so preview a write by
+            # counting the documents its filter would match; a read runs for real.
+            preview, note = _mongo_dryrun(q_stripped)
+            if preview is None:
+                return {"ok": True, "database": db, "data": None, "output": note,
+                        "error": "", "truncated": False, "mode": "dry-run", "dry_run": True}
+            audit(env, "documentdb", "DRY-RUN", f"db={db} :: {query[:300]}")
+            pv = preview
+            if (CURSOR_CALL_RE.search(pv) and not CURSOR_CONSUMED_RE.search(pv)):
+                pv = pv + ".toArray()"
+            try:
+                r = get_mongo_session(cfg, adm_user, adm_pass).run_structured(pv, db, timeout=60)
+            except Exception as e:
+                return {"ok": False, "database": db, "data": None, "output": "", "error": str(e),
+                        "truncated": False, "mode": "dry-run", "dry_run": True}
+            out = (r.get("raw") or r.get("output") or "").strip()
+            return {"ok": bool(r.get("ok")), "database": db, "data": None,
+                    "output": (f"{note}: {out}" if note else out),
+                    "error": r.get("error") or "", "truncated": False,
+                    "mode": "dry-run", "dry_run": True}
         q_exec = q_stripped
         # A bare cursor (find/aggregate) can't be EJSON-serialized; iterate it.
         if (CURSOR_CALL_RE.search(q_exec) and single_expr
@@ -930,27 +1009,33 @@ def api_query(body):
         }
     else:
         fam = engine_family(engine)
+        act = "DRY-RUN" if dry_run else "QUERY"
         if fam == "mysql":
             db = database or cfg.get("default_db") or ""
-            code, out, err_out = my_csv(cfg, adm_user, adm_pass, query, db=db or None, timeout=60)
-            audit(env, "mysql", "QUERY", f"db={db or '*'} :: {query[:300]}")
+            sql = _dryrun_wrap("mysql", query) if dry_run else query
+            code, out, err_out = my_csv(cfg, adm_user, adm_pass, sql, db=db or None, timeout=60)
+            audit(env, "mysql", act, f"db={db or '*'} :: {query[:300]}")
             truncated = len(out) > MAX_OUTPUT_LEN
             return {"ok": code == 0, "database": db or "*", "csv": out[:MAX_OUTPUT_LEN],
                     "output": out[:MAX_OUTPUT_LEN],
                     "error": err_out if code != 0 else "",
-                    "notices": err_out if code == 0 else "", "truncated": truncated}
+                    "notices": err_out if code == 0 else "", "truncated": truncated,
+                    "dry_run": dry_run, "mode": "dry-run" if dry_run else "native"}
         if fam == "sqlite":
             db_path = Path(cfg["path"])
-            code, out, err_out = sq_csv(db_path, query, timeout=60)
-            audit(env, "sqlite", "QUERY", f"db={db_path.name} :: {query[:300]}")
+            sql = _dryrun_wrap("sqlite", query) if dry_run else query
+            code, out, err_out = sq_csv(db_path, sql, timeout=60)
+            audit(env, "sqlite", act, f"db={db_path.name} :: {query[:300]}")
             truncated = len(out) > MAX_OUTPUT_LEN
             return {"ok": code == 0, "database": db_path.name, "csv": out[:MAX_OUTPUT_LEN],
                     "output": out[:MAX_OUTPUT_LEN],
                     "error": err_out if code != 0 else "",
-                    "notices": err_out if code == 0 else "", "truncated": truncated}
+                    "notices": err_out if code == 0 else "", "truncated": truncated,
+                    "dry_run": dry_run, "mode": "dry-run" if dry_run else "native"}
         db = database or cfg.get("default_db", "postgres")
-        code, out, err_out = pg_csv(cfg, adm_user, adm_pass, query, db=db, timeout=60)
-        audit(env, "postgresql", "QUERY", f"db={db} :: {query[:300]}")
+        sql = _dryrun_wrap("postgresql", query) if dry_run else query
+        code, out, err_out = pg_csv(cfg, adm_user, adm_pass, sql, db=db, timeout=60)
+        audit(env, "postgresql", act, f"db={db} :: {query[:300]}")
         truncated = len(out) > MAX_OUTPUT_LEN
         return {
             "ok": code == 0,
@@ -960,6 +1045,7 @@ def api_query(body):
             "error": err_out if code != 0 else "",
             "notices": err_out if code == 0 else "",
             "truncated": truncated,
+            "dry_run": dry_run, "mode": "dry-run" if dry_run else "native",
         }
 
 

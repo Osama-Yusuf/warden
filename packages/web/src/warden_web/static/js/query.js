@@ -30,6 +30,7 @@ function viewQuery() {
     <div id="qContext"></div>
     <div style="display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap">
       <button class="btn btn-primary" onclick="runQueryConfirm()">Run</button>
+      <button class="btn btn-ghost" onclick="runDryRun()" data-tip="Run inside a transaction and roll back: see exactly what it would change, without changing anything">Dry run</button>
       <button class="btn btn-ghost" onclick="runExplain()" data-tip="Show the execution plan without modifying anything">Explain</button>
       <label class="chk" data-tip="Power mode: stream the engine's raw output live as it arrives, instead of the formatted table."><input type="checkbox" id="qLive"> live output</label>
       <span id="qTiming" style="font-family:var(--mono-font); font-size:11px; color:var(--text-muted)"></span>
@@ -38,7 +39,7 @@ function viewQuery() {
     <div id="qHistory"></div>
   </div>`);
   const t = document.getElementById('qText');
-  t.addEventListener('input', qExplainUpdate);
+  t.addEventListener('input', () => { qSyncUseDb(); qExplainUpdate(); });
   t.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); runQueryConfirm(); } });
   document.getElementById('qDb').addEventListener('input', qExplainUpdate);
   const live = document.getElementById('qLive');
@@ -189,6 +190,23 @@ function qSetDb(db) {
   if (!input) return;
   input.value = db;
   qExplainUpdate();
+}
+
+// When a pasted query leads with a database switch (MySQL `USE db`, psql `\c db`,
+// or Mongo `use db`), point the DB selector at it and drop that line so the rest
+// runs under the selected database. Requires a following line, so it doesn't fire
+// mid-typing. Setting .value programmatically doesn't re-fire 'input', so no loop.
+function qSyncUseDb() {
+  const t = document.getElementById('qText'), dbSel = document.getElementById('qDb');
+  if (!t || !dbSel) return;
+  const m = t.value.match(/^\s*(?:use\s+|\\c(?:onnect)?\s+)[`"']?([A-Za-z0-9_.$-]+)[`"']?\s*;?[ \t]*\r?\n/i);
+  if (!m) return;
+  t.value = t.value.slice(m[0].length).replace(/^\s+/, '');
+  if (dbSel.value.trim() !== m[1]) {
+    dbSel.value = m[1];
+    if (typeof fetchColls === 'function' && engineFamily(currentEngine) === 'documentdb') fetchColls(m[1]);
+  }
+  toast(`Switched to database ${m[1]}`, 'success');
 }
 
 async function fetchColls(db) {
@@ -450,13 +468,31 @@ function explainMongo(text) {
 function explainSql(text) {
   const stmts = splitTopLevel(text, ';').map(s => s.trim()).filter(Boolean);
   if (!stmts.length) return { danger: 'none', html: '' };
-  const first = stmts[0];
+  if (stmts.length === 1) return explainOneSql(stmts[0]);
+  // Multiple statements: explain each, take the worst danger, and flag when they
+  // touch the same table (a strong hint they're a connected sequence).
+  const order = { none: 0, read: 1, write: 2, danger: 3 };
+  const parts = stmts.map(explainOneSql);
+  const danger = parts.reduce((a, p) => (order[p.danger] > order[a] ? p.danger : a), 'none');
+  const tables = parts.map(p => p.table).filter(Boolean);
+  const uniq = [...new Set(tables)];
+  const connected = tables.length > 1 && uniq.length < tables.length;
+  const items = parts.map((p, i) => `<div class="ex-step"><span class="ex-n">${i + 1}</span><span>${p.html}</span></div>`).join('');
+  const note = connected
+    ? `<div class="ex-connect">Connected: these run in order and share ${uniq.length === 1 ? `<b>${esc(uniq[0])}</b>` : 'tables'}.</div>`
+    : `<div class="ex-connect">Runs ${stmts.length} statements in order.</div>`;
+  return { danger, html: `<div class="ex-multi">${items}${note}</div>` };
+}
+
+function explainOneSql(stmt) {
+  const first = stmt.trim();
   const kw = (first.match(/^[A-Za-z]+/) || [''])[0].toUpperCase();
   const table = re => { const m = first.match(re); return m ? `<b>${esc(m[1].replace(/"/g, ''))}</b>` : 'a table'; };
   const whereM = first.match(/\bwhere\b([\s\S]+?)(\border\s+by\b|\blimit\b|\bgroup\s+by\b|\breturning\b|$)/i);
   const where = whereM ? ` where ${preview(whereM[1], 90)}` : '';
-  const more = stmts.length > 1 ? ` <b>+ ${plural(stmts.length - 1, 'more statement')}</b>, only the first is explained here.` : '';
-  const bump = d => (stmts.length > 1 && d === 'read') ? 'write' : d;
+  const more = '';
+  const bump = d => d;
+  const tbl = extractSqlTable(first);
 
   let r;
   switch (kw) {
@@ -500,7 +536,7 @@ function explainSql(text) {
     default:
       r = { danger: 'write', html: `Runs <code>${esc(kw || first.slice(0, 20))}</code>. Not a recognized read statement, review carefully.` };
   }
-  return { danger: bump(r.danger), html: r.html + more };
+  return { danger: bump(r.danger), html: r.html + more, table: tbl };
 }
 
 const REDIS_READ_JS = new Set(['GET','MGET','STRLEN','GETRANGE','SUBSTR','GETBIT','BITCOUNT','EXISTS','TYPE','TTL','PTTL','OBJECT','KEYS','SCAN','HSCAN','SSCAN','ZSCAN','RANDOMKEY','DBSIZE','HGET','HMGET','HGETALL','HKEYS','HVALS','HLEN','HEXISTS','LRANGE','LLEN','LINDEX','SMEMBERS','SCARD','SISMEMBER','SRANDMEMBER','ZRANGE','ZREVRANGE','ZRANGEBYSCORE','ZCARD','ZSCORE','ZRANK','ZCOUNT','XLEN','XRANGE','XINFO','INFO','MEMORY','PING','ECHO','TIME','COMMAND']);
@@ -530,6 +566,18 @@ function explainQuery(fam, text) {
 
 // Execution
 
+// Engines whose dry run is real (transaction + rollback, or a safe preview).
+const DRYRUN_ENGINES = ['postgresql', 'mysql', 'sqlite', 'documentdb'];
+
+function runDryRun() {
+  const query = document.getElementById('qText').value.trim();
+  if (!query) { toast('Query is empty', 'error'); return; }
+  const fam = engineFamily(currentEngine);
+  if (!DRYRUN_ENGINES.includes(fam)) { toast('Dry run isn\'t available for this engine', 'error'); return; }
+  const database = document.getElementById('qDb').value.trim();
+  executeQuery(query, database, { dryRun: true });
+}
+
 function runQueryConfirm() {
   const query = document.getElementById('qText').value.trim();
   if (!query) { toast('Query is empty', 'error'); return; }
@@ -548,12 +596,13 @@ function runQueryConfirm() {
   ]);
 }
 
-async function executeQuery(query, database) {
-  if (document.getElementById('qLive')?.checked) return streamQuery(query, database);
+async function executeQuery(query, database, opts = {}) {
+  // A dry run never streams: it needs the full rolled-back result to summarize.
+  if (!opts.dryRun && document.getElementById('qLive')?.checked) return streamQuery(query, database);
   const box = document.getElementById('qResults');
-  if (box) box.innerHTML = loadingInline('Running…');
+  if (box) box.innerHTML = loadingInline(opts.dryRun ? 'Dry running (will roll back)…' : 'Running…');
   const t0 = performance.now();
-  const res = await apiPost('/api/query', { query, database });
+  const res = await apiPost('/api/query', { query, database, dry_run: !!opts.dryRun });
   const timing = document.getElementById('qTiming');
   if (timing) {
     const mode = res.mode === 'warm' ? ' · ⚡ warm session' : res.mode === 'cold' ? ' · cold start' : '';
@@ -659,6 +708,14 @@ function renderQueryResults(res) {
   window._qLast = res;
   if (!res.ok) {
     box.innerHTML = `<div class="explain-box explain-danger"><div class="explain-text"><b>Failed:</b> <pre class="result-pre" style="margin-top:8px">${esc(res.error || res.output || 'Unknown error')}</pre></div></div>`;
+    return;
+  }
+  if (res.dry_run) {
+    // The output holds command tags ("UPDATE 3") and any SELECT rows, all rolled
+    // back. Show it verbatim under a banner rather than forcing it into a table.
+    const body = (res.output || res.csv || '').trim() || 'Nothing to preview.';
+    box.innerHTML = `<div class="dryrun-banner">&#8617; Dry run — rolled back, nothing was changed</div>
+      <pre class="result-pre dryrun-out">${esc(body)}</pre>`;
     return;
   }
   let html = '';
