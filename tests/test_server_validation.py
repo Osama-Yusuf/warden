@@ -220,3 +220,36 @@ def test_is_mariadb_false_on_query_error(monkeypatch):
     monkeypatch.setattr(V, "my_query", lambda *a: (1, "", "boom"))
     V._MARIADB_CACHE.clear()
     assert V.is_mariadb({"host": "h3", "port": 3306}, "u", "p") is False
+
+
+# ── query dry-run helpers (server layer) ────────────────────────────────────
+
+def test_dryrun_wrap():
+    assert server._dryrun_wrap("postgresql", "DELETE FROM t WHERE x>2;") == "BEGIN;\nDELETE FROM t WHERE x>2;\nROLLBACK;"
+    assert server._dryrun_wrap("mysql", "UPDATE t SET a=1").startswith("START TRANSACTION;")
+    assert server._dryrun_wrap("sqlite", "INSERT INTO t VALUES (1)").startswith("BEGIN;")
+
+
+def test_mongo_first_arg():
+    assert server._mongo_first_arg('{"a": {"$gt": 1}}, {"$set": {"b": 2}}') == '{"a": {"$gt": 1}}'
+    assert server._mongo_first_arg('{"status": "old", "n": [1,2,3]}') == '{"status": "old", "n": [1,2,3]}'
+    assert server._mongo_first_arg('') == ''
+
+
+def test_mongo_dryrun():
+    # a delete becomes a count of the matching docs, so nothing is removed
+    pv, note = server._mongo_dryrun('db.users.deleteMany({"status": "old"})')
+    assert pv == 'db["users"].countDocuments({"status": "old"})' and "delete" in note
+    # an update counts its filter (first arg only), not the update doc
+    pv, note = server._mongo_dryrun('db.users.updateMany({"a": 1}, {"$set": {"b": 2}})')
+    assert pv == 'db["users"].countDocuments({"a": 1})' and "update" in note
+    # a read runs as-is (note None)
+    pv, note = server._mongo_dryrun('db.users.find({"a": 1})')
+    assert pv == 'db.users.find({"a": 1})' and note is None
+    # getCollection form
+    pv, _ = server._mongo_dryrun('db.getCollection("odd-name").deleteOne({})')
+    assert pv == 'db["odd-name"].countDocuments({})'
+    # insert / unknown -> no preview, with a reason
+    assert server._mongo_dryrun('db.users.insertOne({"a": 1})')[0] is None
+    assert server._mongo_dryrun('db.users.drop()')[0] is None
+    assert server._mongo_dryrun('not a mongo call')[0] is None

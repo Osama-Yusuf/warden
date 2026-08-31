@@ -1001,3 +1001,6 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .ai-prod-toggle { display: flex; align-items: flex-start; gap: 10px; font-size: 13.5px; color: var(--text); cursor: pointer; line-height: 1.5; }
 .ai-prod-toggle input { margin-top: 3px; flex: none; }
 .ai-prod-toggle b { color: var(--warning); }
+
+.dryrun-banner { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); border-radius: 8px; padding: 8px 12px; font-size: 12.5px; font-weight: 600; margin-bottom: 8px; }
+.dryrun-out { white-space: pre-wrap; word-break: break-word; }

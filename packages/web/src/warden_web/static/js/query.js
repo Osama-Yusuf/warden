@@ -30,6 +30,7 @@ function viewQuery() {
     <div id="qContext"></div>
     <div style="display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap">
       <button class="btn btn-primary" onclick="runQueryConfirm()">Run</button>
+      <button class="btn btn-ghost" onclick="runDryRun()" data-tip="Run inside a transaction and roll back: see exactly what it would change, without changing anything">Dry run</button>
       <button class="btn btn-ghost" onclick="runExplain()" data-tip="Show the execution plan without modifying anything">Explain</button>
       <label class="chk" data-tip="Power mode: stream the engine's raw output live as it arrives, instead of the formatted table."><input type="checkbox" id="qLive"> live output</label>
       <span id="qTiming" style="font-family:var(--mono-font); font-size:11px; color:var(--text-muted)"></span>
@@ -530,6 +531,18 @@ function explainQuery(fam, text) {
 
 // Execution
 
+// Engines whose dry run is real (transaction + rollback, or a safe preview).
+const DRYRUN_ENGINES = ['postgresql', 'mysql', 'sqlite', 'documentdb'];
+
+function runDryRun() {
+  const query = document.getElementById('qText').value.trim();
+  if (!query) { toast('Query is empty', 'error'); return; }
+  const fam = engineFamily(currentEngine);
+  if (!DRYRUN_ENGINES.includes(fam)) { toast('Dry run isn\'t available for this engine', 'error'); return; }
+  const database = document.getElementById('qDb').value.trim();
+  executeQuery(query, database, { dryRun: true });
+}
+
 function runQueryConfirm() {
   const query = document.getElementById('qText').value.trim();
   if (!query) { toast('Query is empty', 'error'); return; }
@@ -548,12 +561,13 @@ function runQueryConfirm() {
   ]);
 }
 
-async function executeQuery(query, database) {
-  if (document.getElementById('qLive')?.checked) return streamQuery(query, database);
+async function executeQuery(query, database, opts = {}) {
+  // A dry run never streams: it needs the full rolled-back result to summarize.
+  if (!opts.dryRun && document.getElementById('qLive')?.checked) return streamQuery(query, database);
   const box = document.getElementById('qResults');
-  if (box) box.innerHTML = loadingInline('Running…');
+  if (box) box.innerHTML = loadingInline(opts.dryRun ? 'Dry running (will roll back)…' : 'Running…');
   const t0 = performance.now();
-  const res = await apiPost('/api/query', { query, database });
+  const res = await apiPost('/api/query', { query, database, dry_run: !!opts.dryRun });
   const timing = document.getElementById('qTiming');
   if (timing) {
     const mode = res.mode === 'warm' ? ' · ⚡ warm session' : res.mode === 'cold' ? ' · cold start' : '';
@@ -659,6 +673,14 @@ function renderQueryResults(res) {
   window._qLast = res;
   if (!res.ok) {
     box.innerHTML = `<div class="explain-box explain-danger"><div class="explain-text"><b>Failed:</b> <pre class="result-pre" style="margin-top:8px">${esc(res.error || res.output || 'Unknown error')}</pre></div></div>`;
+    return;
+  }
+  if (res.dry_run) {
+    // The output holds command tags ("UPDATE 3") and any SELECT rows, all rolled
+    // back. Show it verbatim under a banner rather than forcing it into a table.
+    const body = (res.output || res.csv || '').trim() || 'Nothing to preview.';
+    box.innerHTML = `<div class="dryrun-banner">&#8617; Dry run — rolled back, nothing was changed</div>
+      <pre class="result-pre dryrun-out">${esc(body)}</pre>`;
     return;
   }
   let html = '';
