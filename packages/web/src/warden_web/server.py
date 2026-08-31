@@ -826,25 +826,68 @@ def _mongo_first_arg(args):
     return "".join(out).strip()
 
 
-def _mongo_dryrun(query):
-    """Turn a Mongo write into a preview. Returns (preview_query, note): a write
-    becomes a countDocuments of its filter so the console can say how many docs it
-    WOULD touch without touching them; a read runs as-is (note=None). Returns
-    (None, reason) when there's nothing safe to preview."""
-    m = _MONGO_CALL_RE.match(query.strip())
+def _strip_js_comments(s):
+    s = re.sub(r"/\*.*?\*/", "", s, flags=re.DOTALL)   # /* block */
+    s = re.sub(r"//[^\n]*", "", s)                       # // line
+    return s
+
+
+def _split_js_statements(s):
+    """Split a mongosh snippet on top-level semicolons, respecting strings and
+    bracket nesting so a ';' inside a document or string doesn't split it."""
+    out, buf, depth, quote, i, n = [], [], 0, None, 0, len(s)
+    while i < n:
+        ch = s[i]
+        if quote:
+            buf.append(ch)
+            if ch == "\\" and i + 1 < n:
+                buf.append(s[i + 1]); i += 2; continue
+            if ch == quote:
+                quote = None
+        elif ch in "\"'`":
+            quote = ch; buf.append(ch)
+        elif ch in "{[(":
+            depth += 1; buf.append(ch)
+        elif ch in "}])":
+            depth = max(0, depth - 1); buf.append(ch)
+        elif ch == ";" and depth == 0:
+            out.append("".join(buf)); buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    if "".join(buf).strip():
+        out.append("".join(buf))
+    return out
+
+
+def _mongo_dryrun_one(stmt):
+    """One statement -> (preview_query, note). A write becomes a countDocuments of
+    its filter; a read runs as-is (note None); anything else is note-only
+    (preview None)."""
+    m = _MONGO_CALL_RE.match(stmt.strip())
     if not m:
-        return None, "Dry run needs a single db.collection.method(...) call."
+        return None, "not a db.collection.method(...) call, skipped"
     coll, method, args = (m.group(1) or m.group(2)), m.group(3).lower(), m.group(4)
     if method in _MONGO_READ_METHODS:
-        return query, None
+        return stmt.strip(), None
     if method in _MONGO_COUNT_METHODS:
         filt = _mongo_first_arg(args) or "{}"
         verb = "delete" if ("delete" in method or "remove" in method) else \
                ("replace" if "replace" in method else "update")
         return f'db["{coll}"].countDocuments({filt})', f"would {verb} the matching document(s)"
     if method in ("insertone", "insertmany", "insert", "save"):
-        return None, "Insert adds new document(s); there's nothing existing to preview."
-    return None, f"Dry run isn't available for {method}()."
+        return None, "would insert new document(s)"
+    return None, f"can't preview {method}()"
+
+
+def _mongo_dryrun(query):
+    """Turn each statement of a Mongo query into a preview, tolerating trailing
+    semicolons and // comments. Returns (items, error) where items is a list of
+    (preview_query_or_None, note)."""
+    stmts = [s.strip() for s in _split_js_statements(_strip_js_comments(query)) if s.strip()]
+    if not stmts:
+        return None, "Nothing to dry-run."
+    return [_mongo_dryrun_one(st) for st in stmts], None
 
 
 def api_query(body):
@@ -921,26 +964,30 @@ def api_query(body):
         q_stripped = query.rstrip().rstrip(";")
         single_expr = ";" not in q_stripped and "//" not in q_stripped
         if dry_run:
-            # No transactions on a standalone server, so preview a write by
+            # No transactions on a standalone server, so preview each write by
             # counting the documents its filter would match; a read runs for real.
-            preview, note = _mongo_dryrun(q_stripped)
-            if preview is None:
-                return {"ok": True, "database": db, "data": None, "output": note,
+            # Trailing ';' and // comments are tolerated, and multiple statements
+            # are each previewed on their own line.
+            items, derr = _mongo_dryrun(query)
+            if derr:
+                return {"ok": True, "database": db, "data": None, "output": derr,
                         "error": "", "truncated": False, "mode": "dry-run", "dry_run": True}
             audit(env, "documentdb", "DRY-RUN", f"db={db} :: {query[:300]}")
-            pv = preview
-            if (CURSOR_CALL_RE.search(pv) and not CURSOR_CONSUMED_RE.search(pv)):
-                pv = pv + ".toArray()"
-            try:
-                r = get_mongo_session(cfg, adm_user, adm_pass).run_structured(pv, db, timeout=60)
-            except Exception as e:
-                return {"ok": False, "database": db, "data": None, "output": "", "error": str(e),
-                        "truncated": False, "mode": "dry-run", "dry_run": True}
-            out = (r.get("raw") or r.get("output") or "").strip()
-            return {"ok": bool(r.get("ok")), "database": db, "data": None,
-                    "output": (f"{note}: {out}" if note else out),
-                    "error": r.get("error") or "", "truncated": False,
-                    "mode": "dry-run", "dry_run": True}
+            lines, multi = [], len(items) > 1
+            for idx, (pv, note) in enumerate(items, 1):
+                tag = f"{idx}. " if multi else ""
+                if pv is None:
+                    lines.append(f"{tag}{note}")
+                    continue
+                pvx = pv + ".toArray()" if (CURSOR_CALL_RE.search(pv) and not CURSOR_CONSUMED_RE.search(pv)) else pv
+                try:
+                    r = get_mongo_session(cfg, adm_user, adm_pass).run_structured(pvx, db, timeout=60)
+                    out = (r.get("raw") or r.get("output") or "").strip()
+                    lines.append(f"{tag}{note}: {out}" if note else f"{tag}{out}")
+                except Exception as e:
+                    lines.append(f"{tag}error: {e}")
+            return {"ok": True, "database": db, "data": None, "output": "\n".join(lines),
+                    "error": "", "truncated": False, "mode": "dry-run", "dry_run": True}
         q_exec = q_stripped
         # A bare cursor (find/aggregate) can't be EJSON-serialized; iterate it.
         if (CURSOR_CALL_RE.search(q_exec) and single_expr

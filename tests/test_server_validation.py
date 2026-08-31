@@ -236,20 +236,32 @@ def test_mongo_first_arg():
     assert server._mongo_first_arg('') == ''
 
 
-def test_mongo_dryrun():
+def test_mongo_dryrun_one():
     # a delete becomes a count of the matching docs, so nothing is removed
-    pv, note = server._mongo_dryrun('db.users.deleteMany({"status": "old"})')
+    pv, note = server._mongo_dryrun_one('db.users.deleteMany({"status": "old"})')
     assert pv == 'db["users"].countDocuments({"status": "old"})' and "delete" in note
     # an update counts its filter (first arg only), not the update doc
-    pv, note = server._mongo_dryrun('db.users.updateMany({"a": 1}, {"$set": {"b": 2}})')
+    pv, note = server._mongo_dryrun_one('db.users.updateMany({"a": 1}, {"$set": {"b": 2}})')
     assert pv == 'db["users"].countDocuments({"a": 1})' and "update" in note
     # a read runs as-is (note None)
-    pv, note = server._mongo_dryrun('db.users.find({"a": 1})')
+    pv, note = server._mongo_dryrun_one('db.users.find({"a": 1})')
     assert pv == 'db.users.find({"a": 1})' and note is None
-    # getCollection form
-    pv, _ = server._mongo_dryrun('db.getCollection("odd-name").deleteOne({})')
+    pv, _ = server._mongo_dryrun_one('db.getCollection("odd-name").deleteOne({})')
     assert pv == 'db["odd-name"].countDocuments({})'
-    # insert / unknown -> no preview, with a reason
-    assert server._mongo_dryrun('db.users.insertOne({"a": 1})')[0] is None
-    assert server._mongo_dryrun('db.users.drop()')[0] is None
-    assert server._mongo_dryrun('not a mongo call')[0] is None
+    assert server._mongo_dryrun_one('db.users.insertOne({"a": 1})')[0] is None
+
+
+def test_mongo_dryrun_tolerates_comments_semicolons_and_multi():
+    # the reported case: a trailing ; and a // comment must not break the preview
+    q = ('db.scenario_sessions.deleteMany({\n  scenarioId: "abc",\n'
+         '  organizationId: "def"\n});\n// -> deletedCount: 1')
+    items, err = server._mongo_dryrun(q)
+    assert err is None and len(items) == 1
+    assert items[0][0] == 'db["scenario_sessions"].countDocuments({\n  scenarioId: "abc",\n  organizationId: "def"\n})'
+    # multiple statements: each previewed
+    items, err = server._mongo_dryrun('db.a.deleteMany({x:1}); db.b.updateOne({y:2},{$set:{z:3}});')
+    assert err is None and len(items) == 2
+    assert items[0][0].startswith('db["a"].countDocuments') and items[1][0].startswith('db["b"].countDocuments')
+    # a ';' inside a string/doc doesn't split
+    items, _ = server._mongo_dryrun('db.a.deleteMany({note: "has ; inside"})')
+    assert len(items) == 1

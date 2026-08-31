@@ -386,6 +386,25 @@ function parseMongoCall(rest) {
 }
 
 function explainMongo(text) {
+  // Explain every statement, not just the first. Drop // comments first so a
+  // trailing note doesn't count as its own statement.
+  const cleaned = (text || '').replace(/\/\/[^\n]*/g, '');
+  const stmts = splitTopLevel(cleaned, ';').map(s => s.trim()).filter(Boolean);
+  if (stmts.length <= 1) return explainOneMongo(text);
+  const order = { none: 0, read: 1, write: 2, danger: 3 };
+  const parts = stmts.map(explainOneMongo);
+  const danger = parts.reduce((a, p) => (order[p.danger] > order[a] ? p.danger : a), 'none');
+  const colls = stmts.map(s => (extractMongoTarget(s) || {}).coll).filter(Boolean);
+  const uniq = [...new Set(colls)];
+  const connected = colls.length > 1 && uniq.length < colls.length;
+  const items = parts.map((p, i) => `<div class="ex-step"><span class="ex-n">${i + 1}</span><span>${p.html}</span></div>`).join('');
+  const note = connected
+    ? `<div class="ex-connect">Connected: these run in order and share ${uniq.length === 1 ? `<b>${esc(uniq[0])}</b>` : 'collections'}.</div>`
+    : `<div class="ex-connect">Runs ${stmts.length} statements in order.</div>`;
+  return { danger, html: `<div class="ex-multi">${items}${note}</div>` };
+}
+
+function explainOneMongo(text) {
   let dbNote = '';
   let rest = text;
   const sib = text.match(/^db\.getSiblingDB\(\s*['"]([^'"]+)['"]\s*\)\.([\s\S]*)$/);
