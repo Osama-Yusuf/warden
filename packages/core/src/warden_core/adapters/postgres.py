@@ -11,6 +11,9 @@ from warden_core.validation import clean_columns, validate_pg_privilege
 
 from .base import EngineAdapter, EngineError, Mutation, register
 
+# pg_default_acl.defaclobjtype code -> the ALTER DEFAULT PRIVILEGES object word.
+_DEFACL_OBJ = {"r": "TABLES", "S": "SEQUENCES", "f": "FUNCTIONS", "T": "TYPES", "n": "SCHEMAS"}
+
 
 @register
 class PostgresAdapter(EngineAdapter):
@@ -293,7 +296,9 @@ class PostgresAdapter(EngineAdapter):
         from `exclude`. After this, only granted accounts can connect, so a new
         user can't reach the db unless given access and a revoke actually bites.
         Returns the roles left able to connect."""
-        keep = {k for k in (list(self._db_connect_keepers(database)) + list(keep_extra)) if k}
+        # Always keep the admin warden connects as: locking ourselves out of a
+        # database means we can never manage (or clean up before dropping) in it.
+        keep = {k for k in (list(self._db_connect_keepers(database)) + list(keep_extra) + [self.user]) if k}
         if exclude:
             keep.discard(exclude)
         ddb = self.cfg.get("default_db", "postgres")
@@ -360,25 +365,77 @@ class PostgresAdapter(EngineAdapter):
             "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate")
         return [l.strip() for l in out.strip().split("\n") if l.strip()] if code == 0 else []
 
+    def _revoke_default_priv_grants(self, name, database):
+        """Revoke default-privilege grants where `name` is the GRANTEE but another
+        role owns the entry (someone ran ALTER DEFAULT PRIVILEGES FOR ROLE other
+        ... GRANT ... TO name). DROP OWNED BY name doesn't clear those, so they
+        block DROP ROLE ('privileges for default privileges belonging to role X')."""
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT pg_get_userbyid(d.defaclrole), COALESCE(n.nspname,''), d.defaclobjtype "
+            "FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace "
+            "WHERE EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a "
+            f"WHERE a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {pg_literal(name)}))",
+            db=database)
+        if code != 0 or not out.strip():
+            return
+        stmts = []
+        for line in out.strip().split("\n"):
+            p = line.split("\t")
+            if len(p) < 3:
+                continue
+            owner, schema, objname = p[0].strip(), p[1].strip(), _DEFACL_OBJ.get(p[2].strip())
+            if not owner or not objname:
+                continue
+            inschema = f"IN SCHEMA {pg_ident(schema)} " if schema else ""
+            stmts.append(f"ALTER DEFAULT PRIVILEGES FOR ROLE {pg_ident(owner)} {inschema}"
+                         f"REVOKE ALL ON {objname} FROM {pg_ident(name)}")
+        self._run_each(stmts, db=database, strict=False)
+
     def _strip_role(self, name, drop):
         """Hand back everything a role owns or holds, across every database, so it
         can be dropped (or fully de-privileged) in one shot instead of failing on
         the first dependency. Objects are reassigned to the admin, never deleted."""
         ident = pg_ident(name)
         admin = pg_ident(self.user)
+        ddb = self.cfg.get("default_db", "postgres")
         # Close its sessions first, or DROP hits "role is being used by N sessions".
         pg_exec(self.cfg, self.user, self.pwd,
                 f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = {pg_literal(name)}")
+        # REASSIGN/DROP OWNED need the *privileges of* the role, not just admin
+        # rights over it: a non-superuser admin (the common case) is otherwise
+        # told "only roles with privileges of role X may reassign objects". Grant
+        # ourselves inheriting membership so the cascade is allowed. WITH INHERIT
+        # is Postgres 16+; fall back to a plain grant on older servers.
+        ok, _, _ = pg_exec(self.cfg, self.user, self.pwd,
+                           f"GRANT {ident} TO {admin} WITH INHERIT TRUE")
+        if not ok:
+            ok, _, _ = pg_exec(self.cfg, self.user, self.pwd, f"GRANT {ident} TO {admin}")
+        granted_membership = ok
+        errors = []
         for db in self._connectable_dbs():
+            # Make sure we can reach the db to clean it (a prior lock-down might
+            # have taken our own CONNECT away). Superusers connect regardless.
+            pg_exec(self.cfg, self.user, self.pwd,
+                    f"GRANT CONNECT ON DATABASE {pg_ident(db)} TO {admin}", db=ddb)
             # REASSIGN moves its objects to the admin (kept, not deleted); DROP
-            # OWNED then only clears its privileges. Separate calls, so the reassign
-            # commits before the drop and a table can't be lost.
-            self._run_each([f"REASSIGN OWNED BY {ident} TO {admin}",
-                            f"DROP OWNED BY {ident}"], db=db, strict=False)
+            # OWNED then clears its privileges. Separate calls so the reassign
+            # commits first and a table can't be lost.
+            for stmt in (f"REASSIGN OWNED BY {ident} TO {admin}", f"DROP OWNED BY {ident}"):
+                ok, out, err = pg_exec(self.cfg, self.user, self.pwd, stmt, db=db)
+                if not ok and "does not exist" not in (err or "").lower():
+                    errors.append(f"{db}: {(err or out).strip()[:120]}")
+            # Default privileges that grant TO this role but belong to another role
+            # aren't covered by DROP OWNED; revoke them so the drop isn't blocked.
+            self._revoke_default_priv_grants(name, db)
         if drop:
             ok, out, err = pg_exec(self.cfg, self.user, self.pwd, f"DROP ROLE {ident}")
             if not ok:
-                raise EngineError(err or out)
+                detail = f" (couldn't fully clean: {'; '.join(errors[:3])})" if errors else ""
+                raise EngineError((err or out).strip() + detail)
+        elif granted_membership:
+            # Keeping the role but not dropping it: don't leave the admin sitting
+            # as a member of a role it was only cleaning up.
+            pg_exec(self.cfg, self.user, self.pwd, f"REVOKE {ident} FROM {admin}")
 
     def drop_user(self, name):
         self._strip_role(name, drop=True)
