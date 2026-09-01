@@ -231,6 +231,23 @@ function toggleLoginDirect(username, enable) {
   ]);
 }
 
+function confirmHardenConnections() {
+  showModal('Lock down connections', `
+    <p style="margin-bottom:8px">Postgres lets <strong>every</strong> user connect to <strong>every</strong> database by
+    default (CONNECT is granted to PUBLIC). This takes that away on all databases on
+    <strong>${esc(creds().env)}</strong>, so a new user only reaches the databases it's explicitly granted.</p>
+    <p style="margin-bottom:0; color:var(--text-muted); font-size:12.5px">Users that already hold privileges in a database keep access. Superusers are unaffected.
+    To let someone into a database afterward, grant them CONNECT.</p>
+  `, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Lock it down', cls: 'btn-danger', fn: async () => {
+      const res = await apiPost('/api/harden-connections', {});
+      if (res.ok) { toast('Connections locked down: new users are now scoped to what they\'re granted', 'success'); invalidateCache('users'); refreshCache(); }
+      else { toast(res.error || 'Failed', 'error'); }
+    }},
+  ]);
+}
+
 function confirmRevokeAll(username) {
   showModal('Revoke all access', `
     <p style="margin-bottom:8px">

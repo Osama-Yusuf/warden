@@ -265,6 +265,7 @@ function renderUsersShell(fromCache) {
       <div style="flex:1; min-width:240px">${sfBarHtml(cfg)}</div>
       <div style="display:flex; align-items:center; gap:10px; padding-top:1px">
         <span id="usersRefreshing" style="font-size:11px; color:var(--text-muted); display:${fromCache ? 'inline' : 'none'}">refreshing…</span>
+        ${fam === 'postgresql' ? '<button class="btn btn-ghost" onclick="confirmHardenConnections()" data-tip="Postgres lets every user connect to every database by default. This takes CONNECT off PUBLIC so new users only reach what they are granted. Existing users that use a database keep access.">🔒 Lock down connections</button>' : ''}
         <button class="btn btn-success" onclick="openCreateUserModal()">${ICONS.plus} Create user</button>
       </div>
     </div>
