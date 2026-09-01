@@ -265,12 +265,50 @@ class PostgresAdapter(EngineAdapter):
             if not ok and strict:
                 raise EngineError(err or out)
 
+    def _db_connect_keepers(self, database):
+        """Login, non-superuser roles that use `database` and should keep access
+        when we take CONNECT off PUBLIC: those with table privileges there, plus
+        those already holding an explicit CONNECT grant on the db (so a user given
+        CONNECT to an empty db isn't cut off just because it has no tables yet)."""
+        keepers = set()
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT DISTINCT g.grantee FROM information_schema.role_table_grants g "
+            "JOIN pg_roles r ON r.rolname = g.grantee "
+            "WHERE g.grantee <> 'PUBLIC' AND r.rolcanlogin AND NOT r.rolsuper",
+            db=database)
+        if code == 0:
+            keepers |= {l.strip() for l in out.strip().split("\n") if l.strip()}
+        code2, out2, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT DISTINCT r.rolname FROM pg_database d, aclexplode(d.datacl) a "
+            "JOIN pg_roles r ON r.oid = a.grantee "
+            f"WHERE d.datname = {pg_literal(database)} AND a.privilege_type = 'CONNECT' "
+            "AND r.rolcanlogin AND NOT r.rolsuper", db=self.cfg.get("default_db", "postgres"))
+        if code2 == 0:
+            keepers |= {l.strip() for l in out2.strip().split("\n") if l.strip()}
+        return sorted(keepers)
+
+    def _lockdown_connect(self, database, keep_extra=(), exclude=None):
+        """Make connecting to `database` explicit: revoke CONNECT from PUBLIC, then
+        grant it back to the roles that use the db (plus keep_extra), and revoke it
+        from `exclude`. After this, only granted accounts can connect, so a new
+        user can't reach the db unless given access and a revoke actually bites.
+        Returns the roles left able to connect."""
+        keep = {k for k in (list(self._db_connect_keepers(database)) + list(keep_extra)) if k}
+        if exclude:
+            keep.discard(exclude)
+        ddb = self.cfg.get("default_db", "postgres")
+        stmts = [f"REVOKE CONNECT ON DATABASE {pg_ident(database)} FROM PUBLIC"]
+        stmts += [f"GRANT CONNECT ON DATABASE {pg_ident(database)} TO {pg_ident(k)}" for k in sorted(keep)]
+        if exclude:
+            stmts.append(f"REVOKE CONNECT ON DATABASE {pg_ident(database)} FROM {pg_ident(exclude)}")
+        self._run_each(stmts, db=ddb, strict=False)
+        return sorted(keep)
+
     def grant(self, name, privilege=None, database=None, schema=None, **opts):
         priv = validate_pg_privilege(privilege or "SELECT")
         database = validate_ident(database or "postgres", "database")
         schema = validate_ident(schema or "public", "schema")
         if priv in ("CONNECT", "CREATE"):
-            # Database-level, run against the default db.
             self._run_each([f"GRANT {priv} ON DATABASE {pg_ident(database)} TO {pg_ident(name)}"],
                            db=self.cfg.get("default_db", "postgres"))
         else:
@@ -289,7 +327,14 @@ class PostgresAdapter(EngineAdapter):
         database = validate_ident(database or "postgres", "database")
         schema = validate_ident(schema or "public", "schema")
         note = None
-        if priv in ("CONNECT", "CREATE"):
+        if priv == "CONNECT":
+            # Revoke it from the user AND take it off PUBLIC (re-granting the roles
+            # that use the db), so the user genuinely can't connect. Just revoking
+            # from the user is a no-op while PUBLIC still allows everyone in.
+            kept = self._lockdown_connect(database, exclude=name)
+            note = (f"{name} can no longer connect to {database}. CONNECT is now explicit "
+                    f"({len(kept)} other role(s) kept access); accounts not granted it can't connect.")
+        elif priv == "CREATE":
             self._run_each([f"REVOKE {priv} ON DATABASE {pg_ident(database)} FROM {pg_ident(name)}"],
                            db=self.cfg.get("default_db", "postgres"))
         else:
@@ -297,11 +342,6 @@ class PostgresAdapter(EngineAdapter):
                 f"REVOKE {priv} ON ALL TABLES IN SCHEMA {pg_ident(schema)} FROM {pg_ident(name)}",
                 f"ALTER DEFAULT PRIVILEGES IN SCHEMA {pg_ident(schema)} REVOKE {priv} ON TABLES FROM {pg_ident(name)}",
             ], db=database)
-        # Postgres grants CONNECT to PUBLIC by default, so revoking it from one
-        # user changes nothing on its own. Say so rather than claim it's blocked.
-        if priv == "CONNECT" and self._public_can_connect(database):
-            note = (f"{name} can still connect to {database}: Postgres allows PUBLIC "
-                    f"connections by default. Lock the database down to actually restrict it.")
         m = Mutation("REVOKE", f"{name} -= {priv} on {database}.{schema}")
         if note:
             m.response["warning"] = note
@@ -347,6 +387,20 @@ class PostgresAdapter(EngineAdapter):
     def revoke_all(self, name):
         self._strip_role(name, drop=False)
         return Mutation("REVOKE ALL", f"{name}: all privileges revoked")
+
+    def harden_connections(self):
+        """Cluster-wide fix for 'new users can reach every database': take CONNECT
+        off PUBLIC on every database and keep it only for the roles that use each
+        one. After this a new account can't connect anywhere until it's granted,
+        and a revoke actually blocks. Existing users with privileges are preserved."""
+        dbs = self._connectable_dbs()
+        for db in dbs:
+            try:
+                self._lockdown_connect(db)
+            except EngineError:
+                pass
+        return Mutation("HARDEN", f"CONNECT locked down on {len(dbs)} database(s); "
+                                  f"new users now reach only what they're granted")
 
     def toggle_login(self, name, enable):
         kw = "LOGIN" if enable else "NOLOGIN"

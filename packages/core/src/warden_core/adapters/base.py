@@ -120,6 +120,9 @@ class EngineAdapter:
     def revoke_all(self, name):
         raise NotSupported("revoke-all is not supported here")
 
+    def harden_connections(self):
+        raise NotSupported("connection hardening isn't applicable here")
+
     def drop_user(self, name):
         raise NotSupported("dropping users is not supported here")
 
