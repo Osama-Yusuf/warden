@@ -202,8 +202,11 @@ function grantPgPrivDirect(username) {
     { label: 'Cancel', cls: 'btn-ghost' },
     { label: 'Grant', cls: 'btn-success', fn: async () => {
       const res = await apiPost('/api/grant', { username, privilege, database, schema });
-      if (res.ok) { toast(`Granted ${privilege} on ${database}`, 'success'); viewUserInfoFor(username); }
-      else toast(res.error || 'Failed', 'error');
+      if (res.ok) {
+        if (res.warning) showModal('Grant partially applied', `<p>${esc(res.warning)}</p>`, [{ label: 'OK', cls: 'btn-primary' }]);
+        else toast(`Granted ${privilege} on ${database}`, 'success');
+        viewUserInfoFor(username);
+      } else toast(res.error || 'Failed', 'error');
     }},
   ]);
 }

@@ -309,6 +309,25 @@ class PostgresAdapter(EngineAdapter):
         self._run_each(stmts, db=ddb, strict=False)
         return sorted(keep)
 
+    def _each_table_priv(self, name, priv, schema, database, grant=True):
+        """GRANT or REVOKE a table privilege one table at a time, skipping the
+        tables we have no rights on (owned by another role). Returns the skipped
+        table names. This is the fallback for when a single ALL TABLES statement
+        would abort the whole operation because one table isn't ours."""
+        verb, prep = ("GRANT", "TO") if grant else ("REVOKE", "FROM")
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            f"SELECT tablename FROM pg_tables WHERE schemaname = {pg_literal(schema)} ORDER BY tablename",
+            db=database)
+        if code != 0:
+            return []
+        skipped = []
+        for t in (l.strip() for l in out.strip().split("\n") if l.strip()):
+            ok, _o, _e = pg_exec(self.cfg, self.user, self.pwd,
+                f"{verb} {priv} ON {pg_ident(schema)}.{pg_ident(t)} {prep} {pg_ident(name)}", db=database)
+            if not ok:
+                skipped.append(t)
+        return skipped
+
     def grant(self, name, privilege=None, database=None, schema=None, **opts):
         priv = validate_pg_privilege(privilege or "SELECT")
         database = validate_ident(database or "postgres", "database")
@@ -316,16 +335,31 @@ class PostgresAdapter(EngineAdapter):
         if priv in ("CONNECT", "CREATE"):
             self._run_each([f"GRANT {priv} ON DATABASE {pg_ident(database)} TO {pg_ident(name)}"],
                            db=self.cfg.get("default_db", "postgres"))
-        else:
-            # Table-level: schema USAGE + the privilege on existing tables + the
-            # same as a default for tables created later, so "read" keeps working
-            # as the schema grows instead of covering only today's tables.
-            self._run_each([
-                f"GRANT USAGE ON SCHEMA {pg_ident(schema)} TO {pg_ident(name)}",
-                f"GRANT {priv} ON ALL TABLES IN SCHEMA {pg_ident(schema)} TO {pg_ident(name)}",
-                f"ALTER DEFAULT PRIVILEGES IN SCHEMA {pg_ident(schema)} GRANT {priv} ON TABLES TO {pg_ident(name)}",
-            ], db=database)
-        return Mutation("GRANT", f"{name} += {priv} on {database}.{schema}")
+            return Mutation("GRANT", f"{name} += {priv} on {database}")
+        # Table-level. USAGE on the schema is needed to reach any table; PUBLIC
+        # usually already has it, so a failure here shouldn't sink the grant.
+        pg_exec(self.cfg, self.user, self.pwd,
+                f"GRANT USAGE ON SCHEMA {pg_ident(schema)} TO {pg_ident(name)}", db=database)
+        # One statement covers the whole schema when we own every table (the fast,
+        # common path). If a table owned by ANOTHER role makes it fail, that one
+        # statement aborts and nobody gets anything, so fall back to table-by-table
+        # and report what we couldn't grant instead of failing the lot.
+        allok, _, _ = pg_exec(self.cfg, self.user, self.pwd,
+            f"GRANT {priv} ON ALL TABLES IN SCHEMA {pg_ident(schema)} TO {pg_ident(name)}", db=database)
+        skipped = [] if allok else self._each_table_priv(name, priv, schema, database, grant=True)
+        # Cover tables we create later, too, so reads keep working as the schema grows.
+        pg_exec(self.cfg, self.user, self.pwd,
+            f"ALTER DEFAULT PRIVILEGES IN SCHEMA {pg_ident(schema)} GRANT {priv} ON TABLES TO {pg_ident(name)}",
+            db=database)
+        m = Mutation("GRANT", f"{name} += {priv} on {database}.{schema}")
+        if skipped:
+            shown = ", ".join(skipped[:8]) + ("..." if len(skipped) > 8 else "")
+            m.response["warning"] = (
+                f"Granted {priv} on the tables {self.user} owns. {len(skipped)} table(s) "
+                f"owned by another role were skipped ({shown}) - warden connects as "
+                f"{self.user}, which can't grant on tables it doesn't own. Connect as a "
+                f"superuser or those tables' owner to include them.")
+        return m
 
     def revoke(self, name, privilege=None, database=None, schema=None, **opts):
         priv = validate_pg_privilege(privilege or "SELECT")
@@ -343,10 +377,15 @@ class PostgresAdapter(EngineAdapter):
             self._run_each([f"REVOKE {priv} ON DATABASE {pg_ident(database)} FROM {pg_ident(name)}"],
                            db=self.cfg.get("default_db", "postgres"))
         else:
-            self._run_each([
-                f"REVOKE {priv} ON ALL TABLES IN SCHEMA {pg_ident(schema)} FROM {pg_ident(name)}",
+            # Same all-or-nothing trap as grant: one table we don't own would
+            # abort REVOKE ON ALL TABLES, so fall back to table-by-table.
+            allok, _, _ = pg_exec(self.cfg, self.user, self.pwd,
+                f"REVOKE {priv} ON ALL TABLES IN SCHEMA {pg_ident(schema)} FROM {pg_ident(name)}", db=database)
+            if not allok:
+                self._each_table_priv(name, priv, schema, database, grant=False)
+            pg_exec(self.cfg, self.user, self.pwd,
                 f"ALTER DEFAULT PRIVILEGES IN SCHEMA {pg_ident(schema)} REVOKE {priv} ON TABLES FROM {pg_ident(name)}",
-            ], db=database)
+                db=database)
         m = Mutation("REVOKE", f"{name} -= {priv} on {database}.{schema}")
         if note:
             m.response["warning"] = note

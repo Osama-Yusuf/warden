@@ -164,3 +164,63 @@ def test_pg_drop_user_owning_objects_as_nonsuperuser():
         for r in ("wt_victim", "wt_admin"):
             sx(f'DROP OWNED BY "{r}" CASCADE')
             sx(f'DROP ROLE IF EXISTS "{r}"')
+
+
+def test_pg_grant_skips_tables_owned_by_others():
+    """Granting SELECT on a schema where one table is owned by ANOTHER role must
+    still grant every table the connecting role owns (not abort on the foreign
+    one), and report what it skipped. Connect as the db/table owner, like the app
+    role does."""
+    import psycopg
+
+    from warden_core.adapters.postgres import PostgresAdapter
+    from warden_core.pg import pg_exec
+
+    ok, cfg = _pg_reachable()
+    if not ok:
+        pytest.skip("postgres not reachable")
+    su = (os.environ.get("WARDEN_TEST_PG_USER", "admin"),
+          os.environ.get("WARDEN_TEST_PG_PASS", "adminpass"))
+
+    def sx(sql, db=None, user=su[0], pw=su[1]):
+        return pg_exec(cfg, user, pw, sql, db=db)
+
+    def owner_reads(table):
+        try:
+            with psycopg.connect(host=cfg["host"], port=cfg["port"], dbname="wt_app",
+                                 user="wt_viewer", password="p", connect_timeout=5) as c:
+                with c.cursor() as cur:
+                    cur.execute(f"SELECT count(*) FROM {table}")
+                    cur.fetchone()
+            return True
+        except Exception:
+            return False
+
+    sx('DROP DATABASE IF EXISTS "wt_app" WITH (FORCE)')
+    for r in ("wt_viewer", "wt_other", "wt_owner"):
+        sx(f'DROP OWNED BY "{r}" CASCADE')
+        sx(f'DROP ROLE IF EXISTS "{r}"')
+    try:
+        sx("CREATE ROLE wt_owner LOGIN PASSWORD 'p' CREATEROLE CREATEDB")
+        sx("CREATE ROLE wt_other LOGIN PASSWORD 'p'")
+        sx('CREATE DATABASE "wt_app" OWNER wt_owner')
+        sx("CREATE TABLE mine_a (id int); CREATE TABLE mine_b (id int)",
+           db="wt_app", user="wt_owner", pw="p")
+        sx('GRANT CREATE ON SCHEMA public TO wt_other', db="wt_app", user="wt_owner", pw="p")
+        sx("CREATE TABLE foreign_t (id int)", db="wt_app", user="wt_other", pw="p")
+        sx("CREATE ROLE wt_viewer LOGIN PASSWORD 'p'", user="wt_owner", pw="p")
+
+        w = PostgresAdapter(cfg, admin_user="wt_owner", admin_pass="p")
+        w.grant("wt_viewer", database="wt_app", privilege="CONNECT")
+        # would have raised "permission denied for table foreign_t" before the fix.
+        m = w.grant("wt_viewer", database="wt_app", schema="public", privilege="SELECT")
+
+        assert owner_reads("mine_a"), "viewer can't read owner's table after grant"
+        assert owner_reads("mine_b"), "viewer can't read owner's table after grant"
+        assert not owner_reads("foreign_t"), "unexpectedly granted the foreign table"
+        assert "foreign_t" in (m.response.get("warning") or ""), "skipped table not reported"
+    finally:
+        sx('DROP DATABASE IF EXISTS "wt_app" WITH (FORCE)')
+        for r in ("wt_viewer", "wt_other", "wt_owner"):
+            sx(f'DROP OWNED BY "{r}" CASCADE')
+            sx(f'DROP ROLE IF EXISTS "{r}"')
