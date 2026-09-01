@@ -102,3 +102,65 @@ def test_browse_first_collection(body):
     assert "error" not in res, res.get("error")
     assert isinstance(res.get("columns"), list)
     assert isinstance(res.get("rows"), list)
+
+
+# ── Postgres: dropping a user who owns objects, connected as a NON-superuser ──
+# admin. This is the real-world case (warden usually connects as a privileged
+# app role, not a superuser): REASSIGN/DROP OWNED are refused unless warden holds
+# the target role's privileges, so the drop used to fail on "N objects in
+# database X" even though the cascade "ran". Guards that regression.
+
+def _pg_reachable():
+    from warden_core.pg import pg_exec
+    cfg = {"host": os.environ.get("WARDEN_TEST_PG_HOST", "127.0.0.1"),
+           "port": int(os.environ.get("WARDEN_TEST_PG_PORT", "5432")),
+           "default_db": "postgres"}
+    ok, _, _ = pg_exec(cfg, os.environ.get("WARDEN_TEST_PG_USER", "admin"),
+                       os.environ.get("WARDEN_TEST_PG_PASS", "adminpass"), "SELECT 1")
+    return ok, cfg
+
+
+def test_pg_drop_user_owning_objects_as_nonsuperuser():
+    from warden_core.adapters.postgres import PostgresAdapter
+    from warden_core.pg import pg_exec, pg_query
+
+    ok, cfg = _pg_reachable()
+    if not ok:
+        pytest.skip("postgres not reachable")
+    su = (os.environ.get("WARDEN_TEST_PG_USER", "admin"),
+          os.environ.get("WARDEN_TEST_PG_PASS", "adminpass"))
+
+    def sx(sql, db=None, user=su[0], pw=su[1]):
+        return pg_exec(cfg, user, pw, sql, db=db)
+
+    def sq(sql, db=None):
+        _, out, _ = pg_query(cfg, su[0], su[1], sql, db=db)
+        return out.strip()
+
+    # clean slate
+    sx('DROP DATABASE IF EXISTS "wt_app" WITH (FORCE)')
+    for r in ("wt_victim", "wt_admin"):
+        sx(f'DROP OWNED BY "{r}" CASCADE')
+        sx(f'DROP ROLE IF EXISTS "{r}"')
+    try:
+        # a non-superuser admin that owns its app database, plus a victim that
+        # owns a table in it (the object that blocks a naive DROP ROLE).
+        sx("CREATE ROLE wt_admin LOGIN PASSWORD 'p' CREATEROLE CREATEDB")
+        sx('CREATE DATABASE "wt_app" OWNER wt_admin')
+        sx("CREATE ROLE wt_victim LOGIN PASSWORD 'p'", user="wt_admin", pw="p")
+        sx('GRANT ALL ON SCHEMA public TO wt_victim', db="wt_app", user="wt_admin", pw="p")
+        sx("CREATE TABLE keep_me (id int)", db="wt_app", user="wt_victim", pw="p")
+
+        # a bare DROP ROLE would fail here; warden's cascade must not.
+        w = PostgresAdapter(cfg, admin_user="wt_admin", admin_pass="p")
+        w.drop_user("wt_victim")
+
+        assert sq("SELECT count(*) FROM pg_roles WHERE rolname='wt_victim'") == "0"
+        # the victim's table is reassigned to the admin, never dropped.
+        owner = sq("SELECT tableowner FROM pg_tables WHERE tablename='keep_me'", db="wt_app")
+        assert owner == "wt_admin", f"table lost or wrong owner: {owner!r}"
+    finally:
+        sx('DROP DATABASE IF EXISTS "wt_app" WITH (FORCE)')
+        for r in ("wt_victim", "wt_admin"):
+            sx(f'DROP OWNED BY "{r}" CASCADE')
+            sx(f'DROP ROLE IF EXISTS "{r}"')
