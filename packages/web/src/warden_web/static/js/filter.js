@@ -519,7 +519,7 @@ function userPanelSql(res, uAttr, isDocdb) {
       <div class="form-row" style="margin-bottom:0">
         <div class="form-field"><label>Privilege</label><select id="uiGrantPriv">${privOpts}</select></div>
         <div class="form-field"><label>Database</label><input id="uiGrantDb" list="dbList" placeholder="type to search databases…"></div>
-        <div class="form-field"><label>Schema</label><input id="uiGrantSchema" value="public"></div>
+        <div class="form-field"><label>Schema</label><input id="uiGrantSchema" placeholder="all schemas (leave blank)"></div>
         <button class="btn btn-success" data-user="${uAttr}" onclick="grantPgPrivDirect(this.dataset.user)">Grant</button>
       </div>`;
   }

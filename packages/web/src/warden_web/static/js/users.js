@@ -196,15 +196,18 @@ async function redisApplyRule(username) {
 function grantPgPrivDirect(username) {
   const privilege = document.getElementById('uiGrantPriv').value;
   const database = document.getElementById('uiGrantDb').value.trim();
-  const schema = document.getElementById('uiGrantSchema')?.value.trim() || 'public';
+  // blank schema = all schemas (server resolves it), so grant finds tables
+  // wherever they live, not just in public.
+  const schema = document.getElementById('uiGrantSchema')?.value.trim() || '';
   if (!database) { toast('Database required', 'error'); return; }
-  showModal('Confirm Grant', `<p>Grant <strong>${esc(privilege)} on ${esc(database)}</strong> to <strong>${esc(username)}</strong>?</p>`, [
+  const scopeTxt = schema ? `${database}.${schema}` : `${database} (all schemas)`;
+  showModal('Confirm Grant', `<p>Grant <strong>${esc(privilege)} on ${esc(scopeTxt)}</strong> to <strong>${esc(username)}</strong>?</p>`, [
     { label: 'Cancel', cls: 'btn-ghost' },
     { label: 'Grant', cls: 'btn-success', fn: async () => {
       const res = await apiPost('/api/grant', { username, privilege, database, schema });
       if (res.ok) {
-        if (res.warning) showModal('Grant partially applied', `<p>${esc(res.warning)}</p>`, [{ label: 'OK', cls: 'btn-primary' }]);
-        else toast(`Granted ${privilege} on ${database}`, 'success');
+        if (res.warning) showModal('Grant result', `<p>${esc(res.warning)}</p>`, [{ label: 'OK', cls: 'btn-primary' }]);
+        else toast(res.summary || `Granted ${privilege} on ${database}`, 'success');
         viewUserInfoFor(username);
       } else toast(res.error || 'Failed', 'error');
     }},

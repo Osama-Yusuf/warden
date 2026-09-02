@@ -111,7 +111,12 @@ def test_browse_first_collection(body):
 # database X" even though the cascade "ran". Guards that regression.
 
 def _pg_reachable():
+    import warden_core.pg_native as pn
     from warden_core.pg import pg_exec
+
+    # These tests drop and recreate the same db name; clear the shared pool first
+    # so a pooled connection to a db a prior test dropped can't leak in here.
+    pn.close_all()
     cfg = {"host": os.environ.get("WARDEN_TEST_PG_HOST", "127.0.0.1"),
            "port": int(os.environ.get("WARDEN_TEST_PG_PORT", "5432")),
            "default_db": "postgres"}
@@ -218,9 +223,67 @@ def test_pg_grant_skips_tables_owned_by_others():
         assert owner_reads("mine_a"), "viewer can't read owner's table after grant"
         assert owner_reads("mine_b"), "viewer can't read owner's table after grant"
         assert not owner_reads("foreign_t"), "unexpectedly granted the foreign table"
-        assert "foreign_t" in (m.response.get("warning") or ""), "skipped table not reported"
+        # honest partial: 2 of 3 granted, the foreign one reported as skipped.
+        warning = m.response.get("warning") or ""
+        assert "2 of 3" in warning and "another role" in warning, f"partial not reported: {warning!r}"
     finally:
         sx('DROP DATABASE IF EXISTS "wt_app" WITH (FORCE)')
         for r in ("wt_viewer", "wt_other", "wt_owner"):
+            sx(f'DROP OWNED BY "{r}" CASCADE')
+            sx(f'DROP ROLE IF EXISTS "{r}"')
+
+
+def test_pg_grant_finds_tables_in_any_schema():
+    """A grant with no schema must reach tables wherever they live (not just
+    public), actually take effect, and report the honest result. Guards the
+    'reported granted but the user had no access' bug (tables in a non-public
+    schema)."""
+    import psycopg
+
+    from warden_core.adapters.postgres import PostgresAdapter
+    from warden_core.pg import pg_exec
+
+    ok, cfg = _pg_reachable()
+    if not ok:
+        pytest.skip("postgres not reachable")
+    su = (os.environ.get("WARDEN_TEST_PG_USER", "admin"),
+          os.environ.get("WARDEN_TEST_PG_PASS", "adminpass"))
+
+    def sx(sql, db=None, user=su[0], pw=su[1]):
+        return pg_exec(cfg, user, pw, sql, db=db)
+
+    def viewer_reads(qualified):
+        try:
+            with psycopg.connect(host=cfg["host"], port=cfg["port"], dbname="wt_app",
+                                 user="wt_viewer", password="p", connect_timeout=5) as c:
+                with c.cursor() as cur:
+                    cur.execute(f"SELECT count(*) FROM {qualified}")
+                    cur.fetchone()
+            return True
+        except Exception:
+            return False
+
+    sx('DROP DATABASE IF EXISTS "wt_app" WITH (FORCE)')
+    for r in ("wt_viewer", "wt_owner"):
+        sx(f'DROP OWNED BY "{r}" CASCADE')
+        sx(f'DROP ROLE IF EXISTS "{r}"')
+    try:
+        sx("CREATE ROLE wt_owner LOGIN PASSWORD 'p' CREATEROLE CREATEDB")
+        sx('CREATE DATABASE "wt_app" OWNER wt_owner')
+        sx("CREATE SCHEMA app; CREATE TABLE app.courses (id int)",
+           db="wt_app", user="wt_owner", pw="p")
+        sx("CREATE ROLE wt_viewer LOGIN PASSWORD 'p'", user="wt_owner", pw="p")
+
+        w = PostgresAdapter(cfg, admin_user="wt_owner", admin_pass="p")
+        w.grant("wt_viewer", database="wt_app", privilege="CONNECT")
+        # no schema -> should find and grant the non-public 'app' schema
+        m = w.grant("wt_viewer", database="wt_app", schema="", privilege="SELECT")
+
+        assert viewer_reads("app.courses"), "viewer can't read a non-public table after grant"
+        assert "app" in m.detail, f"grant didn't target the app schema: {m.detail!r}"
+        assert "warning" not in m.response, f"unexpected warning: {m.response.get('warning')!r}"
+    finally:
+        sx('DROP DATABASE IF EXISTS "wt_app" WITH (FORCE)')
+        for r in ("wt_viewer", "wt_owner"):
             sx(f'DROP OWNED BY "{r}" CASCADE')
             sx(f'DROP ROLE IF EXISTS "{r}"')
