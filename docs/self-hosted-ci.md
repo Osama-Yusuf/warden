@@ -1,13 +1,15 @@
 # Running CI on a local runner
 
-Warden is a private repo, so GitHub Actions minutes are metered. When they run
-out every workflow fails in ~1 second with zero steps, which reads like a broken
-build but is really the `$0` default spending limit rejecting the job. Confirm
-with `gh run view <id> --json jobs` and look for `steps: 0`.
+This documents the maintainer's own runner setup. It's useful when GitHub
+Actions minutes are metered (a private repo, or a public one that has run past
+its allowance): when they run out every workflow fails in ~1 second with zero
+steps, which reads like a broken build but is really the `$0` default spending
+limit rejecting the job. Confirm with `gh run view <id> --json jobs` and look
+for `steps: 0`.
 
 Two ways out. The clean one is to raise the limit at
 <https://github.com/settings/billing/spending_limit>. The free one is the local
-Docker runner fleet below (borrowed from the gravity setup).
+Docker runner fleet below.
 
 ## The fleet
 
@@ -32,9 +34,8 @@ file from the PR's own branch, so a branch cut before this landed still says
 
 ## Notes
 
-- Sizing is in `docker/runner/limits.env` (1 runner, 2 CPUs, 2 GB). This Mac
-  already gives ~2 cores to Defender/DLP and OrbStack before CI starts, so the
-  footprint is kept small.
+- Sizing is in `docker/runner/limits.env` (1 runner, 4 CPUs, 4 GB). The host
+  usually runs other work alongside CI, so the footprint is kept small.
 - The runner mounts the host Docker socket and uses host networking, so the
   integration job's DB service containers are siblings on the host, reachable at
   localhost. Their host ports are shifted (55432/53306/57017/56379) so they do

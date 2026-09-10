@@ -10,10 +10,13 @@
 <img alt="engines: 6" src="https://img.shields.io/badge/engines-6-58a6ff?style=flat-square">
 <img alt="interfaces: CLI, web, desktop" src="https://img.shields.io/badge/interfaces-CLI%20%C2%B7%20web%20%C2%B7%20desktop-8b949e?style=flat-square">
 <img alt="python: 3.9+" src="https://img.shields.io/badge/python-3.9%2B-3776ab?style=flat-square">
+<img alt="status: early development" src="https://img.shields.io/badge/status-early%20development-f0883e?style=flat-square">
 <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
 </p>
 
 </div>
+
+> **Early development.** warden works, but it's young and moving fast. It runs real, sometimes destructive operations against your databases, so point it at a throwaway one first and don't trust it with production until you've run the same steps somewhere safe.
 
 warden holds the keys to your databases. It decides who gets in, what they can touch, and who gets kicked out, and it writes down every bit of it. Before it runs a query it reads the thing back to you in plain english ("Updates ONE document in `orders` where `_id` = ..."), so you know exactly what you're about to do to prod.
 
