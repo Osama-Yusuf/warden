@@ -1,7 +1,7 @@
 # A GitHub Actions runner that behaves like `ubuntu-latest`, on your own machine.
 #
-# Plain Ubuntu, not the Playwright base gravity uses: warden has no browser
-# tests, so the ~2 GB of preinstalled browsers would sit unused. What warden
+# Plain Ubuntu, not a Playwright base: warden has no browser tests, so the
+# ~2 GB of preinstalled browsers would sit unused. What warden
 # actually needs is Python (via uv), Node (via setup-node), the `mysql` client
 # it shells out to, and a Docker CLI so the integration job's service containers
 # can be driven through the host's daemon.
