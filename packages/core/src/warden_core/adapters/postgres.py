@@ -14,6 +14,11 @@ from .base import EngineAdapter, EngineError, Mutation, register
 # pg_default_acl.defaclobjtype code -> the ALTER DEFAULT PRIVILEGES object word.
 _DEFACL_OBJ = {"r": "TABLES", "S": "SEQUENCES", "f": "FUNCTIONS", "T": "TYPES", "n": "SCHEMAS"}
 
+# Every admin write runs with these: a held lock fails in seconds with a clear
+# error instead of hanging the request forever (the "drop did nothing for three
+# minutes" failure), and no single statement can run unbounded.
+_ADMIN_OPTS = "-c lock_timeout=5s -c statement_timeout=60s"
+
 
 @register
 class PostgresAdapter(EngineAdapter):
@@ -198,23 +203,43 @@ class PostgresAdapter(EngineAdapter):
                 if len(p) >= 3:
                     grants.append({"db": p[0], "table": p[1], "privilege": p[2]})
 
+        # Explicit database grants only (from each db's ACL). has_database_privilege
+        # would also say yes for access inherited from PUBLIC, which made a brand
+        # new user look like it had CONNECT everywhere, with revoke buttons that
+        # couldn't possibly work. PUBLIC's cluster-wide access is reported apart.
         sql3 = f"""
-            SELECT datname,
-                   has_database_privilege({pg_literal(name)}, datname, 'CONNECT'),
-                   has_database_privilege({pg_literal(name)}, datname, 'CREATE')
-            FROM pg_database WHERE datistemplate=false AND datname NOT IN ('rdsadmin')
-            ORDER BY datname
+            SELECT d.datname, a.privilege_type
+            FROM pg_database d, aclexplode(d.datacl) a
+            WHERE NOT d.datistemplate AND d.datname NOT IN ('rdsadmin')
+              AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {pg_literal(name)})
+            ORDER BY 1, 2
         """
         code3, out3, _ = pg_query(self.cfg, self.user, self.pwd, sql3)
-        db_privs = []
+        by_db = {}
         if code3 == 0 and out3.strip():
             for line in out3.strip().split("\n"):
                 p = line.split("\t")
-                if len(p) >= 3:
-                    privs = []
-                    if p[1] == "t": privs.append("CONNECT")
-                    if p[2] == "t": privs.append("CREATE")
-                    db_privs.append({"database": p[0], "privileges": privs})
+                if len(p) >= 2 and p[0].strip():
+                    by_db.setdefault(p[0].strip(), []).append(p[1].strip())
+        db_privs = [{"database": d, "privileges": sorted(set(ps))} for d, ps in sorted(by_db.items())]
+
+        sql3b = """
+            SELECT datname FROM pg_database d
+            WHERE NOT d.datistemplate AND d.datallowconn AND d.datname NOT IN ('rdsadmin')
+              AND (d.datacl IS NULL OR EXISTS (
+                    SELECT 1 FROM aclexplode(d.datacl) a
+                    WHERE a.grantee = 0 AND a.privilege_type = 'CONNECT'))
+            ORDER BY 1
+        """
+        code3b, out3b, _ = pg_query(self.cfg, self.user, self.pwd, sql3b)
+        public_connect = ([l.strip() for l in out3b.strip().split("\n") if l.strip()]
+                          if code3b == 0 and out3b.strip() else [])
+
+        code3c, out3c, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT datname FROM pg_database WHERE NOT datistemplate "
+            f"AND datdba = (SELECT oid FROM pg_roles WHERE rolname = {pg_literal(name)}) ORDER BY 1")
+        owned_dbs = ([l.strip() for l in out3c.strip().split("\n") if l.strip()]
+                     if code3c == 0 and out3c.strip() else [])
 
         # Roles this user is a member of. Their privileges live on the role, not on
         # this user, so an access report needs to know the memberships exist rather
@@ -231,16 +256,37 @@ class PostgresAdapter(EngineAdapter):
 
         info["grants"] = grants
         info["db_privileges"] = db_privs
+        info["public_connect"] = public_connect if info["can_login"] else []
+        info["owned_databases"] = owned_dbs
         info["member_of"] = member_of
         return info
 
-    def create_user(self, name, password, can_login=True, **opts):
+    def create_user(self, name, password, can_login=True, lockdown=False, **opts):
         login = "LOGIN" if can_login else "NOLOGIN"
         sql = f"CREATE USER {pg_ident(name)} WITH {login} PASSWORD {pg_literal(password)}"
         ok, out, err = pg_exec(self.cfg, self.user, self.pwd, sql)
         if not ok:
             raise EngineError(err or out)
-        return Mutation("CREATE USER", name, {"password": password})
+        m = Mutation("CREATE USER", name, {"password": password})
+        if lockdown:
+            # Postgres's default lets ANY new role connect to every database via
+            # PUBLIC. Zero-access-by-default means taking CONNECT off PUBLIC and
+            # keeping it only for the roles already using each database.
+            hardened = self.harden_connections()
+            m.response["summary"] = (f"{name} created with zero access "
+                                     f"({hardened.detail.split(';')[0]}); grant what they need.")
+        else:
+            code2, out2, _ = pg_query(self.cfg, self.user, self.pwd,
+                "SELECT count(*) FROM pg_database d WHERE NOT d.datistemplate AND d.datallowconn "
+                "AND (d.datacl IS NULL OR EXISTS (SELECT 1 FROM aclexplode(d.datacl) a "
+                "WHERE a.grantee = 0 AND a.privilege_type = 'CONNECT'))")
+            open_dbs = int(out2.strip()) if code2 == 0 and out2.strip().isdigit() else 0
+            if can_login and open_dbs:
+                m.response["warning"] = (
+                    f"{name} can already connect to {open_dbs} database(s) - Postgres grants "
+                    f"CONNECT to everyone via PUBLIC by default. Use 'Lock down connections' "
+                    f"(or recreate with zero access) to make access explicit.")
+        return m
 
     def create_database(self, name):
         name = validate_ident(name, "database")
@@ -351,13 +397,17 @@ class PostgresAdapter(EngineAdapter):
 
     def _priv_effect(self, name, priv, schemas, database):
         """Read back what actually landed: (total tables, tables `name` can really
-        use). Real access needs the table privilege AND USAGE on its schema, so we
-        check both. Returns (total, granted, verified) - verified is False if we
-        couldn't read it back, so callers don't cry failure on a check that itself
-        failed. 'ALL PRIVILEGES' is probed via SELECT."""
+        use, verified, can_connect). Real access needs CONNECT on the database AND
+        USAGE on the schema AND the table privilege, so all three are checked - a
+        grant that leaves the user unable to even reach the database is not a
+        grant. verified is False if the read-back itself failed. 'ALL PRIVILEGES'
+        is probed via SELECT."""
         probe = "SELECT" if priv == "ALL PRIVILEGES" else priv
         total = granted = 0
         verified = True
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            f"SELECT has_database_privilege({pg_literal(name)}, {pg_literal(database)}, 'CONNECT')")
+        can_connect = code == 0 and out.strip() == "t"
         for sch in schemas:
             code, out, _ = pg_query(self.cfg, self.user, self.pwd,
                 "SELECT count(*), count(*) FILTER (WHERE "
@@ -369,18 +419,66 @@ class PostgresAdapter(EngineAdapter):
                 total += int(p[0]); granted += int(p[1])
             else:
                 verified = False
-        return total, granted, verified
+        return total, granted, verified, can_connect
+
+    def _has_priv(self, name, database, priv):
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            f"SELECT has_database_privilege({pg_literal(name)}, {pg_literal(database)}, {pg_literal(priv)})")
+        return code == 0 and out.strip() == "t"
+
+    def _db_priv_grantors(self, name, database, priv):
+        """Who granted `priv` on `database` to `name` (from the db's ACL). The
+        answer decides whether we can revoke it: only the grantor or a superuser
+        can remove someone else's grant, and Postgres won't error, it just
+        silently revokes nothing."""
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT DISTINCT pg_get_userbyid(a.grantor) FROM pg_database d, aclexplode(d.datacl) a "
+            f"WHERE d.datname = {pg_literal(database)} AND a.privilege_type = {pg_literal(priv)} "
+            f"AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {pg_literal(name)})")
+        return [l.strip() for l in out.strip().split("\n") if l.strip()] if code == 0 else []
 
     def grant(self, name, privilege=None, database=None, schema=None, **opts):
         priv = validate_pg_privilege(privilege or "SELECT")
         database = validate_ident(database or "postgres", "database")
-        if priv in ("CONNECT", "CREATE"):
+        ddb = self.cfg.get("default_db", "postgres")
+        if priv == "CONNECT":
             ok, out, err = pg_exec(self.cfg, self.user, self.pwd,
-                f"GRANT {priv} ON DATABASE {pg_ident(database)} TO {pg_ident(name)}",
-                db=self.cfg.get("default_db", "postgres"))
+                f"GRANT CONNECT ON DATABASE {pg_ident(database)} TO {pg_ident(name)}", db=ddb)
             if not ok:
-                raise EngineError(f"Couldn't grant {priv} on {database}: {(err or out).strip()}")
-            return Mutation("GRANT", f"{name} += {priv} on {database}")
+                raise EngineError(f"Couldn't grant CONNECT on {database}: {(err or out).strip()}")
+            if not self._has_priv(name, database, "CONNECT"):
+                raise EngineError(f"GRANT ran but {name} still can't connect to {database}")
+            return Mutation("GRANT", f"{name} += CONNECT on {database}",
+                            {"summary": f"{name} can now connect to {database}"})
+        if priv == "CREATE":
+            # Database-level CREATE only allows CREATE SCHEMA. What people mean
+            # by "can create" is tables, and since Postgres 15 the public schema
+            # is no longer writable by default, so grant CREATE on the schemas
+            # too - otherwise this "works" while the user still can't create
+            # anything, which is exactly how it used to fail.
+            stmts = [f"GRANT CONNECT ON DATABASE {pg_ident(database)} TO {pg_ident(name)}"]
+            ok, out, err = pg_exec(self.cfg, self.user, self.pwd,
+                f"GRANT CREATE ON DATABASE {pg_ident(database)} TO {pg_ident(name)}", db=ddb)
+            if not ok:
+                raise EngineError(f"Couldn't grant CREATE on {database}: {(err or out).strip()}")
+            pg_exec(self.cfg, self.user, self.pwd, stmts[0], db=ddb)
+            schemas = self._target_schemas(schema, database)
+            created_in = []
+            for sch in schemas:
+                ok, _o, _e = pg_exec(self.cfg, self.user, self.pwd,
+                    f"GRANT USAGE, CREATE ON SCHEMA {pg_ident(sch)} TO {pg_ident(name)}", db=database)
+                if ok:
+                    created_in.append(sch)
+            m = Mutation("GRANT", f"{name} += CREATE on {database} ({', '.join(created_in) or 'database only'})")
+            if created_in:
+                m.response["summary"] = (f"{name} can now create tables in {database} "
+                                         f"(schemas: {', '.join(created_in)}) and new schemas")
+            else:
+                m.response["warning"] = (
+                    f"{name} got database-level CREATE (new schemas), but no existing schema "
+                    f"accepted a CREATE grant - they're owned by another role, so {name} still "
+                    f"can't create tables in them. Grant as the schema owner or a superuser.")
+            return m
         if priv == "USAGE":
             # USAGE is a schema privilege, not a table one; grant it on the schemas.
             schemas = self._target_schemas(schema, database)
@@ -390,10 +488,15 @@ class PostgresAdapter(EngineAdapter):
                 if not ok:
                     raise EngineError(f"Couldn't grant USAGE on {database}.{sch}: {(err or out).strip()}")
             return Mutation("GRANT", f"{name} += USAGE on {database} ({', '.join(schemas)})")
-        # Table privilege, applied across every target schema. USAGE on each schema
-        # is needed to reach its tables. We try one ALL TABLES statement per schema
-        # (fast when we own everything) and fall back to table-by-table when a table
-        # owned by another role would otherwise abort the whole thing.
+        # Table privilege, applied across every target schema. Table access is a
+        # three-part key: CONNECT on the database, USAGE on the schema, and the
+        # privilege on the table - grant all three, or the user "has SELECT" on
+        # tables in a database they can't even log in to (exactly what happens
+        # after a connect lock-down). We try one ALL TABLES statement per schema
+        # (fast when we own everything) and fall back to table-by-table when a
+        # table owned by another role would otherwise abort the whole thing.
+        pg_exec(self.cfg, self.user, self.pwd,
+                f"GRANT CONNECT ON DATABASE {pg_ident(database)} TO {pg_ident(name)}", db=ddb)
         schemas = self._target_schemas(schema, database)
         for sch in schemas:
             pg_exec(self.cfg, self.user, self.pwd,
@@ -407,9 +510,14 @@ class PostgresAdapter(EngineAdapter):
                 db=database)
         # Don't take the driver's word for it - read back what the grantee can
         # actually use, and report the honest result (including "nothing happened").
-        total, granted, verified = self._priv_effect(name, priv, schemas, database)
+        total, granted, verified, can_connect = self._priv_effect(name, priv, schemas, database)
         where = ", ".join(schemas)
         m = Mutation("GRANT", f"{name} += {priv} on {database} ({where})")
+        if verified and not can_connect:
+            raise EngineError(
+                f"{priv} was granted on tables, but {name} cannot CONNECT to {database}, so they "
+                f"can't use any of it. Granting CONNECT failed - warden connects as {self.user}; "
+                f"grant CONNECT as the database owner or a superuser, then retry.")
         if verified and total == 0:
             m.response["warning"] = (
                 f"No tables found in {database} (schemas checked: {where}), so there was "
@@ -426,25 +534,66 @@ class PostgresAdapter(EngineAdapter):
                 f"connect as a superuser or the owner to include them.")
         else:
             n = granted if verified else "the"
-            m.response["summary"] = f"Granted {priv} on {n} table(s) across {where}."
+            m.response["summary"] = f"Granted {priv} on {n} table(s) across {where}; {name} can connect and read them."
         return m
 
+    def _membership_names(self, name, limit=6):
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT r.rolname FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid "
+            f"JOIN pg_roles u ON u.oid = m.member WHERE u.rolname = {pg_literal(name)} LIMIT {limit}")
+        return [l.strip() for l in out.strip().split("\n") if l.strip()] if code == 0 else []
+
     def revoke(self, name, privilege=None, database=None, schema=None, **opts):
+        """Every branch here re-reads the catalogs after revoking. Postgres makes
+        that mandatory for honesty: REVOKE issued by a role that isn't the grantor
+        (and isn't a superuser) succeeds with only a warning while removing
+        NOTHING, so without a read-back warden would happily report a revoke that
+        never happened."""
         priv = validate_pg_privilege(privilege or "SELECT")
         database = validate_ident(database or "postgres", "database")
-        note = None
+        ddb = self.cfg.get("default_db", "postgres")
         if priv == "CONNECT":
             # Revoke it from the user AND take it off PUBLIC (re-granting the roles
             # that use the db), so the user genuinely can't connect. Just revoking
             # from the user is a no-op while PUBLIC still allows everyone in.
             kept = self._lockdown_connect(database, exclude=name)
-            note = (f"{name} can no longer connect to {database}. CONNECT is now explicit "
-                    f"({len(kept)} other role(s) kept access); accounts not granted it can't connect.")
-            return self._revoke_result(name, priv, database, note=note)
+            m = Mutation("REVOKE", f"{name} -= CONNECT on {database}")
+            if self._has_priv(name, database, "CONNECT"):
+                grantors = [g for g in self._db_priv_grantors(name, database, "CONNECT") if g != self.user]
+                if grantors:
+                    raise EngineError(
+                        f"{name} can still connect to {database}: their CONNECT was granted by "
+                        f"{', '.join(grantors)}, and only the grantor or a superuser can revoke it "
+                        f"(warden is connected as {self.user}).")
+                m.response["warning"] = (
+                    f"{name} can still connect to {database} - they own the database or inherit "
+                    f"access through a role ({', '.join(self._membership_names(name)) or 'none listed'}).")
+            else:
+                m.response["summary"] = (
+                    f"{name} can no longer connect to {database}. CONNECT is now explicit "
+                    f"({len(kept)} other role(s) kept access).")
+            return m
         if priv == "CREATE":
-            self._run_each([f"REVOKE {priv} ON DATABASE {pg_ident(database)} FROM {pg_ident(name)}"],
-                           db=self.cfg.get("default_db", "postgres"))
-            return self._revoke_result(name, priv, database)
+            # Mirror of grant: db-level CREATE plus the per-schema CREATE.
+            pg_exec(self.cfg, self.user, self.pwd,
+                    f"REVOKE CREATE ON DATABASE {pg_ident(database)} FROM {pg_ident(name)}", db=ddb)
+            for sch in self._target_schemas(schema, database):
+                pg_exec(self.cfg, self.user, self.pwd,
+                        f"REVOKE CREATE ON SCHEMA {pg_ident(sch)} FROM {pg_ident(name)}", db=database)
+            m = Mutation("REVOKE", f"{name} -= CREATE on {database}")
+            if self._has_priv(name, database, "CREATE"):
+                grantors = [g for g in self._db_priv_grantors(name, database, "CREATE") if g != self.user]
+                if grantors:
+                    raise EngineError(
+                        f"{name} still has CREATE on {database}: it was granted by {', '.join(grantors)}, "
+                        f"and only the grantor or a superuser can revoke it (warden is connected as "
+                        f"{self.user}).")
+                m.response["warning"] = (
+                    f"{name} still has CREATE on {database} - they own the database or inherit it "
+                    f"through a role.")
+            else:
+                m.response["summary"] = f"{name} can no longer create in {database}."
+            return m
         # Table (or USAGE) privilege, across every target schema. Same all-or-nothing
         # trap as grant: one table we don't own would abort REVOKE ON ALL TABLES, so
         # fall back to table-by-table.
@@ -461,13 +610,37 @@ class PostgresAdapter(EngineAdapter):
             pg_exec(self.cfg, self.user, self.pwd,
                 f"ALTER DEFAULT PRIVILEGES IN SCHEMA {pg_ident(sch)} REVOKE {priv} ON TABLES FROM {pg_ident(name)}",
                 db=database)
-        return self._revoke_result(name, priv, database, schemas=schemas)
-
-    def _revoke_result(self, name, priv, database, schemas=None, note=None):
-        where = f" ({', '.join(schemas)})" if schemas else ""
-        m = Mutation("REVOKE", f"{name} -= {priv} on {database}{where}")
-        if note:
-            m.response["warning"] = note
+        where = ", ".join(schemas)
+        m = Mutation("REVOKE", f"{name} -= {priv} on {database} ({where})")
+        if priv == "USAGE":
+            return m
+        # Read back the ACTUAL table ACLs, not information_schema (a non-superuser
+        # can't see grants it isn't party to there, so a silent no-op would read
+        # as success). Count direct grants still on this role, and name their
+        # grantor, straight from pg_class.relacl via aclexplode.
+        pfilter = "" if priv == "ALL PRIVILEGES" else f"AND a.privilege_type = {pg_literal(priv)} "
+        in_schemas = ", ".join(pg_literal(s) for s in schemas)
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT count(*), COALESCE(string_agg(DISTINCT pg_get_userbyid(a.grantor), ', '), '') "
+            "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, aclexplode(c.relacl) a "
+            f"WHERE c.relkind IN ('r','p','v','m','f') AND n.nspname IN ({in_schemas}) "
+            f"AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {pg_literal(name)}) {pfilter}",
+            db=database)
+        p = out.strip().split("\t") if code == 0 and out.strip() else ["0", ""]
+        residual, grantors = (int(p[0]) if p[0].isdigit() else 0), (p[1] if len(p) > 1 else "")
+        if residual:
+            raise EngineError(
+                f"{residual} table grant(s) in {database} could not be revoked: they were granted "
+                f"by {grantors or 'another role'}, and only the grantor or a superuser can remove "
+                f"them (warden is connected as {self.user}).")
+        _t, still, verified, _c = self._priv_effect(name, priv, schemas, database)
+        if verified and still:
+            members = ", ".join(self._membership_names(name)) or "PUBLIC"
+            m.response["warning"] = (
+                f"No direct grants remain, but {name} can still use {still} table(s) through "
+                f"role membership or defaults ({members}). Revoke there to fully remove access.")
+        else:
+            m.response["summary"] = f"{name} lost {priv} on {database} ({where}); verified."
         return m
 
     def _public_can_connect(self, database):
@@ -482,6 +655,98 @@ class PostgresAdapter(EngineAdapter):
         code, out, _ = pg_query(self.cfg, self.user, self.pwd,
             "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate")
         return [l.strip() for l in out.strip().split("\n") if l.strip()] if code == 0 else []
+
+    # ── bounded admin execution ─────────────────────────────────────────────
+    # Role cleanup takes locks (REASSIGN/DROP OWNED want exclusive locks on the
+    # role's objects). Any other session sitting in an open transaction on one
+    # of those tables would block us FOREVER without a lock_timeout, which the
+    # UI experiences as minutes of silence. These helpers run every sweep on one
+    # short-lived connection with lock_timeout + statement_timeout set.
+
+    def _bounded_statements(self, db, statements):
+        """Run statements in order on one bounded connection. Never raises;
+        returns [(statement, ok, error)] so callers report per-statement."""
+        results = []
+        if pn.available():
+            try:
+                conn = pn.psycopg.connect(pn._conninfo(self.cfg, db, self.user, self.pwd),
+                                          options=_ADMIN_OPTS, autocommit=True)
+            except Exception as e:
+                return [(s, False, str(e).strip()) for s in statements]
+            try:
+                for s in statements:
+                    try:
+                        conn.execute(s)
+                        results.append((s, True, ""))
+                    except Exception as e:
+                        results.append((s, False, str(e).strip()))
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            return results
+        # psql fallback: the SETs ride in the same -c call, so they apply.
+        for s in statements:
+            ok, out, err = pg_exec(self.cfg, self.user, self.pwd,
+                                   f"SET lock_timeout TO '5s'; SET statement_timeout TO '60s'; {s}",
+                                   db=db, timeout=70)
+            results.append((s, ok, "" if ok else (err or out).strip()))
+        return results
+
+    @staticmethod
+    def _friendly_sql_error(err):
+        """Turn the two bounded-timeout errors into something a person can act on."""
+        low = (err or "").lower()
+        if "lock timeout" in low:
+            return ("blocked by another session holding a lock (close open "
+                    "transactions touching this user's tables and retry)")
+        if "statement timeout" in low:
+            return "took longer than 60s and was stopped (retry when the database is quieter)"
+        return err
+
+    def _dependent_dbs(self, name):
+        """Databases that actually contain objects or privileges tied to the
+        role, straight from pg_shdepend. Cleanup visits only these instead of
+        every database on the cluster, which is the difference between seconds
+        and minutes on a big instance. None means the lookup failed."""
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT DISTINCT COALESCE(d.datname, '') FROM pg_shdepend s "
+            "LEFT JOIN pg_database d ON d.oid = s.dbid "
+            "WHERE s.refclassid = 'pg_authid'::regclass "
+            f"AND s.refobjid = (SELECT oid FROM pg_roles WHERE rolname = {pg_literal(name)})")
+        if code != 0:
+            return None
+        dbs = {l.strip() for l in out.strip().split("\n") if l.strip()}
+        # Shared objects (db ownerships, db-level grants) show as dbid 0; they
+        # are cleaned from the default db, so it is always on the list.
+        dbs.add(self.cfg.get("default_db", "postgres"))
+        return sorted(d for d in dbs if d)
+
+    def _describe_blockers(self, name, limit=6):
+        """Name the exact objects still pinning a role, per database, with the
+        owner where we can get it. Postgres's own error ("N objects in database
+        X") hides the names when they live in another db; this does not."""
+        items = []
+        for db in (self._dependent_dbs(name) or []):
+            code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+                "SELECT pg_describe_object(s.classid, s.objid, s.objsubid), s.deptype "
+                "FROM pg_shdepend s "
+                "WHERE s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) "
+                "AND s.refclassid = 'pg_authid'::regclass "
+                f"AND s.refobjid = (SELECT oid FROM pg_roles WHERE rolname = {pg_literal(name)}) "
+                "LIMIT 8", db=db)
+            if code != 0 or not out.strip():
+                continue
+            for line in out.strip().split("\n"):
+                p = line.split("\t")
+                if not p or not p[0].strip():
+                    continue
+                kind = "privileges on " if len(p) > 1 and p[1].strip() == "a" else "owns "
+                items.append(f"{db}: {kind}{p[0].strip()}")
+                if len(items) >= limit:
+                    return items
+        return items
 
     def _revoke_default_priv_grants(self, name, database):
         """Revoke default-privilege grants where `name` is the GRANTEE but another
@@ -507,16 +772,28 @@ class PostgresAdapter(EngineAdapter):
             inschema = f"IN SCHEMA {pg_ident(schema)} " if schema else ""
             stmts.append(f"ALTER DEFAULT PRIVILEGES FOR ROLE {pg_ident(owner)} {inschema}"
                          f"REVOKE ALL ON {objname} FROM {pg_ident(name)}")
-        self._run_each(stmts, db=database, strict=False)
+        self._bounded_statements(database, stmts)
 
     def _strip_role(self, name, drop):
-        """Hand back everything a role owns or holds, across every database, so it
-        can be dropped (or fully de-privileged) in one shot instead of failing on
-        the first dependency. Objects are reassigned to the admin, never deleted."""
+        """Hand back everything a role owns or holds so it can be dropped (or
+        fully de-privileged) in one shot. Objects are reassigned to the admin,
+        never deleted. Visits only the databases pg_shdepend says matter, runs
+        everything bounded (a held lock fails in ~5s with a clear message
+        instead of hanging), and names the exact blockers when it can't finish."""
+        import time as _time
+        t0 = _time.perf_counter()
+        if name == self.user:
+            raise EngineError(f"warden is connected as {name}; it won't strip or drop its own account")
         ident = pg_ident(name)
         admin = pg_ident(self.user)
         ddb = self.cfg.get("default_db", "postgres")
-        # Close its sessions first, or DROP hits "role is being used by N sessions".
+        if drop:
+            # Belt and braces before the teardown: no fresh logins can sneak in
+            # between the terminate below and the DROP.
+            self._bounded_statements(ddb, [f"ALTER ROLE {ident} NOLOGIN",
+                                           f"ALTER ROLE {ident} CONNECTION LIMIT 0"])
+        # Close its sessions, or DROP hits "role is being used by N sessions"
+        # and DROP OWNED can deadlock against its own locks.
         pg_exec(self.cfg, self.user, self.pwd,
                 f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = {pg_literal(name)}")
         # REASSIGN/DROP OWNED need the *privileges of* the role, not just admin
@@ -529,39 +806,77 @@ class PostgresAdapter(EngineAdapter):
         if not ok:
             ok, _, _ = pg_exec(self.cfg, self.user, self.pwd, f"GRANT {ident} TO {admin}")
         granted_membership = ok
+        # Only the databases that actually hold something of this role's.
+        dbs = self._dependent_dbs(name)
+        if dbs is None:
+            dbs = self._connectable_dbs()
         errors = []
-        for db in self._connectable_dbs():
+        for db in dbs:
             # Make sure we can reach the db to clean it (a prior lock-down might
             # have taken our own CONNECT away). Superusers connect regardless.
             pg_exec(self.cfg, self.user, self.pwd,
                     f"GRANT CONNECT ON DATABASE {pg_ident(db)} TO {admin}", db=ddb)
             # REASSIGN moves its objects to the admin (kept, not deleted); DROP
-            # OWNED then clears its privileges. Separate calls so the reassign
-            # commits first and a table can't be lost.
-            for stmt in (f"REASSIGN OWNED BY {ident} TO {admin}", f"DROP OWNED BY {ident}"):
-                ok, out, err = pg_exec(self.cfg, self.user, self.pwd, stmt, db=db)
+            # OWNED then clears its privileges. One bounded connection per db.
+            for stmt, ok, err in self._bounded_statements(
+                    db, [f"REASSIGN OWNED BY {ident} TO {admin}", f"DROP OWNED BY {ident}"]):
                 if not ok and "does not exist" not in (err or "").lower():
-                    errors.append(f"{db}: {(err or out).strip()[:120]}")
+                    errors.append(f"{db}: {self._friendly_sql_error(err)[:160]}")
             # Default privileges that grant TO this role but belong to another role
-            # aren't covered by DROP OWNED; revoke them so the drop isn't blocked.
+            # aren't covered by DROP OWNED everywhere; revoke them so the drop
+            # isn't blocked.
             self._revoke_default_priv_grants(name, db)
+        took = _time.perf_counter() - t0
+        summary = f"cleaned {len(dbs)} database(s) in {took:.1f}s"
         if drop:
-            ok, out, err = pg_exec(self.cfg, self.user, self.pwd, f"DROP ROLE {ident}")
+            _, ok, err = self._bounded_statements(ddb, [f"DROP ROLE {ident}"])[0]
             if not ok:
-                detail = f" (couldn't fully clean: {'; '.join(errors[:3])})" if errors else ""
-                raise EngineError((err or out).strip() + detail)
-        elif granted_membership:
+                blockers = self._describe_blockers(name)
+                why = ("; ".join(errors[:2]) + "; " if errors else "")
+                held = (" Still held: " + "; ".join(blockers) + "."
+                        if blockers else "")
+                raise EngineError(
+                    f"couldn't drop {name}: {self._friendly_sql_error(err)[:200]}. {why}{held} "
+                    f"Grants made by another role can only be removed by that role or a "
+                    f"superuser - warden is connected as {self.user}.")
+            return summary, errors
+        if granted_membership:
             # Keeping the role but not dropping it: don't leave the admin sitting
             # as a member of a role it was only cleaning up.
             pg_exec(self.cfg, self.user, self.pwd, f"REVOKE {ident} FROM {admin}")
+        return summary, errors
 
     def drop_user(self, name):
-        self._strip_role(name, drop=True)
-        return Mutation("DROP USER", name)
+        summary, errors = self._strip_role(name, drop=True)
+        # Trust the catalog, not our own success path: the role must be gone.
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            f"SELECT count(*) FROM pg_roles WHERE rolname = {pg_literal(name)}")
+        if code == 0 and out.strip() and out.strip() != "0":
+            raise EngineError(f"{name} still exists after the drop; " + "; ".join(errors[:3]))
+        m = Mutation("DROP USER", name, {"summary": f"{name} dropped; {summary}"})
+        if errors:
+            m.response["warning"] = f"{name} was dropped, but some cleanup steps failed: " + "; ".join(errors[:3])
+        return m
 
     def revoke_all(self, name):
-        self._strip_role(name, drop=False)
-        return Mutation("REVOKE ALL", f"{name}: all privileges revoked")
+        summary, errors = self._strip_role(name, drop=False)
+        # Read back what the user can still touch, and say so instead of a
+        # blanket "revoked" that might not be true (grants made by other roles
+        # survive DROP OWNED run by a non-superuser).
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT count(*) FROM information_schema.role_table_grants "
+            f"WHERE grantee = {pg_literal(name)}")
+        residual = int(out.strip()) if code == 0 and out.strip().isdigit() else 0
+        m = Mutation("REVOKE ALL", f"{name}: all privileges revoked",
+                     {"summary": f"revoked {name}'s access; {summary}"})
+        if residual:
+            blockers = self._describe_blockers(name, limit=4)
+            m.response["warning"] = (
+                f"{residual} grant(s) could not be removed (made by another role, and only "
+                f"the grantor or a superuser can revoke them): " + "; ".join(blockers))
+        elif errors:
+            m.response["warning"] = "some cleanup steps failed: " + "; ".join(errors[:3])
+        return m
 
     def harden_connections(self):
         """Cluster-wide fix for 'new users can reach every database': take CONNECT
@@ -569,13 +884,30 @@ class PostgresAdapter(EngineAdapter):
         one. After this a new account can't connect anywhere until it's granted,
         and a revoke actually blocks. Existing users with privileges are preserved."""
         dbs = self._connectable_dbs()
+        locked, couldnt = [], []
         for db in dbs:
             try:
                 self._lockdown_connect(db)
             except EngineError:
                 pass
-        return Mutation("HARDEN", f"CONNECT locked down on {len(dbs)} database(s); "
-                                  f"new users now reach only what they're granted")
+            # Verify, don't assume: a non-superuser admin can't REVOKE on a
+            # database it doesn't own, and that REVOKE fails silently.
+            if self._public_can_connect(db):
+                couldnt.append(db)
+            else:
+                locked.append(db)
+        detail = (f"CONNECT locked down on {len(locked)} of {len(dbs)} database(s); "
+                  f"new users now reach only what they're granted")
+        m = Mutation("HARDEN", detail)
+        if couldnt:
+            m.response["warning"] = (
+                f"Couldn't lock down {len(couldnt)} database(s) ({', '.join(couldnt[:6])}"
+                f"{'...' if len(couldnt) > 6 else ''}): warden connects as {self.user}, which "
+                f"doesn't own them, so PUBLIC still grants CONNECT there. Run as the owner or a "
+                f"superuser to finish.")
+        else:
+            m.response["summary"] = f"Locked down CONNECT on all {len(locked)} database(s)."
+        return m
 
     def toggle_login(self, name, enable):
         kw = "LOGIN" if enable else "NOLOGIN"

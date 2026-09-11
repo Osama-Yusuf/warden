@@ -500,6 +500,7 @@ th.sortable .arrow { font-size: 8px; margin-left: 3px; }
 /* ── Loader & skeleton ── */
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border);
   border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
+.spinner-sm { width: 11px; height: 11px; border-width: 2px; vertical-align: -1px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-msg { display: flex; align-items: center; gap: 9px; color: var(--text-muted); font-size: 13px; padding: 4px 0 14px; }
 .skel {

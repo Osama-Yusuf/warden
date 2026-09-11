@@ -623,14 +623,63 @@ function requireConnection() {
   return true;
 }
 
-async function apiPost(path, extra = {}) {
+async function apiPost(path, extra = {}, opts = {}) {
+  // Never let a request hang the UI (the "clicked drop, silence for 3 minutes"
+  // problem). AbortController caps it; a timeout/network failure comes back as
+  // {error} like any other, so every existing caller keeps working.
+  const timeout = opts.timeout || 90000;
   const body = { ...creds(), ...extra };
-  const r = await fetch(API + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return r.json();
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeout);
+  try {
+    const r = await fetch(API + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    });
+    return await r.json();
+  } catch (e) {
+    return { error: e && e.name === 'AbortError'
+      ? `Timed out after ${Math.round(timeout / 1000)}s (the database may be under a lock; try again when it's quieter)`
+      : `Network error: ${(e && e.message) || e}` };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// One destructive action at a time, per key. A second click while one is in
+// flight is ignored (with a nudge) instead of queueing another request that
+// later lands as a surprise notification. Shows a persistent "working" toast.
+const _inFlight = new Set();
+async function runAction(key, workingMsg, fn) {
+  if (_inFlight.has(key)) { toast(`Still ${workingMsg}, hang on…`, 'info'); return; }
+  _inFlight.add(key);
+  const busy = busyToast(`${workingMsg}…`);
+  try {
+    return await fn();
+  } finally {
+    _inFlight.delete(key);
+    busy.done();
+  }
+}
+
+// A toast that stays until you dismiss it (for in-flight work).
+function busyToast(msg) {
+  const el = document.createElement('div');
+  el.className = 'toast toast-info';
+  el.innerHTML = `<span class="spinner spinner-sm"></span> ${esc(msg)}`;
+  document.getElementById('toasts').appendChild(el);
+  return { done: () => el.remove() };
+}
+
+// Turn an API reply into user feedback, honestly: error -> red toast; warning
+// (partial / caveat) -> a modal you have to read; summary -> green toast.
+function reportResult(res, okMsg) {
+  if (!res || res.error) { toast((res && res.error) || 'Failed', 'error'); return false; }
+  if (res.warning) { showModal('Result', `<p>${esc(res.warning)}</p>`, [{ label: 'OK', cls: 'btn-primary' }]); return true; }
+  toast(res.summary || okMsg, 'success');
+  return true;
 }
 
 function toast(msg, type = 'info') {

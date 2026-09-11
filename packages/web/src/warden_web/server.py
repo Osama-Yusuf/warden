@@ -287,6 +287,7 @@ def api_create_user(body):
     password = body.get("password") or generate_password()
     return _mutate(body, "create_user", name, password,
                    can_login=body.get("can_login", True),
+                   lockdown=bool(body.get("lockdown")),
                    roles=body.get("roles"),
                    key_pattern=body.get("key_pattern"),
                    acl_level=body.get("acl_level", "read"))

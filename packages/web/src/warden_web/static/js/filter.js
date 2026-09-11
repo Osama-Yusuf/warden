@@ -503,8 +503,22 @@ function userPanelSql(res, uAttr, isDocdb) {
           onclick="revokePgDbPriv(this.dataset.user, this.dataset.priv, this.dataset.db)">Revoke ${esc(p)}</button>`).join(' ');
         dbRows += `<tr><td class="mono">${esc(d.database)}</td><td>${d.privileges.map(esc).join(', ')}</td><td style="text-align:right">${btns}</td></tr>`;
       }
-      html += `<h2 style="margin-top:16px">Database Privileges</h2>
+      html += `<h2 style="margin-top:16px">Database Privileges <span style="font-weight:400; font-size:12px; color:var(--text-muted)">(granted directly to this user)</span></h2>
         <div class="table-wrap"><table><thead><tr><th>Database</th><th>Privileges</th><th></th></tr></thead><tbody>${dbRows}</tbody></table></div>`;
+    }
+    // PUBLIC access is real but not a per-user grant: no revoke button here would
+    // work (you'd have to lock down the database). Say so plainly instead of
+    // showing fake CONNECT-everywhere rows with dead buttons.
+    const pub = res.public_connect || [];
+    if (pub.length) {
+      html += `<div class="ctx-line" style="margin-top:12px; color:var(--text-muted); font-size:12.5px">
+        Can also connect to <strong>${pub.length}</strong> database(s) via Postgres's PUBLIC default
+        (${pub.slice(0, 6).map(esc).join(', ')}${pub.length > 6 ? '…' : ''}). That's not a grant on this user;
+        use <strong>Lock down connections</strong> to make access explicit.</div>`;
+    }
+    if ((res.owned_databases || []).length) {
+      html += `<div class="ctx-line" style="margin-top:8px; color:var(--text-muted); font-size:12.5px">
+        Owns database(s): ${res.owned_databases.map(esc).join(', ')} (owners always have full access).</div>`;
     }
     if (res.grants && res.grants.length) {
       let gRows = '';
