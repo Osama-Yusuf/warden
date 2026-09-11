@@ -43,7 +43,14 @@ def pg_query(config, admin_user, admin_pass, sql, db=None, timeout=30):
 
 
 def pg_csv(config, admin_user, admin_pass, sql, db=None, timeout=60):
-    """Run arbitrary SQL, result sets as CSV with headers (query console)."""
+    """Run arbitrary SQL for the query console, result sets as CSV with headers.
+
+    Native (psycopg) by default, so the console works with no system psql. Only
+    psql client meta-commands (\\d, \\l, ...), which aren't SQL, fall through to
+    the psql subprocess; psycopg-unavailable falls through too."""
+    is_meta = sql.lstrip().startswith("\\")
+    if pg_native.available() and not is_meta:
+        return pg_native.console_csv(config, admin_user, admin_pass, sql, db=db, timeout=timeout)
     args = _pg_args(config, admin_user, db) + ["--csv", "-c", sql]
     try:
         result = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
@@ -52,6 +59,9 @@ def pg_csv(config, admin_user, admin_pass, sql, db=None, timeout=60):
     except subprocess.TimeoutExpired:
         return -1, "", "Query timed out"
     except FileNotFoundError:
+        if is_meta:
+            return -2, "", ("psql client meta-commands (\\d, \\l, \\dt, ...) need the psql "
+                            "binary on PATH. Plain SQL works without it.")
         return -2, "", "psql not found"
 
 

@@ -10,12 +10,16 @@ A ConnectionPool per (host, port, db, user) gives real concurrency: each query
 checks out its own connection, so overlapping requests never share a socket
 (the failure mode that made the warm mongosh session desync).
 
-The free-form SQL console stays on psql (pg_csv), which renders CSV with headers
-and runs arbitrary statements a structured path shouldn't.
+The free-form SQL console runs natively too (console_csv), so it works without a
+system psql binary; pg_csv only falls back to the psql subprocess for client
+meta-commands (\\d, \\l, ...) that aren't SQL.
 """
 
+import csv as _csvmod
 import datetime
 import decimal
+import io
+import json
 import threading
 import uuid
 
@@ -103,6 +107,73 @@ def _fmt(v):
     if v is False:
         return "f"
     return str(v)
+
+
+_CONSOLE_MAX_ROWS = 5000  # per result set; the console is for inspection, not export
+# Transaction-control status lines are noise in the console output (a dry-run
+# wraps the query in BEGIN..ROLLBACK); keep result sets and real write tags.
+_QUIET_STATUS = {"BEGIN", "COMMIT", "ROLLBACK", "START TRANSACTION", "SET", "SAVEPOINT"}
+
+
+def _console_cell(v):
+    """One CSV cell: NULL -> empty, json/array -> compact JSON, else str."""
+    if v is None:
+        return ""
+    if isinstance(v, (dict, list)):
+        return json.dumps(v, default=str, separators=(",", ":"))
+    c = _cell(v)
+    return c if isinstance(c, str) else str(c)
+
+
+def console_csv(config, admin_user, admin_pass, sql, db=None, timeout=60):
+    """Free-form SQL for the query console, returning psql --csv-style output as
+    (returncode, csv_text, stderr) so it's a drop-in for the psql subprocess.
+    Runs the whole script on one dedicated autocommit connection (so an explicit
+    BEGIN/ROLLBACK in a dry-run behaves as written), walks every result set, and
+    renders SELECTs as CSV and writes/DDL as their status tag. No system psql
+    needed."""
+    dbname = db or config.get("default_db", "postgres")
+    try:
+        conn = psycopg.connect(_conninfo(config, dbname, admin_user, admin_pass),
+                               connect_timeout=8, autocommit=True)
+    except psycopg.Error as e:
+        return 1, "", str(e).strip()
+    except Exception as e:
+        return 1, "", str(e).strip()
+    blocks, truncated_note = [], ""
+    try:
+        with conn.cursor() as tcur:
+            tcur.execute(f"SET statement_timeout = {int(timeout) * 1000}")
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            while True:
+                if cur.description:
+                    out = io.StringIO()
+                    w = _csvmod.writer(out)
+                    w.writerow([d.name for d in cur.description])
+                    rows = cur.fetchmany(_CONSOLE_MAX_ROWS)
+                    for row in rows:
+                        w.writerow([_console_cell(v) for v in row])
+                    if cur.rowcount is not None and cur.rowcount > _CONSOLE_MAX_ROWS:
+                        truncated_note = (f"\n-- showing first {_CONSOLE_MAX_ROWS} of "
+                                          f"{cur.rowcount} rows --")
+                    blocks.append(out.getvalue().rstrip("\r\n"))
+                else:
+                    st = (cur.statusmessage or "").strip()
+                    if st and st.split()[0].upper() not in _QUIET_STATUS:
+                        blocks.append(st)
+                if not cur.nextset():
+                    break
+        return 0, ("\n\n".join(b for b in blocks if b) + truncated_note), ""
+    except psycopg.Error as e:
+        # Keep any output produced before the failing statement, like psql does.
+        prefix = ("\n\n".join(b for b in blocks if b) + "\n") if blocks else ""
+        return 1, prefix, str(e).strip()
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def query(config, admin_user, admin_pass, sql, db=None, timeout=30):

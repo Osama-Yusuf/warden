@@ -494,3 +494,62 @@ def test_pg_user_info_separates_explicit_from_public():
     finally:
         sx('DROP DATABASE IF EXISTS "wt_pub" WITH (FORCE)')
         sx("DROP ROLE IF EXISTS wt_fresh")
+
+
+def test_pg_console_native_no_psql():
+    """The query console must work through the native driver without a system
+    psql: SELECT -> CSV, multi-statement, dry-run rolls back, writes show a tag,
+    bad SQL errors cleanly. Guards the psql dependency that broke the console for
+    users without Postgres client tools installed."""
+    ok, cfg = _pg_reachable()
+    if not ok:
+        pytest.skip("postgres not reachable")
+    import warden_core.pg_native as pn
+    if not pn.available():
+        pytest.skip("native driver not available")
+    from warden_core.pg import pg_csv
+    from warden_core.pg_native import console_csv
+
+    su = (os.environ.get("WARDEN_TEST_PG_USER", "admin"),
+          os.environ.get("WARDEN_TEST_PG_PASS", "adminpass"))
+
+    def ex(sql, db="postgres"):
+        from warden_core.pg import pg_exec
+        return pg_exec(cfg, su[0], su[1], sql, db=db)
+
+    ex('DROP DATABASE IF EXISTS "wt_con" WITH (FORCE)')
+    try:
+        ex('CREATE DATABASE "wt_con"')
+        ex("CREATE TABLE t (id int, name text)", db="wt_con")
+        ex("INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c')", db="wt_con")
+
+        # SELECT -> CSV header + rows, straight through the native console.
+        code, out, err = console_csv(cfg, su[0], su[1], "SELECT id,name FROM t ORDER BY id", db="wt_con")
+        assert code == 0 and out.splitlines()[0] == "id,name" and "1,a" in out, (out, err)
+
+        # multiple statements in one script, all run.
+        code, out, _ = console_csv(cfg, su[0], su[1], "SELECT 1 AS a; SELECT 2 AS b", db="wt_con")
+        assert code == 0 and "a" in out and "b" in out, out
+
+        # dry-run wrapper rolls back: the DELETE reports its count but data stays.
+        code, out, _ = console_csv(cfg, su[0], su[1],
+                                   "BEGIN; DELETE FROM t; ROLLBACK", db="wt_con")
+        assert code == 0 and "DELETE 3" in out, out
+        code, out, _ = console_csv(cfg, su[0], su[1], "SELECT count(*) FROM t", db="wt_con")
+        assert out.splitlines()[-1] == "3", out
+
+        # write reports a status tag.
+        code, out, _ = console_csv(cfg, su[0], su[1], "UPDATE t SET name='z' WHERE id=1", db="wt_con")
+        assert code == 0 and "UPDATE 1" in out, out
+
+        # bad SQL -> nonzero + message, no crash.
+        code, out, err = console_csv(cfg, su[0], su[1], "SELECT * FROM nope", db="wt_con")
+        assert code != 0 and "nope" in err.lower(), (code, err)
+
+        # a psql meta-command routes to the subprocess; pg_csv gives a clear
+        # message rather than a cryptic failure when psql isn't on PATH.
+        code, out, err = pg_csv(cfg, su[0], su[1], "\\dt", db="wt_con")
+        if code != 0:
+            assert "psql" in err.lower(), err
+    finally:
+        ex('DROP DATABASE IF EXISTS "wt_con" WITH (FORCE)')
