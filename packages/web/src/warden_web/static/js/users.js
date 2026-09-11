@@ -204,12 +204,11 @@ function grantPgPrivDirect(username) {
   showModal('Confirm Grant', `<p>Grant <strong>${esc(privilege)} on ${esc(scopeTxt)}</strong> to <strong>${esc(username)}</strong>?</p>`, [
     { label: 'Cancel', cls: 'btn-ghost' },
     { label: 'Grant', cls: 'btn-success', fn: async () => {
-      const res = await apiPost('/api/grant', { username, privilege, database, schema });
-      if (res.ok) {
-        if (res.warning) showModal('Grant result', `<p>${esc(res.warning)}</p>`, [{ label: 'OK', cls: 'btn-primary' }]);
-        else toast(res.summary || `Granted ${privilege} on ${database}`, 'success');
+      await runAction(`grant:${username}:${database}`, `granting ${privilege} on ${database}`, async () => {
+        const res = await apiPost('/api/grant', { username, privilege, database, schema });
+        reportResult(res, `Granted ${privilege} on ${database}`);
         viewUserInfoFor(username);
-      } else toast(res.error || 'Failed', 'error');
+      });
     }},
   ]);
 }
@@ -217,11 +216,11 @@ function grantPgPrivDirect(username) {
 function revokePgDbPriv(username, privilege, database) {
   showModal('Confirm Revoke', `<p style="color:var(--danger)">Revoke <strong>${esc(privilege)} on ${esc(database)}</strong> from <strong>${esc(username)}</strong>?</p>`, [
     { label: 'Cancel', cls: 'btn-ghost' },
-    { label: 'Revoke', cls: 'btn-danger', fn: async () => {
+    { label: 'Revoke', cls: 'btn-danger', fn: () => runAction(`revoke:${username}:${database}:${privilege}`, `revoking ${privilege} on ${database}`, async () => {
       const res = await apiPost('/api/revoke', { username, privilege, database });
-      if (res.ok) { toast(`Revoked ${privilege} on ${database}`, 'success'); viewUserInfoFor(username); }
-      else toast(res.error || 'Failed', 'error');
-    }},
+      reportResult(res, `Revoked ${privilege} on ${database}`);
+      viewUserInfoFor(username);
+    })},
   ]);
 }
 
@@ -246,11 +245,12 @@ function confirmHardenConnections() {
     To let someone into a database afterward, grant them CONNECT.</p>
   `, [
     { label: 'Cancel', cls: 'btn-ghost' },
-    { label: 'Lock it down', cls: 'btn-danger', fn: async () => {
+    { label: 'Lock it down', cls: 'btn-danger', fn: () => runAction('harden', 'locking down connections', async () => {
       const res = await apiPost('/api/harden-connections', {});
-      if (res.ok) { toast('Connections locked down: new users are now scoped to what they\'re granted', 'success'); invalidateCache('users'); refreshCache(); }
-      else { toast(res.error || 'Failed', 'error'); }
-    }},
+      if (reportResult(res, 'Connections locked down: new users are scoped to what they\'re granted')) {
+        invalidateCache('users'); refreshCache();
+      }
+    })},
   ]);
 }
 
@@ -262,11 +262,11 @@ function confirmRevokeAll(username) {
     </p>
   `, [
     { label: 'Cancel', cls: 'btn-ghost' },
-    { label: 'Revoke all', cls: 'btn-danger', fn: async () => {
+    { label: 'Revoke all', cls: 'btn-danger', fn: () => runAction(`revokeall:${username}`, `revoking all access from ${username}`, async () => {
       const res = await apiPost('/api/revoke-all', { username });
-      if (res.ok) { toast(`Revoked all access from ${username}`, 'success'); invalidateCache('users'); refreshCache(); viewUserInfoFor(username); }
-      else { toast(res.error || 'Failed', 'error'); }
-    }},
+      if (reportResult(res, `Revoked all access from ${username}`)) { invalidateCache('users'); refreshCache(); }
+      viewUserInfoFor(username);
+    })},
   ]);
 }
 
@@ -281,12 +281,13 @@ function confirmDropUser(username) {
     </div>
   `, [
     { label: 'Cancel', cls: 'btn-ghost' },
-    { label: 'Delete', cls: 'btn-danger', fn: async () => {
+    { label: 'Delete', cls: 'btn-danger', fn: () => {
       const typed = document.getElementById('confirmDrop')?.value;
       if (typed !== username) { toast('Username does not match', 'error'); return; }
-      const res = await apiPost('/api/drop-user', { username });
-      if (res.ok) { toast(`User ${username} dropped`, 'success'); closePanel(); invalidateCache('users'); refreshCache(); navigate('users'); }
-      else { toast(res.error || 'Failed', 'error'); }
+      runAction(`drop:${username}`, `dropping ${username}`, async () => {
+        const res = await apiPost('/api/drop-user', { username });
+        if (reportResult(res, `User ${username} dropped`)) { closePanel(); invalidateCache('users'); refreshCache(); navigate('users'); }
+      });
     }},
   ]);
 }
@@ -305,7 +306,13 @@ function viewCreateUser() {
       <div class="form-field"><label>Initial role</label><select id="createRole">${roleOpts}</select></div>
       <div class="form-field"><label>On database</label><input id="createRoleDb" list="dbList" placeholder="type to search databases…"></div>`;
   } else {
-    extra = `<div class="form-field"><label>Allow login</label><select id="createLogin"><option value="true">Yes</option><option value="false">No</option></select></div>`;
+    const zero = fam === 'postgresql'
+      ? `<div class="form-field"><label>Access</label><select id="createLockdown">
+           <option value="false">Default (Postgres lets them connect everywhere)</option>
+           <option value="true">Zero access (lock down, grant explicitly)</option>
+         </select></div>`
+      : '';
+    extra = `<div class="form-field"><label>Allow login</label><select id="createLogin"><option value="true">Yes</option><option value="false">No</option></select></div>${zero}`;
   }
   setContent(`<div class="card"><h2>${ICONS.plus} Create User</h2>
     <div class="form-row">
@@ -334,23 +341,22 @@ async function doCreateUser() {
     extra.roles = [{ role, db }];
   } else {
     extra.can_login = document.getElementById('createLogin').value === 'true';
+    if (document.getElementById('createLockdown')?.value === 'true') extra.lockdown = true;
   }
   showModal('Confirm Create User', `<p>Create user <strong>${esc(username)}</strong> on <strong>${esc(creds().env)} / ${esc(currentEngine)}</strong>?</p>`, [
     { label: 'Cancel', cls: 'btn-ghost' },
-    { label: 'Create', cls: 'btn-success', fn: async () => {
+    { label: 'Create', cls: 'btn-success', fn: () => runAction(`create:${username}`, `creating ${username}`, async () => {
       const res = await apiPost('/api/create-user', { username, password, ...extra });
-      if (res.ok) {
-        toast('User created', 'success');
-        refreshCache();
-        setContent(`<div class="card"><h2>${ICONS.plus} User Created: <span class="mono" style="font-size:14px">${esc(username)}</span></h2>
-          <p style="margin-bottom:8px; color:var(--warning); font-weight:600">Save this password, it won't be shown again:</p>
-          ${passwordHtml(res.password)}
-          <button class="btn btn-ghost" style="margin-top:12px" onclick="navigate('users')">Back to users</button>
-        </div>`);
-      } else {
-        toast(res.error || 'Failed', 'error');
-      }
-    }},
+      if (!res || res.error) { toast((res && res.error) || 'Failed', 'error'); return; }
+      refreshCache();
+      if (res.warning) showModal('Heads up', `<p>${esc(res.warning)}</p>`, [{ label: 'OK', cls: 'btn-primary' }]);
+      else toast(res.summary || 'User created', 'success');
+      setContent(`<div class="card"><h2>${ICONS.plus} User Created: <span class="mono" style="font-size:14px">${esc(username)}</span></h2>
+        <p style="margin-bottom:8px; color:var(--warning); font-weight:600">Save this password, it won't be shown again:</p>
+        ${passwordHtml(res.password)}
+        <button class="btn btn-ghost" style="margin-top:12px" onclick="navigate('users')">Back to users</button>
+      </div>`);
+    })},
   ]);
 }
 

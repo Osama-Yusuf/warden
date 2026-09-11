@@ -287,3 +287,210 @@ def test_pg_grant_finds_tables_in_any_schema():
         for r in ("wt_viewer", "wt_owner"):
             sx(f'DROP OWNED BY "{r}" CASCADE')
             sx(f'DROP ROLE IF EXISTS "{r}"')
+
+
+def _pg_adapter(cfg):
+    from warden_core.adapters.postgres import PostgresAdapter
+    su = (os.environ.get("WARDEN_TEST_PG_USER", "admin"),
+          os.environ.get("WARDEN_TEST_PG_PASS", "adminpass"))
+    return PostgresAdapter(cfg, admin_user=su[0], admin_pass=su[1]), su
+
+
+def test_pg_grant_create_lets_user_create_tables():
+    """Granting CREATE must actually let the user create a table (db-level CREATE
+    alone can't since PG15), and only report success when it worked."""
+    ok, cfg = _pg_reachable()
+    if not ok:
+        pytest.skip("postgres not reachable")
+    from warden_core.pg import pg_exec
+    import psycopg
+    w, su = _pg_adapter(cfg)
+
+    def sx(sql, db=None):
+        return pg_exec(cfg, su[0], su[1], sql, db=db)
+
+    sx('DROP DATABASE IF EXISTS "wt_cr" WITH (FORCE)')
+    sx("DROP ROLE IF EXISTS wt_maker")
+    try:
+        sx('CREATE DATABASE "wt_cr"')
+        sx("CREATE ROLE wt_maker LOGIN PASSWORD 'p'")
+        m = w.grant("wt_maker", database="wt_cr", privilege="CREATE")
+        assert "warning" not in m.response, m.response.get("warning")
+        with psycopg.connect(host=cfg["host"], port=cfg["port"], dbname="wt_cr",
+                             user="wt_maker", password="p", connect_timeout=5,
+                             autocommit=True) as c:
+            c.execute("CREATE TABLE made_it (id int)")  # raised before the fix
+    finally:
+        sx('DROP DATABASE IF EXISTS "wt_cr" WITH (FORCE)')
+        sx("DROP OWNED BY wt_maker CASCADE")
+        sx("DROP ROLE IF EXISTS wt_maker")
+
+
+def test_pg_revoke_reports_when_it_cannot_actually_revoke():
+    """A non-superuser admin revoking a grant made by another role must NOT report
+    success: Postgres revokes nothing (silently), so warden has to read the ACL
+    back and raise with the grantor named."""
+    ok, cfg = _pg_reachable()
+    if not ok:
+        pytest.skip("postgres not reachable")
+    from warden_core.adapters.postgres import PostgresAdapter
+    from warden_core.adapters.base import EngineError
+    from warden_core.pg import pg_exec, pg_query
+    su = (os.environ.get("WARDEN_TEST_PG_USER", "admin"),
+          os.environ.get("WARDEN_TEST_PG_PASS", "adminpass"))
+
+    def sx(sql, db=None, user=su[0], pw=su[1]):
+        return pg_exec(cfg, user, pw, sql, db=db)
+
+    sx('DROP DATABASE IF EXISTS "wt_rv" WITH (FORCE)')
+    for r in ("wt_admin", "wt_u"):
+        sx(f"DROP OWNED BY {r} CASCADE")
+        sx(f"DROP ROLE IF EXISTS {r}")
+    try:
+        sx("CREATE ROLE wt_admin LOGIN PASSWORD 'p' CREATEROLE CREATEDB")
+        sx("CREATE ROLE wt_u LOGIN PASSWORD 'p'")
+        sx('CREATE DATABASE "wt_rv" OWNER wt_admin')
+        # a table owned by the SUPERUSER, granted to wt_u by the superuser
+        sx("CREATE TABLE su_t (id int)", db="wt_rv")
+        sx('GRANT CONNECT ON DATABASE "wt_rv" TO wt_u')
+        sx("GRANT SELECT ON su_t TO wt_u", db="wt_rv")
+        # wt_admin (non-superuser, not the grantor) cannot revoke it
+        w = PostgresAdapter(cfg, admin_user="wt_admin", admin_pass="p")
+        raised = False
+        try:
+            w.revoke("wt_u", privilege="SELECT", database="wt_rv", schema="public")
+        except EngineError as e:
+            raised = True
+            assert "grantor" in str(e).lower() or "superuser" in str(e).lower(), str(e)
+        assert raised, "revoke falsely reported success on a silent no-op"
+        # and the grant genuinely survived
+        _, out, _ = pg_query(cfg, su[0], su[1],
+                             "SELECT has_table_privilege('wt_u','su_t','SELECT')", db="wt_rv")
+        assert out.strip() == "t"
+    finally:
+        sx('DROP DATABASE IF EXISTS "wt_rv" WITH (FORCE)')
+        for r in ("wt_admin", "wt_u"):
+            sx(f"DROP OWNED BY {r} CASCADE")
+            sx(f"DROP ROLE IF EXISTS {r}")
+
+
+def test_pg_drop_under_held_lock_fails_fast():
+    """A drop blocked by another session's lock must fail in seconds with a clear
+    message, not hang (the reported 3-minute silence). Bounded by lock_timeout."""
+    import threading
+    import time as _time
+    ok, cfg = _pg_reachable()
+    if not ok:
+        pytest.skip("postgres not reachable")
+    from warden_core.adapters.postgres import PostgresAdapter
+    from warden_core.adapters.base import EngineError
+    from warden_core.pg import pg_exec
+    import psycopg
+    su = (os.environ.get("WARDEN_TEST_PG_USER", "admin"),
+          os.environ.get("WARDEN_TEST_PG_PASS", "adminpass"))
+
+    def sx(sql, db=None):
+        return pg_exec(cfg, su[0], su[1], sql, db=db)
+
+    sx('DROP DATABASE IF EXISTS "wt_lock" WITH (FORCE)')
+    sx("DROP ROLE IF EXISTS wt_locked")
+    locker = None
+    try:
+        sx("CREATE ROLE wt_locked LOGIN PASSWORD 'p'")
+        sx('CREATE DATABASE "wt_lock"')
+        sx("GRANT ALL ON SCHEMA public TO wt_locked", db="wt_lock")
+        sx('GRANT CONNECT ON DATABASE "wt_lock" TO wt_locked')
+        with psycopg.connect(host=cfg["host"], port=cfg["port"], dbname="wt_lock",
+                             user="wt_locked", password="p", connect_timeout=5,
+                             autocommit=True) as c:
+            c.execute("CREATE TABLE locked_t (id int)")
+        # hold an AccessShareLock on locked_t in an open transaction
+        locker = psycopg.connect(host=cfg["host"], port=cfg["port"], dbname="wt_lock",
+                                 user=su[0], password=su[1], connect_timeout=5)
+        locker.cursor().execute("SELECT * FROM locked_t")
+
+        w = PostgresAdapter(cfg, admin_user=su[0], admin_pass=su[1])
+        result = {}
+
+        def do_drop():
+            t0 = _time.perf_counter()
+            try:
+                w.drop_user("wt_locked")
+                result["ok"] = True
+            except EngineError as e:
+                result["err"] = str(e)
+            result["dt"] = _time.perf_counter() - t0
+
+        th = threading.Thread(target=do_drop, daemon=True)
+        th.start()
+        th.join(timeout=40)
+        assert not th.is_alive(), "drop hung > 40s behind a held lock (should fail fast)"
+        assert result.get("dt", 999) < 40, f"drop took {result.get('dt')}s"
+        assert "err" in result, "drop should have failed under the held lock"
+    finally:
+        if locker is not None:
+            locker.close()
+        sx('DROP DATABASE IF EXISTS "wt_lock" WITH (FORCE)')
+        sx("DROP OWNED BY wt_locked CASCADE")
+        sx("DROP ROLE IF EXISTS wt_locked")
+
+
+def test_pg_create_user_lockdown_gives_zero_access():
+    """A user created with lockdown can't connect to app databases; the admin
+    still can."""
+    ok, cfg = _pg_reachable()
+    if not ok:
+        pytest.skip("postgres not reachable")
+    from warden_core.pg import pg_exec
+    import psycopg
+    w, su = _pg_adapter(cfg)
+
+    def sx(sql, db=None):
+        return pg_exec(cfg, su[0], su[1], sql, db=db)
+
+    def connects(user, pw, db):
+        try:
+            psycopg.connect(host=cfg["host"], port=cfg["port"], dbname=db, user=user,
+                            password=pw, connect_timeout=4).close()
+            return True
+        except Exception:
+            return False
+
+    sx('DROP DATABASE IF EXISTS "wt_ld" WITH (FORCE)')
+    sx("DROP ROLE IF EXISTS wt_zero")
+    try:
+        sx('CREATE DATABASE "wt_ld"')
+        sx("CREATE TABLE t (id int)", db="wt_ld")  # a real object so keepers exist
+        w.create_user("wt_zero", "zpw", lockdown=True)
+        assert not connects("wt_zero", "zpw", "wt_ld"), "lockdown user still reached the db"
+        assert connects(su[0], su[1], "wt_ld"), "admin locked itself out"
+    finally:
+        sx('DROP DATABASE IF EXISTS "wt_ld" WITH (FORCE)')
+        sx('GRANT CONNECT ON DATABASE postgres TO PUBLIC')
+        sx("DROP ROLE IF EXISTS wt_zero")
+
+
+def test_pg_user_info_separates_explicit_from_public():
+    """A brand-new user must NOT show explicit CONNECT everywhere; PUBLIC access is
+    reported separately so the UI doesn't render dead revoke buttons."""
+    ok, cfg = _pg_reachable()
+    if not ok:
+        pytest.skip("postgres not reachable")
+    from warden_core.pg import pg_exec
+    w, su = _pg_adapter(cfg)
+
+    def sx(sql, db=None):
+        return pg_exec(cfg, su[0], su[1], sql, db=db)
+
+    sx('DROP DATABASE IF EXISTS "wt_pub" WITH (FORCE)')
+    sx("DROP ROLE IF EXISTS wt_fresh")
+    try:
+        sx('CREATE DATABASE "wt_pub"')
+        sx("CREATE ROLE wt_fresh LOGIN PASSWORD 'p'")
+        info = w.user_info("wt_fresh")
+        explicit_dbs = [d["database"] for d in info.get("db_privileges", [])]
+        assert "wt_pub" not in explicit_dbs, "PUBLIC access shown as an explicit grant"
+        assert "wt_pub" in info.get("public_connect", []), "PUBLIC connect not reported"
+    finally:
+        sx('DROP DATABASE IF EXISTS "wt_pub" WITH (FORCE)')
+        sx("DROP ROLE IF EXISTS wt_fresh")
