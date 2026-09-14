@@ -265,7 +265,7 @@ function renderUsersShell(fromCache) {
       <div style="flex:1; min-width:240px">${sfBarHtml(cfg)}</div>
       <div style="display:flex; align-items:center; gap:10px; padding-top:1px">
         <span id="usersRefreshing" style="font-size:11px; color:var(--text-muted); display:${fromCache ? 'inline' : 'none'}">refreshing…</span>
-        ${fam === 'postgresql' ? '<button class="btn btn-ghost" onclick="confirmHardenConnections()" data-tip="Postgres lets every user connect to every database by default. This takes CONNECT off PUBLIC so new users only reach what they are granted. Existing users that use a database keep access.">🔒 Lock down connections</button>' : ''}
+        ${fam === 'postgresql' ? `<button class="btn btn-ghost" onclick="confirmHardenConnections()" data-tip="Postgres lets every user connect to every database by default. This takes CONNECT off PUBLIC so new users only reach what they are granted. Existing users that use a database keep access.">${ICONS.shield} Lock down connections</button>` : ''}
         <button class="btn btn-success" onclick="openCreateUserModal()">${ICONS.plus} Create user</button>
       </div>
     </div>
@@ -398,6 +398,9 @@ async function viewUserInfoFor(username) {
   if (res.engine_family === 'mysql') { showPanel(userPanelMysql(res, uAttr)); return; }
   // Mongo and Postgres share a header + a management toolbar; only the middle differs.
   showPanel(userPanelSql(res, uAttr, currentEngine.startsWith('document')));
+  // Fill the Postgres access table's per-db privileges in after render. No-ops
+  // when there are no lazy cells (e.g. Mongo), so no engine check is needed.
+  loadAccessPrivs(res.user);
 }
 
 // The card open + "User: <name>" heading every engine's panel starts with.
@@ -495,30 +498,73 @@ function userPanelSql(res, uAttr, isDocdb) {
     if (res.createdb) flags.push('createdb');
     if (res.createrole) flags.push('createrole');
     html += `<p style="margin-bottom:8px">${status} &nbsp; Flags: ${flags.join(', ') || 'none'} &nbsp; Expires: ${esc(res.valid_until)} &nbsp; Conn limit: ${esc(res.conn_limit)}</p>`;
-    const granted = (res.db_privileges || []).filter(d => d.privileges && d.privileges.length);
-    if (granted.length) {
-      let dbRows = '';
-      for (const d of granted) {
-        const btns = d.privileges.map(p => `<button class="btn btn-ghost btn-sm" data-user="${uAttr}" data-priv="${esc(p)}" data-db="${esc(d.database)}"
-          onclick="revokePgDbPriv(this.dataset.user, this.dataset.priv, this.dataset.db)">Revoke ${esc(p)}</button>`).join(' ');
-        dbRows += `<tr><td class="mono">${esc(d.database)}</td><td>${d.privileges.map(esc).join(', ')}</td><td style="text-align:right">${btns}</td></tr>`;
+    // One "Access" table covering everything this user can reach, with HOW they
+    // got it, because "which databases can they touch and why" is the whole point
+    // of this screen. Merge the three sources the server reports:
+    //   explicit grants (revocable here) · owner (full, inherent) · PUBLIC default
+    const explicit = {};
+    for (const d of (res.db_privileges || [])) {
+      if (d.privileges && d.privileges.length) explicit[d.database] = d.privileges.slice();
+    }
+    const owned = new Set(res.owned_databases || []);
+    const pub = new Set(res.public_connect || []);
+    const allDbs = [...new Set([...Object.keys(explicit), ...owned, ...pub])].sort();
+    if (allDbs.length) {
+      let g = 0, o = 0, p = 0, rows = '';
+      for (const db of allDbs) {
+        let source, isOwner = false;
+        if (owned.has(db)) { o++; source = '<span class="pill pill-warn">owner</span>'; isOwner = true; }
+        else if (explicit[db]) { g++; source = '<span class="pill pill-ok">granted</span>'; }
+        else { p++; source = '<span class="pill">via PUBLIC</span>'; }
+        // + / - actions per row: add or remove privileges on this db (a scoped
+        // modal shows exactly what's grantable / revocable). Owners have it all,
+        // so no actions there.
+        // Row actions: + add · − remove specific · × remove ALL access to this db.
+        const acts = isOwner ? '' :
+          `<button class="ibtn success" data-tip="Grant privileges on ${esc(db)}" data-user="${uAttr}" data-db="${esc(db)}"
+             onclick="openDbAccessModal(this.dataset.user, this.dataset.db, 'grant')">${ICONS.plus}</button>
+           <button class="ibtn warn" data-tip="Revoke specific privileges" data-user="${uAttr}" data-db="${esc(db)}"
+             onclick="openDbAccessModal(this.dataset.user, this.dataset.db, 'revoke')">${ICONS.minus}</button>
+           <button class="ibtn danger" data-tip="Remove ALL access to ${esc(db)}" data-user="${uAttr}" data-db="${esc(db)}"
+             onclick="openRemoveAllDb(this.dataset.user, this.dataset.db)">${ICONS.close}</button>`;
+        // Show the db-level access instantly (we already have it); the table-level
+        // privileges live inside each database, so they're refined in afterwards.
+        let privCell;
+        if (isOwner) privCell = '<span class="ap-all">all privileges</span>';
+        else {
+          const instant = explicit[db] ? explicit[db].join(', ') : 'connect only';
+          privCell = `<span class="ap-list">${esc(instant)}</span><span class="ap-more"> …</span>`;
+        }
+        rows += `<tr data-db="${esc(db.toLowerCase())}"><td class="mono">${esc(db)}</td>` +
+          `<td class="access-privs" data-dbname="${esc(db)}"${isOwner ? '' : ' data-refine="1"'}>${privCell}</td>` +
+          `<td>${source}</td><td class="access-acts">${acts}</td></tr>`;
       }
-      html += `<h2 style="margin-top:16px">Database Privileges <span style="font-weight:400; font-size:12px; color:var(--text-muted)">(granted directly to this user)</span></h2>
-        <div class="table-wrap"><table><thead><tr><th>Database</th><th>Privileges</th><th></th></tr></thead><tbody>${dbRows}</tbody></table></div>`;
-    }
-    // PUBLIC access is real but not a per-user grant: no revoke button here would
-    // work (you'd have to lock down the database). Say so plainly instead of
-    // showing fake CONNECT-everywhere rows with dead buttons.
-    const pub = res.public_connect || [];
-    if (pub.length) {
-      html += `<div class="ctx-line" style="margin-top:12px; color:var(--text-muted); font-size:12.5px">
-        Can also connect to <strong>${pub.length}</strong> database(s) via Postgres's PUBLIC default
-        (${pub.slice(0, 6).map(esc).join(', ')}${pub.length > 6 ? '…' : ''}). That's not a grant on this user;
-        use <strong>Lock down connections</strong> to make access explicit.</div>`;
-    }
-    if ((res.owned_databases || []).length) {
-      html += `<div class="ctx-line" style="margin-top:8px; color:var(--text-muted); font-size:12.5px">
-        Owns database(s): ${res.owned_databases.map(esc).join(', ')} (owners always have full access).</div>`;
+      const parts = [];
+      if (g) parts.push(`${g} granted`);
+      if (o) parts.push(`${o} owned`);
+      if (p) parts.push(`${p} via PUBLIC`);
+      html += `<div class="access-head">
+        <h2 style="margin:16px 0 0">Database Access
+          <span style="font-weight:400; font-size:12px; color:var(--text-muted)">reaches ${allDbs.length} database(s): ${parts.join(', ')}</span></h2>
+        <button class="btn btn-ghost btn-sm" data-user="${uAttr}" onclick="promptGrantOnDb(this.dataset.user)">${ICONS.plus} Add a database</button>
+      </div>`;
+      if (p) {
+        html += `<div class="ctx-line" style="margin:6px 0 8px; color:var(--text-muted); font-size:12px">
+          "via PUBLIC" is Postgres's default that lets every account connect. It's not a grant on this user;
+          <strong>Lock down connections</strong> removes it so access becomes explicit.</div>`;
+      }
+      const searchBox = allDbs.length > 8
+        ? `<input class="db-access-search" placeholder="filter databases…" oninput="filterDbAccess(this.value)">`
+        : '';
+      html += `${searchBox}
+        <div class="table-wrap db-access-scroll"><table>
+        <thead><tr><th>Database</th><th>Privileges</th><th>Access</th><th style="text-align:right">Add / Remove</th></tr></thead>
+        <tbody id="dbAccessRows">${rows}</tbody></table>
+        <div id="dbAccessEmpty" class="db-access-empty" style="display:none">no databases match</div></div>`;
+    } else {
+      html += `<div class="access-head"><h2 style="margin:16px 0 0">Database Access
+          <span style="font-weight:400; font-size:12px; color:var(--text-muted)">reaches no databases</span></h2>
+        <button class="btn btn-ghost btn-sm" data-user="${uAttr}" onclick="promptGrantOnDb(this.dataset.user)">${ICONS.plus} Add a database</button></div>`;
     }
     if (res.grants && res.grants.length) {
       let gRows = '';
@@ -528,28 +574,169 @@ function userPanelSql(res, uAttr, isDocdb) {
       html += `<h2 style="margin-top:16px">Table Grants</h2>
         <div class="table-wrap"><table><thead><tr><th>Database</th><th>Table</th><th>Privilege</th></tr></thead><tbody>${gRows}</tbody></table></div>`;
     }
-    const privOpts = (config.pg_privileges || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
-    html += `<h2 style="margin-top:20px">${ICONS.shield} Grant a Privilege</h2>
-      <div class="form-row" style="margin-bottom:0">
-        <div class="form-field"><label>Privilege</label><select id="uiGrantPriv">${privOpts}</select></div>
-        <div class="form-field"><label>Database</label><input id="uiGrantDb" list="dbList" placeholder="type to search databases…"></div>
-        <div class="form-field"><label>Schema</label><input id="uiGrantSchema" placeholder="all schemas (leave blank)"></div>
-        <button class="btn btn-success" data-user="${uAttr}" onclick="grantPgPrivDirect(this.dataset.user)">Grant</button>
-      </div>`;
   }
   const pgButtons = isDocdb ? '' : (res.can_login
-    ? `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, false)">🔒 Disable login</button>`
-    : `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, true)">🔓 Enable login</button>`);
+    ? `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, false)">${ICONS.lock} Disable login</button>`
+    : `<button class="btn btn-ghost" data-user="${uAttr}" onclick="toggleLoginDirect(this.dataset.user, true)">${ICONS.unlock} Enable login</button>`);
   const revokeAllBtn = isDocdb ? '' :
-    `<button class="btn btn-ghost" data-user="${uAttr}" onclick="confirmRevokeAll(this.dataset.user)">⊘ Revoke all access</button>`;
+    `<button class="btn btn-ghost" data-user="${uAttr}" onclick="confirmRevokeAll(this.dataset.user)">${ICONS.ban} Revoke all access</button>`;
   html += `<div class="user-toolbar">
-    <button class="btn btn-primary" data-user="${uAttr}" onclick="openResetModal(this.dataset.user)">🔑 Reset password</button>
-    <button class="btn btn-ghost" data-user="${uAttr}" onclick="openTestLoginModal(this.dataset.user, '')">✓ Test access</button>
+    <button class="btn btn-primary" data-user="${uAttr}" onclick="openResetModal(this.dataset.user)">${ICONS.key} Reset password</button>
+    <button class="btn btn-ghost" data-user="${uAttr}" onclick="openTestLoginModal(this.dataset.user, '')">${ICONS.check} Test access</button>
     ${pgButtons}
     ${revokeAllBtn}
-    <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">🗑️ Drop user</button>
+    <button class="btn btn-danger" data-user="${uAttr}" onclick="confirmDropUser(this.dataset.user)">${ICONS.trash} Drop user</button>
   </div>`;
   html += '</div>';
   return html;
+}
+
+// Filter the Database Access table by name, so you don't scroll a long list.
+function filterDbAccess(term) {
+  const t = (term || '').trim().toLowerCase();
+  let shown = 0;
+  document.querySelectorAll('#dbAccessRows tr').forEach(r => {
+    const match = !t || (r.dataset.db || '').includes(t);
+    r.style.display = match ? '' : 'none';
+    if (match) shown++;
+  });
+  const empty = document.getElementById('dbAccessEmpty');
+  if (empty) empty.style.display = shown ? 'none' : 'block';
+}
+
+// ── Per-database grant / revoke (the + and - on each access row) ──────────────
+const PRIV_GROUP = { SELECT: 'data', INSERT: 'data', UPDATE: 'data', DELETE: 'data',
+  'ALL PRIVILEGES': 'data', CONNECT: 'database', CREATE: 'database', USAGE: 'database' };
+const PRIV_ORDER = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'ALL PRIVILEGES', 'CONNECT', 'CREATE', 'USAGE'];
+
+// Per-db privileges shown in the access table are filled in after render: each db
+// needs its own lookup (table ACLs live inside each database), so blocking the
+// panel on 40+ of them would be slow. We fetch them throttled and cache per
+// (user, db) for the session. A short list of privileges shows in small text.
+const _apCache = new Map();
+// Format a db's privilege list for the access table (small text).
+function _apFmt(privs) {
+  if (!privs || !privs.length) return '<span class="ap-none">no access</span>';
+  const set = new Set(privs);
+  // "couldn't inspect" is not "connect only": say so plainly instead of implying no access.
+  if (set.has('UNREADABLE')) return '<span class="ap-none" title="This database name can\'t be inspected safely.">could not inspect</span>';
+  if (set.size === 1 && set.has('CONNECT')) return '<span class="ap-none">connect only</span>';
+  const drop = set.has('ALL PRIVILEGES') ? new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE']) : new Set();
+  const ordered = [...PRIV_ORDER.filter(p => set.has(p) && !drop.has(p)),
+    ...privs.filter(p => !PRIV_ORDER.includes(p) && !drop.has(p))];
+  return `<span class="ap-list">${ordered.map(esc).join(', ')}</span>`;
+}
+// One batched request resolves every database's privileges at once (the server's
+// access_map: two cluster queries, plus a lookup only for databases that actually
+// hold grants). Cached per user for the session.
+async function loadAccessPrivs(username) {
+  const cells = [...document.querySelectorAll('#dbAccessRows td.access-privs[data-refine]')];
+  if (!cells.length) return;
+  let map = _apCache.get(username);
+  if (!map) {
+    const res = await apiPost('/api/user-access-map', { username });
+    if (!res || res.error) { cells.forEach(td => { const m = td.querySelector('.ap-more'); if (m) m.remove(); td.removeAttribute('data-refine'); }); return; }
+    map = res.map || {};
+    _apCache.set(username, map);
+  }
+  cells.forEach(td => {
+    if (!td.isConnected) return;
+    const privs = map[td.dataset.dbname];
+    if (privs) td.innerHTML = _apFmt(privs);
+    else { const m = td.querySelector('.ap-more'); if (m) m.remove(); }
+    td.removeAttribute('data-refine');
+  });
+}
+
+// The × on a row: strip every privilege this user has on one database in one go.
+function openRemoveAllDb(username, db) {
+  showModal('Remove all access', `<p>Remove <strong>all</strong> of <strong>${esc(username)}</strong>'s access to
+      <strong class="mono">${esc(db)}</strong>? Every privilege they hold on this database is revoked.</p>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Remove all', cls: 'btn-danger', fn: () => runAction(`removeall:${username}:${db}`, `removing access to ${db}`, async () => {
+      const info = await apiPost('/api/user-db-privileges', { username, database: db });
+      if (info && info.error) { toast(info.error, 'error'); return; }
+      const held = (info && info.held) || [];
+      if (!held.length) { toast(`${username} has no access to remove on ${db}`, 'info'); viewUserInfoFor(username); return; }
+      const errs = [], notes = [];
+      for (const priv of held) {
+        const r = await apiPost('/api/revoke', { username, privilege: priv, database: db });
+        if (!r || r.error) errs.push(`${priv}: ${(r && r.error) || 'failed'}`);
+        else if (r.warning) notes.push(r.warning);
+      }
+      if (errs.length) showModal('Remove result', `<p>Some couldn't be removed:</p><ul style="margin:8px 0 0; padding-left:18px">${errs.map(e => `<li>${esc(e)}</li>`).join('')}</ul>${notes.length ? `<p style="margin-top:10px">${notes.map(esc).join('<br>')}</p>` : ''}`, [{ label: 'OK', cls: 'btn-primary' }]);
+      else if (notes.length) showModal('Remove result', `<p>${notes.map(esc).join('<br><br>')}</p>`, [{ label: 'OK', cls: 'btn-primary' }]);
+      else toast(`Removed all access to ${db} from ${username}`, 'success');
+      viewUserInfoFor(username);
+    }) },
+  ]);
+}
+
+// Ask for a database (any, even one not listed), then open the grant modal for it.
+function promptGrantOnDb(username) {
+  showModal('Add a database', `<div class="form-field" style="margin-bottom:0">
+      <label>Database</label>
+      <input id="addDbInput" list="dbList" placeholder="type to search databases…" autocomplete="off"></div>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Next', cls: 'btn-primary', fn: () => {
+      const db = (document.getElementById('addDbInput')?.value || '').trim();
+      if (!db) { toast('Database required', 'error'); return; }
+      openDbAccessModal(username, db, 'grant');
+    } },
+  ]);
+}
+
+// One modal for both directions. Grant lists what the user does NOT yet have on
+// the database; Revoke lists what they DO have. Pick one or more, apply together.
+async function openDbAccessModal(username, db, mode) {
+  const isRevoke = mode === 'revoke';
+  const res = await apiPost('/api/user-db-privileges', { username, database: db });
+  if (res && res.error) { toast(res.error, 'error'); return; }
+  const held = new Set((res && res.held) || []);
+  // Revoke only offers what was granted DIRECTLY to the user. What they hold via
+  // Postgres's PUBLIC default (CONNECT, USAGE on public) can't be revoked from one
+  // user, so it never appears here even though `held` counts it.
+  const explicit = new Set((res && res.explicit) || []);
+  const avail = new Set(config.pg_privileges || []);
+  const list = PRIV_ORDER.filter(p => avail.has(p) && (isRevoke ? explicit.has(p) : !held.has(p)));
+  if (!list.length) {
+    if (isRevoke) {
+      showModal(`Nothing to revoke on ${db}`, `
+        <p style="margin:0; color:var(--text-muted); font-size:13px; line-height:1.55">
+          <strong>${esc(username)}</strong> has no privileges granted directly on <strong class="mono">${esc(db)}</strong>.
+          Any access they have is Postgres's <strong>PUBLIC</strong> default, which you can't take away from a single user.
+          To cut them off from this database, use the <strong>×</strong> (remove all) action, which locks down connections here.</p>`,
+        [{ label: 'OK', cls: 'btn-primary' }]);
+    } else {
+      toast(`${username} already has every privilege on ${db}`, 'info');
+    }
+    return;
+  }
+  const rowsHtml = list.map(p => `<div class="msel-opt" data-priv="${esc(p)}" onclick="this.classList.toggle('sel')">
+      <span class="msel-box"></span><span class="msel-name">${esc(p)}</span><span class="msel-grp">${PRIV_GROUP[p] || ''}</span></div>`).join('');
+  const verb = isRevoke ? 'Revoke' : 'Grant';
+  const gerund = isRevoke ? 'revoking' : 'granting';
+  showModal(`${verb} on ${db}`, `
+      <p style="margin:0 0 10px; color:var(--text-muted); font-size:12.5px">
+        ${isRevoke ? 'Remove from' : 'Add for'} <strong>${esc(username)}</strong> on <strong class="mono">${esc(db)}</strong> — pick one or more.</p>
+      <div class="msel-opts modal-privs">${rowsHtml}</div>`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: `${verb} selected`, cls: isRevoke ? 'btn-danger' : 'btn-success', fn: () => {
+      const picked = [...document.querySelectorAll('.modal-privs .msel-opt.sel')].map(o => o.dataset.priv);
+      if (!picked.length) { toast('Pick at least one privilege', 'error'); return; }
+      runAction(`${mode}:${username}:${db}`, `${gerund} on ${db}`, async () => {
+        const errs = [], notes = [];
+        for (const priv of picked) {
+          const r = await apiPost(isRevoke ? '/api/revoke' : '/api/grant', { username, privilege: priv, database: db });
+          if (!r || r.error) errs.push(`${priv}: ${(r && r.error) || 'failed'}`);
+          else if (r.warning) notes.push(r.warning);
+        }
+        if (errs.length) showModal(`${verb} result`, `<p>Some couldn't be applied:</p><ul style="margin:8px 0 0; padding-left:18px">${errs.map(e => `<li>${esc(e)}</li>`).join('')}</ul>${notes.length ? `<p style="margin-top:10px">${notes.map(esc).join('<br>')}</p>` : ''}`, [{ label: 'OK', cls: 'btn-primary' }]);
+        else if (notes.length) showModal(`${verb} result`, `<p>${notes.map(esc).join('<br><br>')}</p>`, [{ label: 'OK', cls: 'btn-primary' }]);
+        else toast(`${isRevoke ? 'Revoked' : 'Granted'} ${picked.join(', ')} on ${db}`, 'success');
+        viewUserInfoFor(username);
+      });
+    } },
+  ]);
 }
 

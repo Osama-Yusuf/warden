@@ -264,6 +264,43 @@ def api_list_users(body):
         return {"error": str(e)}
 
 
+def api_user_access_map(body):
+    """{database: [privileges]} for every database a user can reach, in one call,
+    for the access list. Postgres only; read-only."""
+    adapter, err = _adapter_for(body)
+    if err:
+        return {"error": err}
+    name = _named_user(body)
+    if not hasattr(adapter, "access_map"):
+        return {"map": {}}
+    try:
+        return {"map": adapter.access_map(name)}
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
+
+
+def api_user_db_privileges(body):
+    """A user's privileges on a database (read-only). `held` is what they
+    effectively have, PUBLIC and role membership included, so the grant form can
+    offer only what's missing. `explicit` is the narrower set granted directly to
+    the user, which is what the revoke form offers, since revoking a PUBLIC default
+    from one user does nothing. Postgres only."""
+    adapter, err = _adapter_for(body)
+    if err:
+        return {"error": err}
+    name = _named_user(body)
+    database = body.get("database", "")
+    if not database or not hasattr(adapter, "effective_db_privileges"):
+        return {"held": [], "explicit": []}
+    try:
+        held = adapter.effective_db_privileges(name, database, body.get("schema") or None)
+        explicit = (adapter.explicit_db_privileges(name, database)
+                    if hasattr(adapter, "explicit_db_privileges") else [])
+    except (EngineError, ValueError) as e:
+        return {"error": str(e)}
+    return {"held": held, "explicit": explicit}
+
+
 def api_user_info(body):
     adapter, err = _adapter_for(body)
     if err:
@@ -1554,13 +1591,13 @@ def api_ai_chat(body):
 
 
 REQUIRES_CREDS = {
-    "/api/connect", "/api/list-users", "/api/user-info",
+    "/api/connect", "/api/list-users", "/api/user-info", "/api/user-db-privileges", "/api/user-access-map",
     "/api/create-user", "/api/reset-password", "/api/grant",
     "/api/revoke", "/api/revoke-all", "/api/harden-connections", "/api/drop-user", "/api/toggle-login",
     "/api/list-databases", "/api/list-collections", "/api/create-collection", "/api/create-database", "/api/browse-data",
     "/api/resolve-match",
     "/api/table-meta", "/api/object-stats", "/api/row-insert", "/api/row-update", "/api/row-delete",
-    "/api/query", "/api/query-stream",
+    "/api/query",
     "/api/audit-run", "/api/health",
     "/api/ai/execute", "/api/ai/resume",
 }
@@ -1571,6 +1608,8 @@ ROUTES = {
     "/api/test-login": api_test_login,
     "/api/list-users": api_list_users,
     "/api/user-info": api_user_info,
+    "/api/user-db-privileges": api_user_db_privileges,
+    "/api/user-access-map": api_user_access_map,
     "/api/create-user": api_create_user,
     "/api/reset-password": api_reset_password,
     "/api/grant": api_grant,
@@ -1705,7 +1744,7 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             return
         handler = ROUTES.get(path)
-        if not handler and path != "/api/query-stream":
+        if not handler:
             self.send_error(404)
             return
         try:
@@ -1728,12 +1767,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
         if body.get("read_only") and path in RO_BLOCKED_ROUTES:
             self._json_response({"error": "Read-only mode is on. Turn it off in the top bar to make changes."}, 403)
-            return
-        if path == "/api/query-stream":
-            try:
-                self._query_stream(body)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
             return
         try:
             result = handler(body)
@@ -1789,87 +1822,10 @@ class Handler(BaseHTTPRequestHandler):
         audit("local", "sqlite", "UPLOAD", str(dest))
         self._json_response({"ok": True, "path": str(dest), "name": dest.name})
 
-    def _query_stream(self, body):
-        """Live mode: raw engine output streamed to the browser as it arrives."""
-        cfg, err = get_config(body)
-        if err:
-            self._json_response({"error": err}, 400)
-            return
-        query = body.get("query")
-        if not isinstance(query, str) or not query.strip():
-            self._json_response({"error": "Query is required"}, 400)
-            return
-        query = query.strip()[:MAX_QUERY_LEN]
-        engine = body.get("engine", "documentdb")
-        env = body.get("env", "custom")
-        if body.get("read_only"):
-            violation = read_only_violation(engine, query)
-            if violation:
-                self._json_response({"error": violation}, 403)
-                return
-        database = body.get("database") or ""
-        if database:
-            try:
-                database = validate_ident(database, "database")
-            except ValueError as e:
-                self._json_response({"error": str(e)}, 400)
-                return
-
-        proc_env = None
-        fam = engine_family(engine)
-        if fam == "documentdb":
-            db = database or "admin"
-            args = docdb_args(cfg, body["admin_user"], body["admin_pass"], db) + ["--eval", query]
-            engine_name = "documentdb"
-        elif fam == "mysql":
-            db = database or cfg.get("default_db") or ""
-            args = ["mysql", "-h", cfg["host"], "-P", str(cfg["port"]), "-u", body["admin_user"],
-                    "--protocol=TCP", "-t", "-e", query] + (["-D", db] if db else [])
-            proc_env = os.environ.copy()
-            proc_env["MYSQL_PWD"] = body["admin_pass"]
-            engine_name = "mysql"
-        elif fam == "sqlite":
-            db = Path(cfg["path"]).name
-            args = ["sqlite3", "-batch", "-column", "-header", str(cfg["path"]), query]
-            engine_name = "sqlite"
-        else:
-            db = database or cfg.get("default_db", "postgres")
-            args = ["psql", "-h", cfg["host"], "-p", str(cfg["port"]),
-                    "-U", body["admin_user"], "-d", db, "--no-psqlrc", "-c", query]
-            proc_env = os.environ.copy()
-            proc_env["PGPASSWORD"] = body["admin_pass"]
-            engine_name = "postgresql"
-        audit(env, engine_name, "QUERY", f"db={db} [live] :: {query[:300]}")
-
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.close_connection = True
-        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                env=proc_env, bufsize=0)
-        deadline = time.time() + 300
-        try:
-            while True:
-                chunk = proc.stdout.read(1024)
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-                self.wfile.flush()
-                if time.time() > deadline:
-                    proc.kill()
-                    self.wfile.write(b"\n[warden] stream timed out after 300s\n")
-                    break
-            proc.wait(timeout=10)
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-
-
 def create_server(host=DEFAULT_HOST, port=DEFAULT_PORT):
     if not INDEX_HTML.exists():
         print(f"Warning: {INDEX_HTML} not found, the web UI won't load.")
-    # Threaded so a long-running or streamed query doesn't block the UI.
+    # Threaded so a long-running query doesn't block the UI.
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True
     server.warden_bind_host = host   # used to reject cross-origin / DNS-rebound requests

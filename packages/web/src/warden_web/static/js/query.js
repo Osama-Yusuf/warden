@@ -32,7 +32,6 @@ function viewQuery() {
       <button class="btn btn-primary" onclick="runQueryConfirm()">Run</button>
       <button class="btn btn-ghost" onclick="runDryRun()" data-tip="Run inside a transaction and roll back: see exactly what it would change, without changing anything">Dry run</button>
       <button class="btn btn-ghost" onclick="runExplain()" data-tip="Show the execution plan without modifying anything">Explain</button>
-      <label class="chk" data-tip="Power mode: stream the engine's raw output live as it arrives, instead of the formatted table."><input type="checkbox" id="qLive"> live output</label>
       <span id="qTiming" style="font-family:var(--mono-font); font-size:11px; color:var(--text-muted)"></span>
     </div>
     <div id="qResults" style="margin-top:14px"></div>
@@ -42,9 +41,6 @@ function viewQuery() {
   t.addEventListener('input', () => { qSyncUseDb(); qExplainUpdate(); });
   t.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); runQueryConfirm(); } });
   document.getElementById('qDb').addEventListener('input', qExplainUpdate);
-  const live = document.getElementById('qLive');
-  live.checked = !!prefs.qLive;
-  live.addEventListener('change', () => savePrefs({ qLive: live.checked }));
   qExplainUpdate();
   _qHistFilter = '';
   renderQueryHistory();
@@ -616,8 +612,6 @@ function runQueryConfirm() {
 }
 
 async function executeQuery(query, database, opts = {}) {
-  // A dry run never streams: it needs the full rolled-back result to summarize.
-  if (!opts.dryRun && document.getElementById('qLive')?.checked) return streamQuery(query, database);
   const box = document.getElementById('qResults');
   if (box) box.innerHTML = loadingInline(opts.dryRun ? 'Dry running (will roll back)…' : 'Running…');
   const t0 = performance.now();
@@ -630,41 +624,6 @@ async function executeQuery(query, database, opts = {}) {
   pushQueryHistory(query);
   renderQueryHistory();
   renderQueryResults(res);
-}
-
-async function streamQuery(query, database) {
-  const box = document.getElementById('qResults');
-  if (!box) return;
-  box.innerHTML = `<p class="card-meta" style="margin-bottom:6px">Live output, raw engine stream</p><pre class="result-pre" id="qLivePre"></pre>`;
-  const pre = document.getElementById('qLivePre');
-  const t0 = performance.now();
-  pushQueryHistory(query);
-  renderQueryHistory();
-  try {
-    const resp = await fetch(API + '/api/query-stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...creds(), query, database }),
-    });
-    if ((resp.headers.get('content-type') || '').includes('json')) {
-      const err = await resp.json();
-      box.innerHTML = `<div class="explain-box explain-danger"><div class="explain-text"><b>Failed:</b> ${esc(err.error || 'Unknown error')}</div></div>`;
-      return;
-    }
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      pre.textContent += dec.decode(value, { stream: true });
-      pre.scrollTop = pre.scrollHeight;
-    }
-    if (!pre.textContent.trim()) pre.textContent = '(no output, statement executed)';
-  } catch (e) {
-    pre.textContent += '\n[stream interrupted: ' + e.message + ']';
-  }
-  const timing = document.getElementById('qTiming');
-  if (timing) timing.textContent = `${Math.round(performance.now() - t0)} ms · live stream`;
 }
 
 function jsonCell(v) {

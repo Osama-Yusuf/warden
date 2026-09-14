@@ -59,6 +59,9 @@ const ICONS = {
   copy: I('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h8"/>'),
   pencil: I('<path d="M4 20l1-4L16 5a2 2 0 012.8 2.8L8 18.7z"/><path d="M14.5 6.5l3 3"/>'),
   chevron: I('<path d="M9 6l6 6-6 6"/>'),
+  caret: I('<path d="M6 9l6 6 6-6"/>'),
+  check: I('<path d="M5 12.5l4.5 4.5L19 7"/>'),
+  minus: I('<path d="M5 12h14"/>'),
 };
 
 const TB_SVG = {
