@@ -363,9 +363,13 @@ def object_stats(config, admin_user, admin_pass, db, schema, table):
                 total, estimated = _pg_total(cur, conn, rel, schema, table)
                 cur.execute("SELECT pg_total_relation_size(to_regclass(%s))", (regname,))
                 size = int((cur.fetchone() or [0])[0] or 0)
-                cur.execute("SELECT count(*) FROM information_schema.columns WHERE table_schema=%s AND table_name=%s",
-                            (schema, table))
-                ncols = int(cur.fetchone()[0])
+                # pg_attribute, not information_schema.columns: the latter is a
+                # permission-filtered view that returns 0 columns for a table the
+                # current user can't read, which showed "COLUMNS 0" on tables the
+                # admin can see but not SELECT. The catalog gives the real count.
+                cur.execute("SELECT count(*) FROM pg_attribute WHERE attrelid = to_regclass(%s) "
+                            "AND attnum > 0 AND NOT attisdropped", (regname,))
+                ncols = int((cur.fetchone() or [0])[0] or 0)
                 cur.execute("SELECT count(*) FROM pg_index WHERE indrelid = to_regclass(%s)", (regname,))
                 nidx = int(cur.fetchone()[0])
         return {"rows": total, "estimated": estimated, "size_bytes": size,

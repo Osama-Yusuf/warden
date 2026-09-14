@@ -140,21 +140,25 @@ input[type="password"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe 
 }
 .chk input { accent-color: var(--accent-bg); width: 13px; height: 13px; cursor: pointer; }
 .btn {
-  padding: 0 14px; height: 32px; border-radius: var(--radius); font-size: 13px;
-  font-weight: 500; cursor: pointer; border: 1px solid transparent;
-  font-family: inherit; transition: background 0.15s, transform 0.05s, opacity 0.15s;
-  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 15px; height: 36px; border-radius: 9px; font-size: 13px;
+  font-weight: 550; letter-spacing: .01em; cursor: pointer; border: 1px solid transparent;
+  font-family: inherit; white-space: nowrap;
+  transition: background .15s, border-color .15s, box-shadow .15s, transform .08s, color .15s;
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
 }
 .btn:active { transform: translateY(1px); }
-.btn-primary { background: var(--accent-bg); color: #fff; }
-.btn-primary:hover { background: var(--accent-hover); }
-.btn-success { background: var(--success-bg); color: #fff; }
-.btn-success:hover { opacity: 0.92; }
-.btn-danger { background: var(--danger-bg); color: #fff; }
-.btn-danger:hover { opacity: 0.9; }
-.btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
-.btn-ghost:hover { background: var(--surface-hover); border-color: var(--border-strong); }
-.btn-sm { height: 26px; padding: 0 10px; font-size: 12px; }
+.btn .ni { width: 15px; height: 15px; opacity: .92; }
+.btn-primary { background: var(--accent-bg); color: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.28); }
+.btn-primary:hover { background: var(--accent-hover); box-shadow: 0 3px 11px -3px color-mix(in srgb, var(--accent-bg) 65%, transparent); }
+.btn-success { background: var(--success-bg); color: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.28); }
+.btn-success:hover { background: color-mix(in srgb, var(--success-bg) 86%, #fff); box-shadow: 0 3px 11px -3px color-mix(in srgb, var(--success-bg) 58%, transparent); }
+.btn-danger { background: var(--danger-bg); color: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.28); }
+.btn-danger:hover { background: color-mix(in srgb, var(--danger-bg) 86%, #fff); box-shadow: 0 3px 11px -3px color-mix(in srgb, var(--danger-bg) 58%, transparent); }
+.btn-ghost { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+.btn-ghost:hover { background: var(--surface-hover); border-color: var(--border-strong); color: var(--text-strong); }
+.btn-ghost .ni { color: var(--text-muted); }
+.btn-ghost:hover .ni { color: var(--text); }
+.btn-sm { height: 28px; padding: 0 11px; font-size: 12px; border-radius: 7px; }
 .conn {
   display: flex; align-items: center; gap: 8px; height: 34px;
   padding: 0 12px; border-radius: 17px;
@@ -443,6 +447,69 @@ tbody tr.urow { cursor: pointer; }
   box-shadow: var(--shadow); animation: pop 0.16s ease;
 }
 .modal-wide { max-width: 780px; max-height: 86vh; overflow-y: auto; position: relative; padding: 24px 26px; }
+/* User panel: keep the database-access list to its own modest scroll region so it
+   doesn't push the whole modal into a scroll. */
+.db-access-scroll { max-height: 260px; overflow: auto; overscroll-behavior: contain; }
+.db-access-search { width: 100%; margin: 4px 0 8px; padding: 7px 10px; font-size: 13px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); }
+.db-access-search:focus { outline: none; border-color: var(--accent); }
+.db-access-empty { padding: 14px; text-align: center; color: var(--text-muted); font-size: 12.5px; }
+.access-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.access-acts { text-align: right; white-space: nowrap; }
+.access-acts .ibtn { margin-left: 2px; }
+.modal-privs { max-height: 320px; margin-top: 2px; }
+.access-privs { max-width: 300px; }
+.ap-list { font-family: var(--mono-font); font-size: 10.5px; color: var(--text); line-height: 1.45; }
+.ap-load { color: var(--text-muted); opacity: .55; }
+.ap-more { color: var(--text-muted); opacity: .5; font-size: 11px; }
+.ap-none { font-size: 11px; color: var(--text-muted); font-style: italic; }
+.ap-all { font-size: 11px; color: var(--warning); }
+
+/* Grant-privileges block: DB + schema on top, privileges as toggle chips grouped
+   by what they act on (data vs the database itself), Grant as the final action. */
+.grant-box { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
+.grant-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+.grant-lbl { display: flex; flex-direction: column; gap: 5px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); }
+.grant-lbl input { text-transform: none; letter-spacing: normal; font-weight: 400; font-family: var(--sans);
+  margin-top: 2px; padding: 9px 11px; font-size: 13px; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); }
+.grant-lbl input:hover { border-color: var(--border-strong); }
+.grant-lbl input:focus { outline: none; border-color: var(--accent); }
+.grant-lbl-hint { text-transform: none; letter-spacing: normal; font-weight: 400; color: var(--text-muted); opacity: .75; }
+.grant-privs-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.grant-lbl-txt { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); }
+.grant-hint { font-size: 12px; color: var(--accent); }
+/* Searchable multi-select for privileges (the dropdown + Grant button on one row) */
+.grant-row2 { display: flex; align-items: flex-start; gap: 10px; }
+.msel { position: relative; flex: 1; max-width: 440px; }
+.msel-toggle { width: 100%; height: 38px; padding: 0 10px 0 13px; display: flex; align-items: center;
+  justify-content: space-between; gap: 8px; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text); cursor: pointer; font-size: 13px; transition: border-color .12s; }
+.msel-toggle:hover { border-color: var(--border-strong); }
+.msel.open .msel-toggle { border-color: var(--accent); }
+.msel-toggle .ni { width: 16px; height: 16px; color: var(--text-muted); transition: transform .15s; }
+.msel.open .msel-toggle .ni { transform: rotate(180deg); }
+.msel-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msel-summary.placeholder { color: var(--text-muted); }
+.msel-menu { position: absolute; top: calc(100% + 5px); left: 0; right: 0; z-index: 40; padding: 6px;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: var(--shadow); }
+.msel-search { width: 100%; height: 32px; padding: 0 10px; margin-bottom: 5px; font-size: 12.5px; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; }
+.msel-search:focus { outline: none; border-color: var(--accent); }
+.msel-opts { max-height: 232px; overflow: auto; display: flex; flex-direction: column; gap: 1px; }
+.msel-opt { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 6px; cursor: pointer; }
+.msel-opt:hover { background: var(--surface-hover); }
+.msel-box { width: 16px; height: 16px; flex: none; border: 1.5px solid var(--border-strong); border-radius: 5px;
+  display: flex; align-items: center; justify-content: center; transition: background .12s, border-color .12s; }
+.msel-opt.sel .msel-box { background: var(--accent-bg); border-color: var(--accent-bg); }
+.msel-opt.sel .msel-box::after { content: ""; width: 4px; height: 8px; margin-top: -2px;
+  border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.msel-name { flex: 1; font-family: var(--mono-font); font-size: 12px; color: var(--text); }
+.msel-grp { font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-muted); }
+.msel-opt.held { opacity: .5; cursor: not-allowed; }
+.msel-opt.held:hover { background: transparent; }
+.msel-opt.held .msel-grp::before { content: "has · "; color: var(--success); }
 .modal-x {
   position: absolute; top: 14px; right: 16px; width: 30px; height: 30px;
   border: none; background: transparent; color: var(--text-muted);
@@ -931,7 +998,44 @@ table.dgrid tbody tr:hover .dg-actwrap {
 .ai-send svg { width: 18px; height: 18px; fill: #fff; }
 
 /* Assistant settings page */
-.ai-toggle { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }
+/* Ward landing: hero + capability cards + safety note */
+.ward-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  max-width: 640px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; padding: 20px 22px; margin-bottom: 14px; }
+.ward-hero-main { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.ward-badge { flex: none; width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center;
+  background: var(--accent-soft); border: 1px solid var(--border); }
+.ward-badge svg { width: 24px; height: 24px; fill: var(--accent); }
+.ward-hero-txt { min-width: 0; }
+.ward-hero-txt h2 { margin: 0 0 3px; font-size: 20px; color: var(--text-strong); }
+.ward-hero-txt p { margin: 0; font-size: 13px; color: var(--text-muted); line-height: 1.5; max-width: 46ch; }
+
+/* toggle switch (reusable) */
+.switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; flex: none; user-select: none; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch-track { position: relative; width: 42px; height: 24px; border-radius: 999px;
+  background: var(--surface-hover); border: 1px solid var(--border-strong); transition: background .16s, border-color .16s; }
+.switch-thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--text-muted); transition: transform .16s, background .16s; }
+.switch input:checked + .switch-track { background: var(--accent-bg); border-color: var(--accent-bg); }
+.switch input:checked + .switch-track .switch-thumb { transform: translateX(18px); background: #fff; }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch-label { font-weight: 600; font-size: 13px; color: var(--text); min-width: 22px; }
+
+.ward-caps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-width: 640px; margin-bottom: 14px; }
+.ward-cap { display: flex; gap: 11px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 14px 15px; }
+.ward-cap-i { flex: none; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+  background: var(--surface-2); color: var(--accent); }
+.ward-cap-i svg { width: 16px; height: 16px; }
+.ward-cap b { display: block; font-size: 13px; color: var(--text-strong); margin-bottom: 2px; }
+.ward-cap span { font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+.ward-note { display: flex; align-items: flex-start; gap: 9px; max-width: 640px; margin-bottom: 22px;
+  font-size: 12.5px; color: var(--text-muted); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 11px 14px; }
+.ward-note svg { width: 16px; height: 16px; flex: none; margin-top: 1px; color: var(--success); }
+@media (max-width: 720px) { .ward-caps { grid-template-columns: 1fr; } .ward-hero { flex-direction: column; align-items: flex-start; } }
+
 .ai-card { max-width: 620px; }
 .ai-card h3 { margin: 0 0 14px; }
 .ai-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 15px; }
@@ -946,7 +1050,6 @@ table.dgrid tbody tr:hover .dg-actwrap {
 
 /* Ward settings: provider picker + local model tiers */
 #aiConfig { max-width: 640px; }
-.ai-lore { max-width: 62ch; margin-bottom: 20px; }
 .ai-providers { display: flex; gap: 12px; margin-bottom: 16px; }
 .ai-prov { flex: 1; text-align: left; display: flex; flex-direction: column; gap: 5px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; cursor: pointer; font: inherit; }
 .ai-prov:hover { border-color: var(--border-strong); }

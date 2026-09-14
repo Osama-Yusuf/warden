@@ -553,3 +553,47 @@ def test_pg_console_native_no_psql():
             assert "psql" in err.lower(), err
     finally:
         ex('DROP DATABASE IF EXISTS "wt_con" WITH (FORCE)')
+
+
+def test_pg_object_stats_columns_without_select():
+    """Column count must come from the catalog, not the permission-filtered
+    information_schema.columns view, so a table the admin can see but can't SELECT
+    still reports its real column count instead of COLUMNS 0."""
+    ok, cfg = _pg_reachable()
+    if not ok:
+        pytest.skip("postgres not reachable")
+    import warden_core.pg_native as pn
+    if not pn.available():
+        pytest.skip("native driver not available")
+    from warden_core.adapters.base import Target
+    from warden_core.adapters.postgres import PostgresAdapter
+    from warden_core.pg import pg_exec
+    su = (os.environ.get("WARDEN_TEST_PG_USER", "admin"),
+          os.environ.get("WARDEN_TEST_PG_PASS", "adminpass"))
+
+    def ex(sql, db="postgres", u=su[0], p=su[1]):
+        return pg_exec(cfg, u, p, sql, db=db)
+
+    ex('DROP DATABASE IF EXISTS "wt_stat" WITH (FORCE)')
+    for r in ("wt_stat_admin", "wt_stat_owner"):
+        ex(f"DROP OWNED BY {r} CASCADE")
+        ex(f"DROP ROLE IF EXISTS {r}")
+    try:
+        ex("CREATE ROLE wt_stat_admin LOGIN PASSWORD 'p' CREATEROLE CREATEDB")
+        ex("CREATE ROLE wt_stat_owner LOGIN PASSWORD 'p'")
+        ex('CREATE DATABASE "wt_stat" OWNER wt_stat_owner')
+        ex("CREATE TABLE secret (id int, a text, b text, c text)", db="wt_stat", u="wt_stat_owner", p="p")
+        ex('GRANT CONNECT ON DATABASE "wt_stat" TO wt_stat_admin')
+        pn.close_all()
+        # admin genuinely cannot read the table
+        can, _, _ = pg_exec(cfg, "wt_stat_admin", "p", "SELECT 1 FROM secret", db="wt_stat")
+        assert not can, "test setup: admin unexpectedly can SELECT the table"
+        w = PostgresAdapter(cfg, admin_user="wt_stat_admin", admin_pass="p")
+        stats = w.object_stats(Target(database="wt_stat", name="secret", schema="public"))
+        assert stats.get("columns") == 4, f"expected 4 columns from catalog, got {stats.get('columns')}"
+    finally:
+        pn.close_all()
+        ex('DROP DATABASE IF EXISTS "wt_stat" WITH (FORCE)')
+        for r in ("wt_stat_admin", "wt_stat_owner"):
+            ex(f"DROP OWNED BY {r} CASCADE")
+            ex(f"DROP ROLE IF EXISTS {r}")

@@ -437,6 +437,137 @@ class PostgresAdapter(EngineAdapter):
             f"AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {pg_literal(name)})")
         return [l.strip() for l in out.strip().split("\n") if l.strip()] if code == 0 else []
 
+    def effective_db_privileges(self, name, database, schema=None):
+        """Which grantable privileges `name` ALREADY effectively holds on this
+        database (and schema), so the grant form can offer only what's missing.
+        A table privilege counts as held only when the user has it on every table
+        in the target schema(s) - granting it again would then be a no-op. Uses
+        has_*_privilege, which sees access via PUBLIC and role membership too."""
+        database = validate_ident(database, "database")
+        lit = pg_literal(name)
+        held = set()
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            f"SELECT has_database_privilege({lit}, {pg_literal(database)}, 'CONNECT'), "
+            f"has_database_privilege({lit}, {pg_literal(database)}, 'CREATE')")
+        p = out.strip().split("\t")
+        if len(p) >= 2:
+            if p[0] == "t": held.add("CONNECT")
+            if p[1] == "t": held.add("CREATE")
+        schemas = self._target_schemas(schema, database)
+        # USAGE: held only if held on every target schema.
+        usage_all = bool(schemas)
+        for s in schemas:
+            c, o, _ = pg_query(self.cfg, self.user, self.pwd,
+                f"SELECT has_schema_privilege({lit}, {pg_literal(s)}, 'USAGE')", db=database)
+            if not (c == 0 and o.strip() == "t"):
+                usage_all = False
+                break
+        if usage_all:
+            held.add("USAGE")
+        # Table privileges: held only if held on all tables across target schemas.
+        for tp in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+            total = missing = 0
+            for s in schemas:
+                c, o, _ = pg_query(self.cfg, self.user, self.pwd,
+                    "SELECT count(*), count(*) FILTER (WHERE NOT has_table_privilege("
+                    f"{lit}, format('%I.%I', schemaname, tablename), {pg_literal(tp)})) "
+                    f"FROM pg_tables WHERE schemaname = {pg_literal(s)}", db=database)
+                pp = o.strip().split("\t")
+                if c == 0 and len(pp) >= 2:
+                    total += int(pp[0]); missing += int(pp[1])
+            if total > 0 and missing == 0:
+                held.add(tp)
+        if {"SELECT", "INSERT", "UPDATE", "DELETE"} <= held:
+            held.add("ALL PRIVILEGES")
+        return sorted(held)
+
+    def explicit_db_privileges(self, name, database):
+        """Privileges granted DIRECTLY to `name` on this database, i.e. the ones we
+        can actually revoke from the user. This is deliberately narrower than
+        effective_db_privileges: it reads the ACLs (aclexplode) for grants whose
+        grantee is this exact role, so access the user only holds via PUBLIC
+        (CONNECT and USAGE-on-public that every account gets by default) does not
+        show up. Revoking one of those from a single user is a silent no-op, so we
+        must not offer it in the revoke form."""
+        database = validate_ident(database, "database")
+        lit = pg_literal(name)
+        held = set()
+        # db-level grants (CONNECT / CREATE) attached to this role, from any database.
+        c, o, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT DISTINCT a.privilege_type FROM pg_database d, aclexplode(d.datacl) a "
+            f"WHERE d.datname = {pg_literal(database)} "
+            f"AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {lit})")
+        if c == 0 and o.strip():
+            held |= {l.strip() for l in o.strip().split("\n") if l.strip()}
+        # schema + table grants attached to this role, read inside the database.
+        c2, o2, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT DISTINCT a.privilege_type FROM pg_namespace n, aclexplode(n.nspacl) a "
+            "WHERE n.nspname NOT IN ('pg_catalog','information_schema') "
+            f"AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {lit}) "
+            "UNION SELECT DISTINCT a.privilege_type FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace, aclexplode(c.relacl) a "
+            "WHERE c.relkind IN ('r','p','v','m','f') "
+            "AND n.nspname NOT IN ('pg_catalog','information_schema') "
+            f"AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {lit})", db=database)
+        if c2 == 0 and o2.strip():
+            held |= {l.strip() for l in o2.strip().split("\n") if l.strip()}
+        if {"SELECT", "INSERT", "UPDATE", "DELETE"} <= held:
+            held.add("ALL PRIVILEGES")
+        return sorted(held)
+
+    def access_map(self, name):
+        """{database: [privileges]} for every database the user can reach, for the
+        access list, resolved in as few round trips as possible.
+
+        Table-level privileges live inside each database, but we don't visit all of
+        them: pg_shdepend is cluster-shared and lists exactly which databases hold
+        object grants for a role, so only those get a per-database query. Every
+        other database (the common connect-via-PUBLIC case) is answered from two
+        cluster queries alone, no connection needed."""
+        lit = pg_literal(name)
+        result = {}
+        # 1) db-level privileges (CONNECT/CREATE), whole cluster, one query.
+        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
+            f"SELECT d.datname, has_database_privilege({lit}, d.datname, 'CONNECT'), "
+            f"has_database_privilege({lit}, d.datname, 'CREATE') "
+            "FROM pg_database d WHERE NOT d.datistemplate AND d.datallowconn "
+            "AND d.datname NOT IN ('rdsadmin')")
+        if code != 0:
+            return {}
+        for line in out.strip().split("\n"):
+            p = line.split("\t")
+            if len(p) >= 3 and p[0].strip():
+                privs = []
+                if p[1] == "t":
+                    privs.append("CONNECT")
+                if p[2] == "t":
+                    privs.append("CREATE")
+                result[p[0].strip()] = privs
+        # 2) which databases actually hold object grants for this role (shared catalog).
+        code2, out2, _ = pg_query(self.cfg, self.user, self.pwd,
+            "SELECT DISTINCT d.datname FROM pg_shdepend s JOIN pg_database d ON d.oid = s.dbid "
+            "WHERE s.refclassid = 'pg_authid'::regclass AND s.deptype = 'a' "
+            f"AND s.refobjid = (SELECT oid FROM pg_roles WHERE rolname = {lit})")
+        grant_dbs = [l.strip() for l in out2.strip().split("\n") if l.strip()] if code2 == 0 else []
+        # 3) only for those, read the distinct table/schema privileges (one query each).
+        for db in grant_dbs:
+            if db not in result:
+                continue
+            c, o, _ = pg_query(self.cfg, self.user, self.pwd,
+                "SELECT DISTINCT a.privilege_type FROM pg_class c "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace, aclexplode(c.relacl) a "
+                "WHERE c.relkind IN ('r','p','v','m','f') "
+                "AND n.nspname NOT IN ('pg_catalog','information_schema') "
+                f"AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {lit}) "
+                "UNION SELECT DISTINCT a.privilege_type FROM pg_namespace n, aclexplode(n.nspacl) a "
+                "WHERE n.nspname NOT IN ('pg_catalog','information_schema') "
+                f"AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {lit})", db=db)
+            if c == 0 and o.strip():
+                for pv in (l.strip() for l in o.strip().split("\n") if l.strip()):
+                    if pv not in result[db]:
+                        result[db].append(pv)
+        return result
+
     def grant(self, name, privilege=None, database=None, schema=None, **opts):
         priv = validate_pg_privilege(privilege or "SELECT")
         database = validate_ident(database or "postgres", "database")
@@ -859,23 +990,31 @@ class PostgresAdapter(EngineAdapter):
         return m
 
     def revoke_all(self, name):
+        if name == self.user:
+            raise EngineError(f"warden is connected as {name}; it won't revoke its own access")
         summary, errors = self._strip_role(name, drop=False)
-        # Read back what the user can still touch, and say so instead of a
-        # blanket "revoked" that might not be true (grants made by other roles
-        # survive DROP OWNED run by a non-superuser).
-        code, out, _ = pg_query(self.cfg, self.user, self.pwd,
-            "SELECT count(*) FROM information_schema.role_table_grants "
-            f"WHERE grantee = {pg_literal(name)}")
-        residual = int(out.strip()) if code == 0 and out.strip().isdigit() else 0
-        m = Mutation("REVOKE ALL", f"{name}: all privileges revoked",
-                     {"summary": f"revoked {name}'s access; {summary}"})
-        if residual:
-            blockers = self._describe_blockers(name, limit=4)
+        # Stripping a user's own grants does NOT remove Postgres's PUBLIC default,
+        # which lets every account connect to every database. So "revoke all
+        # access" that only dropped grants left the user still able to reach
+        # everything - the exact "I revoked access but it's all still there" bug.
+        # Disable the login: a NOLOGIN role cannot connect at all, PUBLIC or not.
+        # It's per-user, reversible (Enable login), and doesn't touch other users.
+        # It also makes the access table honest, since user_info reports no PUBLIC
+        # access for a role that can't log in.
+        ident = pg_ident(name)
+        ok, out, err = pg_exec(self.cfg, self.user, self.pwd, f"ALTER ROLE {ident} NOLOGIN")
+        pg_exec(self.cfg, self.user, self.pwd, f"ALTER ROLE {ident} CONNECTION LIMIT 0")
+        m = Mutation("REVOKE ALL", f"{name}: access revoked (login disabled, grants removed)")
+        if ok:
+            m.response["summary"] = (
+                f"{name} can no longer connect: login disabled and every grant removed "
+                f"({summary}). Owned objects were reassigned to the admin. Re-enable login "
+                f"(and grant) to restore access.")
+        else:
             m.response["warning"] = (
-                f"{residual} grant(s) could not be removed (made by another role, and only "
-                f"the grantor or a superuser can revoke them): " + "; ".join(blockers))
-        elif errors:
-            m.response["warning"] = "some cleanup steps failed: " + "; ".join(errors[:3])
+                f"Removed {name}'s grants, but couldn't disable the login: {(err or out).strip()[:100]}. "
+                f"Postgres lets any account connect via PUBLIC, so {name} may still reach databases - "
+                f"lock down connections, or fix the login, to cut them off.")
         return m
 
     def harden_connections(self):

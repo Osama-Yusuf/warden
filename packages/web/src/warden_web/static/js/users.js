@@ -194,22 +194,31 @@ async function redisApplyRule(username) {
 }
 
 function grantPgPrivDirect(username) {
-  const privilege = document.getElementById('uiGrantPriv').value;
   const database = document.getElementById('uiGrantDb').value.trim();
   // blank schema = all schemas (server resolves it), so grant finds tables
   // wherever they live, not just in public.
   const schema = document.getElementById('uiGrantSchema')?.value.trim() || '';
   if (!database) { toast('Database required', 'error'); return; }
+  // Multiple privileges at once: every selected option the user doesn't already hold.
+  const privileges = [...document.querySelectorAll('#grantPrivOpts .msel-opt.sel')]
+    .filter(o => !o.classList.contains('held')).map(o => o.dataset.priv);
+  if (!privileges.length) { toast('Pick at least one privilege to grant', 'error'); return; }
   const scopeTxt = schema ? `${database}.${schema}` : `${database} (all schemas)`;
-  showModal('Confirm Grant', `<p>Grant <strong>${esc(privilege)} on ${esc(scopeTxt)}</strong> to <strong>${esc(username)}</strong>?</p>`, [
+  showModal('Confirm Grant', `<p>Grant <strong>${esc(privileges.join(', '))}</strong> on <strong>${esc(scopeTxt)}</strong> to <strong>${esc(username)}</strong>?</p>`, [
     { label: 'Cancel', cls: 'btn-ghost' },
-    { label: 'Grant', cls: 'btn-success', fn: async () => {
-      await runAction(`grant:${username}:${database}`, `granting ${privilege} on ${database}`, async () => {
+    { label: 'Grant', cls: 'btn-success', fn: () => runAction(`grant:${username}:${database}`, `granting ${privileges.join(', ')} on ${database}`, async () => {
+      // One grant call per privilege; report the combined outcome once.
+      const notes = [], errors = [];
+      for (const privilege of privileges) {
         const res = await apiPost('/api/grant', { username, privilege, database, schema });
-        reportResult(res, `Granted ${privilege} on ${database}`);
-        viewUserInfoFor(username);
-      });
-    }},
+        if (!res || res.error) errors.push(`${privilege}: ${(res && res.error) || 'failed'}`);
+        else if (res.warning) notes.push(res.warning);
+      }
+      if (errors.length) showModal('Grant result', `<p>${esc('Some grants failed:')}</p><ul>${errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>${notes.length ? `<p>${notes.map(esc).join('<br>')}</p>` : ''}`, [{ label: 'OK', cls: 'btn-primary' }]);
+      else if (notes.length) showModal('Grant result', `<p>${notes.map(esc).join('<br><br>')}</p>`, [{ label: 'OK', cls: 'btn-primary' }]);
+      else toast(`Granted ${privileges.join(', ')} on ${database}`, 'success');
+      viewUserInfoFor(username);
+    }) },
   ]);
 }
 
@@ -257,8 +266,13 @@ function confirmHardenConnections() {
 function confirmRevokeAll(username) {
   showModal('Revoke all access', `
     <p style="margin-bottom:8px">
-      Revoke every privilege from <strong>${esc(username)}</strong> across all databases on
-      <strong>${esc(creds().env)}</strong>? The user stays; anything they own is reassigned to the admin.
+      Cut off <strong>${esc(username)}</strong> on <strong>${esc(creds().env)}</strong>: remove every
+      privilege <em>and disable their login</em> so they can no longer connect.
+    </p>
+    <p style="margin-bottom:0; color:var(--text-muted); font-size:12.5px">
+      Disabling login is needed because Postgres lets any account connect to every database by default
+      (via PUBLIC), so removing grants alone wouldn't stop them. The user is not deleted and anything they
+      own is reassigned to the admin; re-enable login (and grant) to restore access.
     </p>
   `, [
     { label: 'Cancel', cls: 'btn-ghost' },
