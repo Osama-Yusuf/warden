@@ -511,8 +511,10 @@ class PostgresAdapter(EngineAdapter):
             f"AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {lit})", db=database)
         if c2 == 0 and o2.strip():
             held |= {l.strip() for l in o2.strip().split("\n") if l.strip()}
-        if {"SELECT", "INSERT", "UPDATE", "DELETE"} <= held:
-            held.add("ALL PRIVILEGES")
+        # No ALL PRIVILEGES synthesis here on purpose: this set is unioned across
+        # every table and schema, so SELECT on one table plus INSERT on another is
+        # not "all privileges" on anything. Report the exact privilege types that
+        # were granted; the revoke form removes each one it actually finds.
         return sorted(held)
 
     def access_map(self, name):
@@ -543,15 +545,26 @@ class PostgresAdapter(EngineAdapter):
                 if p[2] == "t":
                     privs.append("CREATE")
                 result[p[0].strip()] = privs
-        # 2) which databases actually hold object grants for this role (shared catalog).
+        # 2) which databases hold something of this role's: deptype 'a' is an ACL
+        # grant, 'o' is object ownership. Owners have implicit full rights with no
+        # ACL row, so 'a' alone would miss a database where the user owns tables but
+        # was never granted anything, and the map would call that "connect only".
         code2, out2, _ = pg_query(self.cfg, self.user, self.pwd,
             "SELECT DISTINCT d.datname FROM pg_shdepend s JOIN pg_database d ON d.oid = s.dbid "
-            "WHERE s.refclassid = 'pg_authid'::regclass AND s.deptype = 'a' "
+            "WHERE s.refclassid = 'pg_authid'::regclass AND s.deptype IN ('a', 'o') "
             f"AND s.refobjid = (SELECT oid FROM pg_roles WHERE rolname = {lit})")
         grant_dbs = [l.strip() for l in out2.strip().split("\n") if l.strip()] if code2 == 0 else []
-        # 3) only for those, read the distinct table/schema privileges (one query each).
+        # 3) only for those, read the distinct table/schema privileges (one query
+        # each). Ownership isn't an ACL entry, so surface it as its own OWNER token
+        # rather than trying to read it out of relacl (which is NULL for a fresh
+        # table). Validate the db name like the sibling functions do: it comes from
+        # the catalog, but psql treats a -d value with '=' as a conninfo string.
         for db in grant_dbs:
             if db not in result:
+                continue
+            try:
+                safe_db = validate_ident(db, "database")
+            except ValueError:
                 continue
             c, o, _ = pg_query(self.cfg, self.user, self.pwd,
                 "SELECT DISTINCT a.privilege_type FROM pg_class c "
@@ -561,7 +574,13 @@ class PostgresAdapter(EngineAdapter):
                 f"AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {lit}) "
                 "UNION SELECT DISTINCT a.privilege_type FROM pg_namespace n, aclexplode(n.nspacl) a "
                 "WHERE n.nspname NOT IN ('pg_catalog','information_schema') "
-                f"AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {lit})", db=db)
+                f"AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {lit}) "
+                "UNION SELECT 'OWNER' WHERE EXISTS (SELECT 1 FROM pg_class c "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE c.relkind IN ('r','p','v','m','f') "
+                "AND n.nspname NOT IN ('pg_catalog','information_schema') "
+                f"AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = {lit}))",
+                db=safe_db)
             if c == 0 and o.strip():
                 for pv in (l.strip() for l in o.strip().split("\n") if l.strip()):
                     if pv not in result[db]:
@@ -1003,13 +1022,22 @@ class PostgresAdapter(EngineAdapter):
         # access for a role that can't log in.
         ident = pg_ident(name)
         ok, out, err = pg_exec(self.cfg, self.user, self.pwd, f"ALTER ROLE {ident} NOLOGIN")
-        pg_exec(self.cfg, self.user, self.pwd, f"ALTER ROLE {ident} CONNECTION LIMIT 0")
+        # CONNECTION LIMIT 0 is belt-and-braces; NOLOGIN alone already blocks every
+        # connection, PUBLIC or not, so the summary is gated on NOLOGIN's result and
+        # not this one. Still, don't silently swallow it: if it failed while NOLOGIN
+        # somehow succeeded, note it rather than claim more than we verified.
+        lim_ok, lim_out, lim_err = pg_exec(self.cfg, self.user, self.pwd,
+                                           f"ALTER ROLE {ident} CONNECTION LIMIT 0")
         m = Mutation("REVOKE ALL", f"{name}: access revoked (login disabled, grants removed)")
         if ok:
             m.response["summary"] = (
                 f"{name} can no longer connect: login disabled and every grant removed "
                 f"({summary}). Owned objects were reassigned to the admin. Re-enable login "
                 f"(and grant) to restore access.")
+            if not lim_ok:
+                m.response["warning"] = (
+                    f"Login is disabled, so {name} is locked out. The extra connection-limit "
+                    f"belt didn't apply though: {(lim_err or lim_out).strip()[:100]}.")
         else:
             m.response["warning"] = (
                 f"Removed {name}'s grants, but couldn't disable the login: {(err or out).strip()[:100]}. "
