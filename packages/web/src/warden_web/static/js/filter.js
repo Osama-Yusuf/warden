@@ -618,6 +618,8 @@ const _apCache = new Map();
 function _apFmt(privs) {
   if (!privs || !privs.length) return '<span class="ap-none">no access</span>';
   const set = new Set(privs);
+  // "couldn't inspect" is not "connect only": say so plainly instead of implying no access.
+  if (set.has('UNREADABLE')) return '<span class="ap-none" title="This database name can\'t be inspected safely.">could not inspect</span>';
   if (set.size === 1 && set.has('CONNECT')) return '<span class="ap-none">connect only</span>';
   const drop = set.has('ALL PRIVILEGES') ? new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE']) : new Set();
   const ordered = [...PRIV_ORDER.filter(p => set.has(p) && !drop.has(p)),

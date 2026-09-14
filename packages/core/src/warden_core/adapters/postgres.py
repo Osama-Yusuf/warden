@@ -562,10 +562,22 @@ class PostgresAdapter(EngineAdapter):
         for db in grant_dbs:
             if db not in result:
                 continue
+            # psql (the fallback when psycopg is absent) reads a -d value as a
+            # conninfo string only when it contains '=' or a postgresql:// prefix, so
+            # that is the whole threat. validate_ident is stricter than that and also
+            # rejects perfectly legal, readable names (a '$' is fine unquoted). So:
+            # inspect any name that can't be misread as conninfo, and mark the genuinely
+            # unsafe ones UNREADABLE rather than skipping them, since "couldn't inspect"
+            # is not the same answer as "connect only" and must not read as it.
             try:
                 safe_db = validate_ident(db, "database")
             except ValueError:
-                continue
+                low = db.lower()
+                if "=" in db or low.startswith("postgresql://") or low.startswith("postgres://"):
+                    if "UNREADABLE" not in result[db]:
+                        result[db].append("UNREADABLE")
+                    continue
+                safe_db = db
             c, o, _ = pg_query(self.cfg, self.user, self.pwd,
                 "SELECT DISTINCT a.privilege_type FROM pg_class c "
                 "JOIN pg_namespace n ON n.oid = c.relnamespace, aclexplode(c.relacl) a "

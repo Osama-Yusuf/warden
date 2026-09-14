@@ -616,27 +616,27 @@ def test_pg_access_map_reports_table_ownership():
     def ex(sql, db=None, u=su[0], p=su[1]):
         return pg_exec(cfg, u, p, sql, db=db)
 
-    ex('DROP DATABASE IF EXISTS "wt_own_db" WITH (FORCE)')
+    ex('DROP DATABASE IF EXISTS "wt_own$db" WITH (FORCE)')
     for r in ("wt_owner", "wt_map_admin"):
         ex(f'DROP OWNED BY "{r}" CASCADE')
         ex(f'DROP ROLE IF EXISTS "{r}"')
     try:
         ex("CREATE ROLE wt_map_admin LOGIN PASSWORD 'p' CREATEROLE CREATEDB")
-        ex('CREATE DATABASE "wt_own_db" OWNER wt_map_admin')
+        ex('CREATE DATABASE "wt_own$db" OWNER wt_map_admin')
         ex("CREATE ROLE wt_owner LOGIN PASSWORD 'p'", u="wt_map_admin", p="p")
         # a temporary schema grant, only so the role can create a table it will own
-        ex('GRANT CREATE, USAGE ON SCHEMA public TO wt_owner', db="wt_own_db", u="wt_map_admin", p="p")
-        ex("CREATE TABLE mine (id int)", db="wt_own_db", u="wt_owner", p="p")
+        ex('GRANT CREATE, USAGE ON SCHEMA public TO wt_owner', db="wt_own$db", u="wt_map_admin", p="p")
+        ex("CREATE TABLE mine (id int)", db="wt_own$db", u="wt_owner", p="p")
         # take the grant back: now the ONLY tie to this db is ownership of the table
-        ex('REVOKE CREATE, USAGE ON SCHEMA public FROM wt_owner', db="wt_own_db", u="wt_map_admin", p="p")
+        ex('REVOKE CREATE, USAGE ON SCHEMA public FROM wt_owner', db="wt_own$db", u="wt_map_admin", p="p")
         pn.close_all()
 
         w = PostgresAdapter(cfg, admin_user="wt_map_admin", admin_pass="p")
-        privs = w.access_map("wt_owner").get("wt_own_db", [])
+        privs = w.access_map("wt_owner").get("wt_own$db", [])
         assert "OWNER" in privs, f"ownership not surfaced, got {privs!r}"
     finally:
         pn.close_all()
-        ex('DROP DATABASE IF EXISTS "wt_own_db" WITH (FORCE)')
+        ex('DROP DATABASE IF EXISTS "wt_own$db" WITH (FORCE)')
         for r in ("wt_owner", "wt_map_admin"):
             ex(f'DROP OWNED BY "{r}" CASCADE')
             ex(f'DROP ROLE IF EXISTS "{r}"')
