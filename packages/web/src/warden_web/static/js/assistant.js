@@ -423,21 +423,37 @@ function viewAssistant() {
   markActive('assistant');
   const s = aiSettings();
   const on = !!s.enabled;
+  const cap = (icon, title, desc) => `<div class="ward-cap"><span class="ward-cap-i">${ICONS[icon] || ''}</span>
+    <div><b>${esc(title)}</b><span>${esc(desc)}</span></div></div>`;
   setContent(`
-    <div class="view-head"><h2>Ward</h2>
-      <label class="ai-toggle">
+    <div class="ward-hero">
+      <div class="ward-hero-main">
+        <span class="ward-badge">${WARD_MARK}</span>
+        <div class="ward-hero-txt">
+          <h2>Ward</h2>
+          <p>A read-only, on-machine assistant for your databases. Ask who can reach what, run a report, or draft a change for you to run.</p>
+        </div>
+      </div>
+      <label class="switch" title="Turn Ward on or off">
         <input type="checkbox" id="aiEnable" ${on ? 'checked' : ''} onchange="aiToggleEnabled(this.checked)">
-        <span>${on ? 'On' : 'Off'}</span>
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+        <span class="switch-label" id="aiEnableLabel">${on ? 'On' : 'Off'}</span>
       </label>
     </div>
-    <p class="muted ai-lore">warden's nephew. Knows the house, still learning the ropes, and allowed to look but never touch. Ward explains who can reach what, reads you a report, or drafts a change for you to run. Off by default.</p>
+    <div class="ward-caps">
+      ${cap('key', 'Explain access', 'Who can reach which database, and how they got it.')}
+      ${cap('scroll', 'Reports', 'Runs the security audits and reads them back in plain english.')}
+      ${cap('pencil', 'Draft changes', 'Ward writes the change; you review and run it.')}
+    </div>
+    <div class="ward-note">${ICONS.shield || ''}<span>Read-only by design. Ward looks and drafts, never writes. You run every change yourself.</span></div>
     <div id="aiConfig" style="${on ? '' : 'display:none'}"></div>`);
   if (on) aiRenderConfig();
 }
 
 function aiToggleEnabled(on) {
   saveAiSettings({ enabled: !!on });
-  document.querySelector('.ai-toggle span').textContent = on ? 'On' : 'Off';
+  const lbl = document.getElementById('aiEnableLabel');
+  if (lbl) lbl.textContent = on ? 'On' : 'Off';
   document.getElementById('aiConfig').style.display = on ? '' : 'none';
   if (on) aiRenderConfig();
   mountAssistantDock();
