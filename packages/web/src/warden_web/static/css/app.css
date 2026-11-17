@@ -340,7 +340,6 @@ input[type="password"] { font-family: -apple-system, BlinkMacSystemFont, "Segoe 
 }
 .sidebar-foot svg { width: 12px; height: 12px; flex-shrink: 0; }
 .content { flex: 1; overflow-y: auto; padding: 22px 26px; }
-.content-inner { max-width: 1200px; }
 
 /* ── Cards & tables ── */
 .card {
