@@ -39,9 +39,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - if: matrix.python != ''
-        run: uv python install ${{ matrix.python }}
-      - run: uv sync ${{ matrix.python != '' && format('--python {0}', matrix.python) || '' }}
+      - run: uv python install ${{ matrix.python || '3.12' }}
+      - run: uv sync --python ${{ matrix.python || '3.12' }}
       - run: uv pip install pyinstaller
       - name: On-device AI (optional; the app runs without it)
         shell: bash
