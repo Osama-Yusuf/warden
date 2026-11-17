@@ -77,6 +77,11 @@ build-desktop: $(PY)
 		--collect-all llama_cpp \
 		packages/desktop/src/warden_desktop/main.py
 	@rm -f warden.spec
+	@if [ -d dist/warden.app ]; then \
+		plutil -replace CFBundleShortVersionString -string "$$($(PY) -c 'import warden_core; print(warden_core.__version__)')" dist/warden.app/Contents/Info.plist; \
+		plutil -replace CFBundleVersion -string "$$(git rev-parse --short HEAD 2>/dev/null || echo dev)" dist/warden.app/Contents/Info.plist; \
+		codesign --force --deep -s - dist/warden.app; \
+	fi
 	@echo "\nBundle: dist/warden.app (macOS) / dist/warden/ (other OS)"
 	@echo "Includes Ward's on-device models (llama.cpp bundled)."
 
