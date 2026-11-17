@@ -2,7 +2,7 @@
 """
 warden desktop: the web UI in a native window.
 
-Starts the warden web server on a random localhost port in a background
+Starts the warden web server on localhost:8647 in a background
 thread, then opens it in a native window (pywebview / system WebKit).
 """
 
