@@ -43,8 +43,9 @@ async function doExportAll() {
   const pass = document.getElementById('beoPass')?.value || '';
   const payload = collectExportData();
   const out = pass ? await encryptBackup(payload, pass) : payload;
-  downloadFile(`warden-backup-${new Date().toISOString().slice(0, 10)}.json`,
+  const saved = await downloadFile(`warden-backup-${new Date().toISOString().slice(0, 10)}.json`,
     JSON.stringify(out, null, 2), 'application/json');
+  if (!saved) return;
   toast(pass ? 'Encrypted backup downloaded' : 'Backup downloaded. It contains saved passwords, keep it safe', pass ? 'success' : 'info');
 }
 

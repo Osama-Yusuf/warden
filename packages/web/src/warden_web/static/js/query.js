@@ -635,12 +635,17 @@ function jsonCell(v) {
   return esc(String(v).length > 120 ? String(v).slice(0, 120) + '…' : String(v));
 }
 
-function downloadFile(name, text, type) {
+// Resolves false when the user cancels the desktop save dialog.
+async function downloadFile(name, text, type) {
+  // The desktop webview can't download blobs: it opens them in a new window
+  // instead, and closing that window quits the app. Use a native save dialog.
+  if (window.pywebview?.api?.save_file) return window.pywebview.api.save_file(name, text);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([text], { type }));
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  return true;
 }
 
 function csvFromDocs(docs) {
