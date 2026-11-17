@@ -46,7 +46,10 @@ async function doExportAll() {
   const saved = await downloadFile(`warden-backup-${new Date().toISOString().slice(0, 10)}.json`,
     JSON.stringify(out, null, 2), 'application/json');
   if (!saved) return;
-  toast(pass ? 'Encrypted backup downloaded' : 'Backup downloaded. It contains saved passwords, keep it safe', pass ? 'success' : 'info');
+  const hasPass = Object.keys(payload.local).some(k => k.startsWith('warden.k'));
+  toast(pass ? 'Encrypted backup downloaded'
+    : hasPass ? 'Backup downloaded. It contains saved passwords, keep it safe'
+    : 'Backup downloaded (passwords in the Keychain are not included)', pass || !hasPass ? 'success' : 'info');
 }
 
 function importBackupPicked(input) {

@@ -153,11 +153,18 @@ function saveTargetCreds(user, remember) {
 }
 function targetCreds() { return credsStore()[targetKey()] || null; }
 
-function savePassword(pwd) {
+// Remembered passwords go to the macOS Keychain when the server offers it;
+// browser storage is the fallback (other OS, or no host to key the entry by).
+async function savePassword(pwd) {
+  const key = PASS_KEY + '.' + targetKey();
+  const remember = document.getElementById('rememberChk').checked;
+  if (remember && await keychainPut(currentHost(), document.getElementById('adminUser').value.trim(), pwd)) {
+    localStorage.removeItem(key); sessionStorage.removeItem(key);
+    return;
+  }
   try {
     const enc = btoa(unescape(encodeURIComponent(pwd)));
-    const key = PASS_KEY + '.' + targetKey();
-    if (document.getElementById('rememberChk').checked) {
+    if (remember) {
       localStorage.setItem(key, enc); sessionStorage.removeItem(key);
     } else {
       sessionStorage.setItem(key, enc); localStorage.removeItem(key);
@@ -176,6 +183,27 @@ function clearPassword() {
   const key = PASS_KEY + '.' + targetKey();
   sessionStorage.removeItem(key); localStorage.removeItem(key);
   sessionStorage.removeItem(PASS_KEY); localStorage.removeItem(PASS_KEY);
+  const host = currentHost(), user = document.getElementById('adminUser')?.value.trim();
+  if (config.tools?.keychain && host && user) apiPost('/api/keychain-delete', { host, user }).catch(() => {});
+}
+async function keychainPut(host, user, password) {
+  if (!config.tools?.keychain || !host || !user || !password) return false;
+  try { return !!(await apiPost('/api/keychain-save', { host, user, password })).ok; } catch { return false; }
+}
+// One-time move of passwords remembered in browser storage into the Keychain.
+async function migratePasswordsToKeychain() {
+  if (!config.tools?.keychain) return;
+  const creds = credsStore();
+  for (const k of Object.keys(localStorage)) {
+    if (!k.startsWith(PASS_KEY + '.')) continue;
+    const target = k.slice(PASS_KEY.length + 1);
+    const i = target.lastIndexOf(':');
+    const env = target.slice(0, i), engine = target.slice(i + 1);
+    const host = envConfigFor(env, engine)?.host || config.environment_details?.[env]?.[engine]?.host;
+    let pwd = '';
+    try { pwd = decodeURIComponent(escape(atob(localStorage.getItem(k)))); } catch {}
+    if (await keychainPut(host, creds[target]?.user, pwd)) localStorage.removeItem(k);
+  }
 }
 
 async function loadCredsForTarget() {
@@ -303,6 +331,7 @@ async function init() {
   renderRoBtn();
 
   // Prefill the saved credentials for this target. Connecting stays manual
+  await migratePasswordsToKeychain();
   await loadCredsForTarget();
   renderWelcome();
   if (typeof mountAssistantDock === 'function') mountAssistantDock();

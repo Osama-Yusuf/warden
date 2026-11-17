@@ -9,7 +9,7 @@
 <p>
 <img alt="engines: 6" src="https://img.shields.io/badge/engines-6-58a6ff?style=flat-square">
 <img alt="interfaces: CLI, web, desktop" src="https://img.shields.io/badge/interfaces-CLI%20%C2%B7%20web%20%C2%B7%20desktop-8b949e?style=flat-square">
-<img alt="python: 3.9+" src="https://img.shields.io/badge/python-3.9%2B-3776ab?style=flat-square">
+<img alt="python: 3.11+" src="https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square">
 <img alt="status: early development" src="https://img.shields.io/badge/status-early%20development-f0883e?style=flat-square">
 <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
 </p>

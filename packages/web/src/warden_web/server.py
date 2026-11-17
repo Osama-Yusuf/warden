@@ -1206,20 +1206,31 @@ def _docdb_users(cfg, user, pwd):
 
 
 def _pg_grant_sweep(cfg, user, pwd):
-    """INSERT/UPDATE/DELETE table grants per grantee, across all databases."""
+    """Tables each role can INSERT/UPDATE/DELETE, across all databases."""
     code, out, err = pg_query(cfg, user, pwd,
         "SELECT datname FROM pg_database WHERE datistemplate=false AND datname NOT IN ('rdsadmin')")
     if code != 0:
         return None, err
     grants = {}
     for db in [l.strip() for l in out.strip().split("\n") if l.strip()]:
+        # Effective access, as Postgres itself decides it: grants inherited
+        # through group roles, ownership and PUBLIC all count. Superusers are
+        # left out; they have their own audit and would match every table.
         sql = """
-            SELECT grantee, count(DISTINCT table_schema||'.'||table_name),
-                   string_agg(DISTINCT privilege_type, ',')
-            FROM information_schema.role_table_grants
-            WHERE privilege_type IN ('INSERT','UPDATE','DELETE')
-              AND grantee NOT IN ('PUBLIC')
-            GROUP BY grantee
+            SELECT r.rolname, count(*),
+                   concat_ws(',',
+                     CASE WHEN bool_or(has_table_privilege(r.oid, c.oid, 'INSERT')) THEN 'INSERT' END,
+                     CASE WHEN bool_or(has_table_privilege(r.oid, c.oid, 'UPDATE')) THEN 'UPDATE' END,
+                     CASE WHEN bool_or(has_table_privilege(r.oid, c.oid, 'DELETE')) THEN 'DELETE' END)
+            FROM pg_roles r
+            CROSS JOIN pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('r', 'p', 'v', 'f')
+              AND n.nspname NOT IN ('information_schema') AND n.nspname NOT LIKE 'pg\\_%'
+              AND NOT r.rolsuper AND r.rolname NOT LIKE 'pg\\_%'
+              AND r.rolname NOT IN ('rdsadmin','rds_superuser','rds_replication','rds_password','rdsrepladmin')
+              AND has_table_privilege(r.oid, c.oid, 'INSERT, UPDATE, DELETE')
+            GROUP BY r.rolname
         """
         code, out2, _ = pg_query(cfg, user, pwd, sql, db=db)
         if code != 0:
@@ -1384,14 +1395,18 @@ def api_audit_run(body):
         scanned = len(roles)
         if audit_id == "superusers":
             for r in roles:
-                if r["super"]:
+                if r["super"] and r["expired"]:
+                    findings.append({"user": r["name"], "severity": "info",
+                                     "summary": f"superuser, but the password expired {r['expiry']}",
+                                     "detail": "can't log in with a password; drop it or remove SUPERUSER"})
+                elif r["super"]:
                     findings.append({"user": r["name"], "severity": "critical",
                                      "summary": "has total control (superuser)",
                                      "detail": "every permission check is skipped for this account"
                                                + ("" if r["login"] else " (login is disabled)")})
         elif audit_id == "role-managers":
             for r in roles:
-                if (r["createrole"] or r["createdb"]) and not r["super"]:
+                if (r["createrole"] or r["createdb"]) and not r["super"] and not r["expired"]:
                     what = ("new users and databases" if r["createrole"] and r["createdb"]
                             else "new users" if r["createrole"] else "new databases")
                     flags = [f for f, on in (("CREATEROLE", r["createrole"]), ("CREATEDB", r["createdb"])) if on]
@@ -1526,10 +1541,15 @@ def api_keychain_save(body):
     password = body.get("password", "")
     if not password:
         return {"error": "password is required"}
-    code, out, err = run_cmd(["security", "add-generic-password", "-a", account,
-                              "-s", KEYCHAIN_SERVICE, "-w", password, "-U"], timeout=10)
-    if code != 0:
-        return {"error": err or "Keychain write failed"}
+    # Trailing -w reads the password from stdin (twice), keeping it out of `ps`.
+    try:
+        res = subprocess.run(["security", "add-generic-password", "-a", account,
+                              "-s", KEYCHAIN_SERVICE, "-U", "-w"],
+                             input=f"{password}\n{password}\n", capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        return {"error": "Keychain write timed out"}
+    if res.returncode != 0:
+        return {"error": res.stderr.strip() or "Keychain write failed"}
     return {"ok": True, "account": account}
 
 
