@@ -640,3 +640,46 @@ def test_pg_access_map_reports_table_ownership():
         for r in ("wt_owner", "wt_map_admin"):
             ex(f'DROP OWNED BY "{r}" CASCADE')
             ex(f'DROP ROLE IF EXISTS "{r}"')
+
+
+def test_pg_audits_treat_expired_roles_as_dormant():
+    """A role whose VALID UNTIL has passed can't log in, so it must not show up
+    under "who can change data"; it belongs under the leftover-access audit."""
+    from warden_core.pg import pg_exec
+
+    ok, cfg = _pg_reachable()
+    if not ok:
+        pytest.skip("postgres not reachable")
+    su = (os.environ.get("WARDEN_TEST_PG_USER", "admin"),
+          os.environ.get("WARDEN_TEST_PG_PASS", "adminpass"))
+    body = {"engine": "postgresql", **_cfg("WARDEN_TEST_PG", 5432, "admin", "adminpass")}
+
+    def sx(sql):
+        return pg_exec(cfg, su[0], su[1], sql)
+
+    roles = ("wt_expired", "wt_live")
+    for r in roles:
+        sx(f'DROP OWNED BY "{r}" CASCADE')
+        sx(f'DROP ROLE IF EXISTS "{r}"')
+    try:
+        sx("CREATE ROLE wt_expired LOGIN PASSWORD 'p' VALID UNTIL '2024-06-25'")
+        sx("CREATE ROLE wt_live LOGIN PASSWORD 'p' VALID UNTIL '2099-01-01'")
+        sx("CREATE TABLE IF NOT EXISTS wt_audit_t (id int)")
+        sx("GRANT INSERT, UPDATE, DELETE ON wt_audit_t TO wt_expired, wt_live")
+
+        write = server.api_audit_run(dict(body, audit="pg-write-access"))
+        assert "error" not in write, write.get("error")
+        writers = {f["user"] for f in write["findings"]}
+        assert "wt_live" in writers
+        assert "wt_expired" not in writers
+
+        dormant = server.api_audit_run(dict(body, audit="disabled-privileged"))
+        assert "error" not in dormant, dormant.get("error")
+        hit = [f for f in dormant["findings"] if f["user"] == "wt_expired"]
+        assert hit and "expired 2024-06-25" in hit[0]["summary"], dormant["findings"]
+        assert not any(f["user"] == "wt_live" for f in dormant["findings"])
+    finally:
+        sx("DROP TABLE IF EXISTS wt_audit_t")
+        for r in roles:
+            sx(f'DROP OWNED BY "{r}" CASCADE')
+            sx(f'DROP ROLE IF EXISTS "{r}"')

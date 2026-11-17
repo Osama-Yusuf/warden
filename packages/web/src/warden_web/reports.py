@@ -24,6 +24,8 @@ write access into a read-only or "unused" verdict.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 # ── per-engine normalisation ────────────────────────────────────────────────
 # Each normaliser returns {login, admin, write, unresolved, scopes, flags}.
 # `unresolved` means: this account has access we could not classify, so its
@@ -87,8 +89,21 @@ def _normalize_pg(info):
         flags.append("roles:" + ",".join(member_of[:4]))
     if str(info.get("valid_until", "")).lower() in ("never", "", "infinity"):
         flags.append("no_expiry")
-    return {"login": bool(info.get("can_login")), "admin": superuser,
+    return {"login": bool(info.get("can_login")) and not pg_expired(info.get("valid_until")), "admin": superuser,
             "write": direct_write, "unresolved": unresolved, "scopes": scopes, "flags": flags}
+
+
+def pg_expired(valid_until):
+    """VALID UNTIL in the past means the password expired and login is refused."""
+    v = str(valid_until or "").strip().lower()
+    if v in ("", "never", "infinity"):
+        return False
+    if v == "-infinity":
+        return True
+    try:
+        return datetime.fromisoformat(v) < datetime.now(timezone.utc)
+    except ValueError:
+        return False
 
 
 def _parse_mysql_grant(stmt):

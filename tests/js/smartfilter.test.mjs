@@ -138,3 +138,29 @@ test('text + token combine to narrow', () => {
   // 'li' hits only alice; role:read hits admin+alice → intersection is alice
   assert.deepEqual(filter('li role:read').map((r) => r.user), ['alice']);
 });
+
+// Postgres VALID UNTIL: a past date means the account can't log in.
+const pgNames = ['pgExpired', 'pgStatus', 'usersFilterCfg'];
+const pg = vm.runInContext(pgNames.map((n) => extractFn(src, n)).join('\n\n') + `\n({ ${pgNames.join(', ')} })`, vm.createContext({}));
+
+test('pgExpired reads Postgres VALID UNTIL text', () => {
+  assert.equal(pg.pgExpired('2024-06-25 20:00:00+00'), true);
+  assert.equal(pg.pgExpired('2099-01-01 00:00:00+00'), false);
+  assert.equal(pg.pgExpired('never'), false);
+  assert.equal(pg.pgExpired('infinity'), false);
+  assert.equal(pg.pgExpired('-infinity'), true);
+});
+
+test('expired accounts are not active and are not counted as expiring', () => {
+  const expired = { can_login: true, valid_until: '2024-06-25 20:00:00+00' };
+  const upcoming = { can_login: true, valid_until: '2099-01-01 00:00:00+00' };
+  assert.deepEqual(pg.pgStatus(expired), ['pill-danger', 'expired']);
+  assert.deepEqual(pg.pgStatus(upcoming), ['pill-ok', 'active']);
+  assert.deepEqual(pg.pgStatus({ can_login: false, valid_until: 'never' }), ['pill-danger', 'disabled']);
+  const f = Object.fromEntries(pg.usersFilterCfg('postgresql').fields.map((x) => [x.key, x.get]));
+  assert.equal(f.status(expired), false);
+  assert.equal(f.expires(expired), false);
+  assert.equal(f.expired(expired), true);
+  assert.equal(f.expires(upcoming), true);
+  assert.equal(f.expired(upcoming), false);
+});

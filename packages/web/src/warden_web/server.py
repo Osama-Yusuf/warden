@@ -1365,7 +1365,8 @@ def api_audit_run(body):
                                      "detail": "the account exists but has no permissions, probably a leftover"})
     else:
         sql = """
-            SELECT rolname, rolsuper, rolcreaterole, rolcreatedb, rolcanlogin
+            SELECT rolname, rolsuper, rolcreaterole, rolcreatedb, rolcanlogin,
+                   COALESCE(rolvaliduntil < now(), false), COALESCE(rolvaliduntil::date::text, '')
             FROM pg_roles
             WHERE rolname NOT LIKE 'pg\\_%'
               AND rolname NOT IN ('rdsadmin','rds_superuser','rds_replication','rds_password','rdsrepladmin')
@@ -1376,9 +1377,10 @@ def api_audit_run(body):
         roles = []
         for line in out.strip().split("\n"):
             p = line.split("\t")
-            if len(p) >= 5:
+            if len(p) >= 7:
                 roles.append({"name": p[0], "super": p[1] == "t", "createrole": p[2] == "t",
-                              "createdb": p[3] == "t", "login": p[4] == "t"})
+                              "createdb": p[3] == "t", "login": p[4] == "t",
+                              "expired": p[5] == "t", "expiry": p[6]})
         scanned = len(roles)
         if audit_id == "superusers":
             for r in roles:
@@ -1401,6 +1403,8 @@ def api_audit_run(body):
             if err:
                 return {"error": err}
             login_map = {r["name"]: r["login"] for r in roles}
+            # VALID UNTIL in the past = password expired, so the account can't log in
+            expired = {r["name"]: r["expiry"] for r in roles if r["expired"]}
             verb_map = {"INSERT": "add", "UPDATE": "edit", "DELETE": "delete"}
             for grantee, g in sorted(grants.items(), key=lambda kv: -sum(kv[1]["dbs"].values())):
                 total = sum(g["dbs"].values())
@@ -1409,12 +1413,16 @@ def api_audit_run(body):
                           + ", ".join(f"{db} ({_plural(n, 'table')})" for db, n in sorted(g["dbs"].items())))
                 where = (f"{_plural(total, 'table')} across {_plural(len(g['dbs']), 'database')}"
                          if len(g["dbs"]) > 1 else f"{_plural(total, 'table')} in one database")
-                if audit_id == "pg-write-access":
+                if audit_id == "pg-write-access" and grantee not in expired:
                     verbs = [verb_map[p] for p in ("INSERT", "UPDATE", "DELETE") if p in g["privs"]]
                     doing = ", ".join(verbs[:-1]) + " and " + verbs[-1] if len(verbs) > 1 else verbs[0]
                     sev = "warning" if len(g["dbs"]) > 2 else "info"
                     findings.append({"user": grantee, "severity": sev,
                                      "summary": f"can {doing} data in {where}",
+                                     "detail": detail})
+                elif audit_id == "disabled-privileged" and grantee in expired:
+                    findings.append({"user": grantee, "severity": "info",
+                                     "summary": f"expired {expired[grantee]}, but still holds grants on {where}",
                                      "detail": detail})
                 elif audit_id == "disabled-privileged" and login_map.get(grantee) is False:
                     findings.append({"user": grantee, "severity": "info",

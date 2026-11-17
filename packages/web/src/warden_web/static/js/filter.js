@@ -1,3 +1,15 @@
+// Postgres VALID UNTIL is password expiry: once past, the account can't log in.
+function pgExpired(v) {
+  if (!v || v === 'never' || v === 'infinity') return false;
+  if (v === '-infinity') return true;
+  const t = Date.parse(v.replace(' ', 'T').replace(/([+-]\d\d)$/, '$1:00'));
+  return !isNaN(t) && t < Date.now();
+}
+function pgStatus(u) {
+  if (!u.can_login) return ['pill-danger', 'disabled'];
+  return pgExpired(u.valid_until) ? ['pill-danger', 'expired'] : ['pill-ok', 'active'];
+}
+
 // ── Smart filter ──────────────────────────────────────────────────────────
 // Config-driven, client-side. Views load their full list, so filtering runs
 // in memory (instant, no round-trips). A config declares fields (how to read a
@@ -300,7 +312,8 @@ function userRowsHtml(list, fam) {
       rows += `${tr(u)}<td class="mono">${esc(u.user)}</td><td>${esc(u.db)}</td>
         <td>${roles || '<span class="pill pill-muted">none</span>'}</td></tr>`;
     } else {
-      const status = tok(u.can_login ? 'pill-ok' : 'pill-danger', 'status', u.can_login ? 'active' : 'disabled');
+      const [cls, label] = pgStatus(u);
+      const status = label === 'expired' ? tok(cls, 'expired', 'yes', label) : tok(cls, 'status', label);
       const flags = [];
       if (u.superuser) flags.push(tok('pill-warn', 'superuser', 'yes', 'superuser'));
       if (u.createdb) flags.push(tok('pill-accent', 'createdb', 'yes', 'createdb'));
@@ -377,13 +390,14 @@ function usersFilterCfg(fam) {
   } else {
     cfg.placeholder = 'filter users… try superuser:yes or status:disabled';
     cfg.fields.push(
-      { key: 'status', label: 'active / disabled', type: 'bool', get: u => u.can_login, values: ['active', 'disabled'] },
+      { key: 'status', label: 'active / disabled', type: 'bool', get: u => u.can_login && !pgExpired(u.valid_until), values: ['active', 'disabled'] },
       { key: 'superuser', label: 'superuser', type: 'bool', get: u => u.superuser, values: ['yes', 'no'] },
       { key: 'createdb', label: 'can create db', type: 'bool', get: u => u.createdb, values: ['yes', 'no'] },
       { key: 'createrole', label: 'can create roles', type: 'bool', get: u => u.createrole, values: ['yes', 'no'] },
-      { key: 'expires', label: 'has expiry', type: 'bool', get: u => u.valid_until && u.valid_until !== 'never', values: ['yes', 'no'] },
+      { key: 'expires', label: 'expires later', type: 'bool', get: u => !!u.valid_until && !['never', 'infinity'].includes(u.valid_until) && !pgExpired(u.valid_until), values: ['yes', 'no'] },
+      { key: 'expired', label: 'expired', type: 'bool', get: u => pgExpired(u.valid_until), values: ['yes', 'no'] },
     );
-    cfg.presets = [{ label: 'Superusers', q: 'superuser:yes' }, { label: 'Can log in', q: 'status:active' }, { label: "Can't log in", q: 'status:disabled' }, { label: 'Can create DB', q: 'createdb:yes' }, { label: 'Expiring', q: 'expires:yes' }];
+    cfg.presets = [{ label: 'Superusers', q: 'superuser:yes' }, { label: 'Can log in', q: 'status:active' }, { label: "Can't log in", q: 'status:disabled' }, { label: 'Can create DB', q: 'createdb:yes' }, { label: 'Expiring', q: 'expires:yes' }, { label: 'Expired', q: 'expired:yes' }];
   }
   return cfg;
 }
@@ -492,7 +506,8 @@ function userPanelSql(res, uAttr, isDocdb) {
         <button class="btn btn-success" data-user="${uAttr}" onclick="grantRoleDirect(this.dataset.user)">Grant</button>
       </div>`;
   } else {
-    const status = res.can_login ? '<span class="pill pill-ok">active</span>' : '<span class="pill pill-danger">disabled</span>';
+    const [cls, label] = pgStatus(res);
+    const status = `<span class="pill ${cls}">${label}</span>`;
     const flags = [];
     if (res.superuser) flags.push('superuser');
     if (res.createdb) flags.push('createdb');
