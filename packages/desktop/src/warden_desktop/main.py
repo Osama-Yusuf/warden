@@ -40,6 +40,20 @@ def _free_port():
 DESKTOP_PORT = int(os.environ.get("WARDEN_DESKTOP_PORT", "8647"))
 
 
+class _SaveApi:
+    """Exposed to JS as window.pywebview.api; WKWebView can't download blobs."""
+
+    def save_file(self, name, text):
+        import webview
+
+        picked = webview.windows[0].create_file_dialog(webview.FileDialog.SAVE, save_filename=name)
+        if not picked:
+            return False
+        path = picked if isinstance(picked, str) else picked[0]
+        Path(path).write_text(text, encoding="utf-8")
+        return True
+
+
 def main():
     _guard_stdio()
     try:
@@ -72,6 +86,7 @@ def _run():
         width=1440,
         height=940,
         min_size=(920, 600),
+        js_api=_SaveApi(),
     )
     # pywebview defaults to private mode, which wipes localStorage (saved
     # credentials, envs, audit results) on every launch. Persist it instead.
