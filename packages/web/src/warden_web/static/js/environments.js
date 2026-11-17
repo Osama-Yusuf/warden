@@ -1,3 +1,13 @@
+// Postgres and MySQL clients negotiate encryption on their own; these engines
+// send credentials and data in the clear unless TLS is switched on.
+function tlsNote(eng, cfg) {
+  if (cfg.tls) return ' · tls';
+  const local = /^(localhost|127\.|::1$|host\.docker\.internal)/.test(cfg.host || '');
+  return !local && ['documentdb', 'redis', 'elasticsearch'].includes(engineFamily(eng))
+    ? ' · <span class="pill pill-warn" title="TLS is off: password and data travel unencrypted. Enable TLS on the server, then tick TLS here.">plaintext</span>'
+    : '';
+}
+
 // ── Environments manager (custom envs live in localStorage) ───────────────
 
 function viewEnvs() {
@@ -90,7 +100,7 @@ function envConnRows() {
       rows += `<tr${hidden ? ' style="opacity:0.45"' : ''}>
         <td class="mono">${esc(env)}</td>
         <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
-        <td class="mono" style="font-size:11px">${esc(cfg.host || '')}:${esc(cfg.port || '')}${cfg.tls ? ' · tls' : ''}</td>
+        <td class="mono" style="font-size:11px">${esc(cfg.host || '')}:${esc(cfg.port || '')}${tlsNote(eng, cfg)}</td>
         <td>${status}</td>
         <td><div class="row-acts">${actions}</div></td></tr>`;
     }
@@ -99,7 +109,7 @@ function envConnRows() {
       if ((config.environments[env] || []).includes(eng)) continue;
       rows += `<tr><td class="mono">${esc(env)}</td>
         <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
-        <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${cfg.tls ? ' · tls' : ''}</td>
+        <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${tlsNote(eng, cfg)}</td>
         <td><span class="pill pill-warn">added</span></td>
         <td><div class="row-acts">${actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent')}${actionBtn(ICONS.trash, 'Delete', 'deleteCustomEnv', env, eng, 'danger')}</div></td></tr>`;
     }
@@ -109,7 +119,7 @@ function envConnRows() {
     for (const [eng, cfg] of Object.entries(engines)) {
       rows += `<tr><td class="mono">${esc(env)}</td>
         <td><span class="pill pill-accent">${esc(engineLabel(eng))}</span></td>
-        <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${cfg.tls ? ' · tls' : ''}</td>
+        <td class="mono" style="font-size:11px">${esc(cfg.host)}:${esc(cfg.port)}${tlsNote(eng, cfg)}</td>
         <td><span class="pill pill-ok">custom</span></td>
         <td><div class="row-acts">${actionBtn(ICONS.pencil, 'Edit', 'editEnv', env, eng, 'accent')}${actionBtn(ICONS.trash, 'Delete', 'deleteCustomEnv', env, eng, 'danger')}</div></td></tr>`;
     }
