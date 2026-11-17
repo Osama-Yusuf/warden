@@ -683,3 +683,47 @@ def test_pg_audits_treat_expired_roles_as_dormant():
         for r in roles:
             sx(f'DROP OWNED BY "{r}" CASCADE')
             sx(f'DROP ROLE IF EXISTS "{r}"')
+
+
+def test_pg_audits_follow_role_membership_and_expiry():
+    """Write access inherited through a group role belongs to the login member,
+    and expired superusers / role managers are no longer live risks."""
+    from warden_core.pg import pg_exec
+
+    ok, cfg = _pg_reachable()
+    if not ok:
+        pytest.skip("postgres not reachable")
+    su = (os.environ.get("WARDEN_TEST_PG_USER", "admin"),
+          os.environ.get("WARDEN_TEST_PG_PASS", "adminpass"))
+    body = {"engine": "postgresql", **_cfg("WARDEN_TEST_PG", 5432, "admin", "adminpass")}
+
+    def sx(sql):
+        return pg_exec(cfg, su[0], su[1], sql)
+
+    roles = ("wt_member", "wt_writers", "wt_old_su", "wt_old_mgr")
+    for r in roles:
+        sx(f'DROP OWNED BY "{r}" CASCADE')
+        sx(f'DROP ROLE IF EXISTS "{r}"')
+    try:
+        sx("CREATE ROLE wt_writers NOLOGIN")
+        sx("CREATE ROLE wt_member LOGIN PASSWORD 'p' IN ROLE wt_writers")
+        sx("CREATE ROLE wt_old_su SUPERUSER LOGIN PASSWORD 'p' VALID UNTIL '2024-06-25'")
+        sx("CREATE ROLE wt_old_mgr CREATEROLE LOGIN PASSWORD 'p' VALID UNTIL '2024-06-25'")
+        sx("CREATE TABLE IF NOT EXISTS wt_inherit_t (id int)")
+        sx("GRANT INSERT ON wt_inherit_t TO wt_writers")
+
+        write = server.api_audit_run(dict(body, audit="pg-write-access"))
+        assert "error" not in write, write.get("error")
+        assert "wt_member" in {f["user"] for f in write["findings"]}
+
+        sup = server.api_audit_run(dict(body, audit="superusers"))
+        hit = [f for f in sup["findings"] if f["user"] == "wt_old_su"]
+        assert hit and hit[0]["severity"] == "info" and "expired 2024-06-25" in hit[0]["summary"]
+
+        mgr = server.api_audit_run(dict(body, audit="role-managers"))
+        assert "wt_old_mgr" not in {f["user"] for f in mgr["findings"]}
+    finally:
+        sx("DROP TABLE IF EXISTS wt_inherit_t")
+        for r in roles:
+            sx(f'DROP OWNED BY "{r}" CASCADE')
+            sx(f'DROP ROLE IF EXISTS "{r}"')

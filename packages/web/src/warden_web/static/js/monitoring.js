@@ -147,6 +147,11 @@ function auditKind() { return engineFamily(currentEngine); }
 function auditCatalog() { return (config.audits || []).filter(a => a.engine === auditKind()); }
 function auditRunKey(id) { return `${document.getElementById('envSelect').value}:${auditKind()}:${id}`; }
 function auditExclKey(id) { return `${document.getElementById('envSelect').value}:${id}`; }
+// Results are a snapshot; flag ones old enough that grants may have changed.
+function runStamp(ranAt) {
+  const days = Math.floor((Date.now() - new Date(String(ranAt).replace(' ', 'T'))) / 864e5);
+  return esc(ranAt) + (days > 7 ? ` <span class="pill pill-warn" title="Re-run for current access">${days} days old</span>` : '');
+}
 function loadAuditRuns() { try { return JSON.parse(localStorage.getItem('warden.auditRuns')) || {}; } catch { return {}; } }
 function loadExclusions() { try { return JSON.parse(localStorage.getItem('warden.auditExcl')) || {}; } catch { return {}; } }
 function saveExclusions(map) { try { localStorage.setItem('warden.auditExcl', JSON.stringify(map)); } catch {} }
@@ -193,7 +198,7 @@ function viewAudits() {
       const exCount = (run.findings || []).length - live.length;
       totals.excluded += exCount;
       for (const f of live) totals[f.severity] = (totals[f.severity] || 0) + 1;
-      counts = `${plural(live.length, 'finding')}${exCount ? ` · ${exCount} excluded` : ''} · ${esc(run.ran_at)}`;
+      counts = `${plural(live.length, 'finding')}${exCount ? ` · ${exCount} excluded` : ''} · ${runStamp(run.ran_at)}`;
     } else {
       counts = 'never run';
     }
@@ -256,7 +261,7 @@ async function viewAuditDetail(id) {
 
   let html = `<div class="card">
     <h2>${ICONS.shield} ${esc(def.title)}</h2>
-    <p class="card-meta">${esc(def.description)} · ${plural(run.scanned, 'account')} checked · ${esc(run.ran_at)}</p>
+    <p class="card-meta">${esc(def.description)} · ${plural(run.scanned, 'account')} checked · ${runStamp(run.ran_at)}</p>
     <div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap">
       <button class="btn btn-ghost btn-sm" onclick="viewAudits()">← All audits</button>
       <button class="btn btn-primary btn-sm" data-id="${esc(id)}" onclick="runAudit(this.dataset.id).then(r => r && viewAuditDetail(this.dataset.id))">Re-run</button>
