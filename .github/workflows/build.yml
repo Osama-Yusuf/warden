@@ -43,14 +43,27 @@ jobs:
         run: uv python install ${{ matrix.python }}
       - run: uv sync ${{ matrix.python != '' && format('--python {0}', matrix.python) || '' }}
       - run: uv pip install pyinstaller
+      - name: On-device AI (optional; the app runs without it)
+        shell: bash
+        run: uv pip install llama-cpp-python || echo "::warning::llama-cpp-python failed to build, bundling without Ward's local models"
       - name: Bundle
         shell: bash
         run: |
           uv run pyinstaller --noconfirm --clean --windowed --name warden \
             --icon "${{ matrix.icon }}" \
             --add-data "packages/web/src/warden_web/static${{ matrix.sep }}warden_web/static" \
+            --collect-submodules pymongo --collect-submodules bson \
+            --collect-submodules psycopg --collect-submodules psycopg_pool \
+            --collect-all psycopg_binary \
+            --collect-submodules redis --collect-submodules urllib3 \
             --collect-all llama_cpp \
             packages/desktop/src/warden_desktop/main.py
+      - name: Stamp version
+        if: runner.os == 'macOS'
+        run: |
+          plutil -replace CFBundleShortVersionString -string "${GITHUB_REF_NAME#v}" dist/warden.app/Contents/Info.plist
+          plutil -replace CFBundleVersion -string "${GITHUB_SHA::7}" dist/warden.app/Contents/Info.plist
+          codesign --force --deep -s - dist/warden.app
       - name: Report architecture
         if: runner.os == 'macOS'
         run: lipo -archs dist/warden.app/Contents/MacOS/warden
