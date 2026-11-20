@@ -676,11 +676,34 @@ function renderDatabases(fromCache) {
   const cfg = dbFilterCfg();
   sfRegister(cfg);
   const totalBytes = dbData.reduce((s, d) => s + d.bytes, 0);
-  setContent(healthStripHtml() + `<div class="card"><h2>${ICONS.db} Databases</h2>
+  const canCreate = ['postgresql', 'mysql', 'documentdb'].includes(engineFamily(currentEngine));
+  setContent(healthStripHtml() + `<div class="card"><h2 style="display:flex; align-items:center; gap:8px">${ICONS.db} Databases
+      ${canCreate ? `<div style="flex:1"></div><button class="btn btn-primary btn-sm" onclick="openCreateDbModal()">${ICONS.plus} New database</button>` : ''}</h2>
     <p class="card-meta">${dbData.length} databases · ${fmtSize(totalBytes)} total · click a name to browse it${fromCache ? ' · <span style="color:var(--text-muted)">refreshing…</span>' : ''}</p>
     ${sfBarHtml(cfg)}
     <div id="dbTable"></div></div>`);
   sfApply('dbs');
+}
+
+function openCreateDbModal() {
+  // Mongo has no empty databases: one exists once it holds a collection.
+  const mongo = engineFamily(currentEngine) === 'documentdb';
+  showModal('New database', `<div class="form-field"><label>Database name</label>
+    <input id="cdbName" style="width:100%" autocomplete="off"></div>
+    ${mongo ? `<div class="form-field" style="margin-bottom:0"><label>First collection (MongoDB needs one to create the database)</label>
+    <input id="cdbColl" style="width:100%" autocomplete="off"></div>` : ''}`, [
+    { label: 'Cancel', cls: 'btn-ghost' },
+    { label: 'Create', cls: 'btn-primary', fn: () => {
+      const database = document.getElementById('cdbName')?.value.trim() || '';
+      const collection = document.getElementById('cdbColl')?.value.trim() || '';
+      if (!database || (mongo && !collection)) { toast(mongo ? 'Name and first collection are required' : 'Name is required', 'error'); return; }
+      runAction('create-db', `Creating ${database}`, async () => {
+        const res = await apiPost('/api/create-database', { database, collection });
+        if (reportResult(res, `Created ${database}`)) { viewCache.clear(); viewDatabases(); }
+      });
+    }},
+  ]);
+  setTimeout(() => document.getElementById('cdbName')?.focus(), 0);
 }
 
 function renderDbTable(list) {
