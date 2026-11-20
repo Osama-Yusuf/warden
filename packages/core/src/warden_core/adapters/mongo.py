@@ -14,7 +14,7 @@ from warden_core import validation
 from warden_core.docdb import docdb_eval, docdb_exec
 from warden_core.util import js_string, validate_ident
 
-from .base import EngineAdapter, EngineError, Mutation, NotSupported, register
+from .base import EngineAdapter, EngineError, Mutation, NotSupported, Target, register
 
 
 def _clean_mongosh_noise(text):
@@ -83,9 +83,16 @@ class MongoAdapter(EngineAdapter):
         self._unwrap(mn.create_collection(self.cfg, self.user, self.pwd, database, collection))
         return Mutation("CREATE COLLECTION", f"{database}.{collection}", {"collection": collection})
 
-    def create_database(self, name):
-        raise NotSupported("MongoDB makes a database the moment you add a collection to it. "
-                           "Ask me to create a collection instead.")
+    def create_database(self, name, collection=""):
+        # Mongo has no CREATE DATABASE: a db exists once it holds a collection,
+        # so creating one means creating its first collection.
+        if not collection:
+            raise EngineError("MongoDB needs a first collection to create a database")
+        database, collection = self._ns(Target(name, collection), require_collection=True)
+        if any(d.get("name") == database for d in self.list_databases()):
+            raise EngineError(f"Database {database} already exists")
+        self._unwrap(mn.create_collection(self.cfg, self.user, self.pwd, database, collection))
+        return Mutation("CREATE DATABASE", f"{database} (first collection {collection})", {})
 
     def browse(self, target, limit, offset, search):
         database, collection = self._ns(target, require_collection=True)

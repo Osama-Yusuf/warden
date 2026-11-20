@@ -727,3 +727,54 @@ def test_pg_audits_follow_role_membership_and_expiry():
         for r in roles:
             sx(f'DROP OWNED BY "{r}" CASCADE')
             sx(f'DROP ROLE IF EXISTS "{r}"')
+
+
+def test_mongo_create_database_with_first_collection():
+    """Mongo has no empty databases, so create = first collection. A second
+    create of the same name must refuse instead of silently adding a collection."""
+    b = ENGINES["documentdb"]()
+    if not server.api_connect(dict(b)).get("ok"):
+        pytest.skip("mongo not reachable")
+    from warden_core import mongo_native as mn
+    db = "warden_it_newdb"
+    client = mn.get_client(b["custom_config"], b["admin_user"], b["admin_pass"])
+    client.drop_database(db)
+    try:
+        assert "error" in server.api_create_database({**b, "database": db})
+        res = server.api_create_database({**b, "database": db, "collection": "things"})
+        assert res.get("ok"), res
+        names = [d["name"] for d in server.api_list_databases(dict(b))["databases"]]
+        assert db in names
+        assert "things" in client[db].list_collection_names()
+        again = server.api_create_database({**b, "database": db, "collection": "other"})
+        assert "already exists" in again.get("error", "")
+    finally:
+        client.drop_database(db)
+
+
+@pytest.mark.parametrize("engine", ["postgresql", "mysql"])
+def test_sql_create_database(engine):
+    """The Databases page's New database button, through the same endpoint."""
+    b = ENGINES[engine]()
+    if not server.api_connect(dict(b)).get("ok"):
+        pytest.skip(f"{engine} not reachable")
+    if engine == "postgresql":
+        import warden_core.pg_native as pn
+        from warden_core.pg import pg_exec as run
+        pn.close_all()
+        cfg = {**b["custom_config"], "default_db": "postgres"}
+        drop = 'DROP DATABASE IF EXISTS "warden_it_newdb"'
+    else:
+        from warden_core.mysql import my_exec as run
+        cfg = b["custom_config"]
+        drop = "DROP DATABASE IF EXISTS `warden_it_newdb`"
+    run(cfg, b["admin_user"], b["admin_pass"], drop)
+    try:
+        res = server.api_create_database({**b, "database": "warden_it_newdb"})
+        assert res.get("ok"), res
+        names = [d["name"] for d in server.api_list_databases(dict(b))["databases"]]
+        assert "warden_it_newdb" in names
+        assert "error" in server.api_create_database({**b, "database": "warden_it_newdb"})
+        assert "error" in server.api_create_database({**b, "database": "bad; name"})
+    finally:
+        run(cfg, b["admin_user"], b["admin_pass"], drop)

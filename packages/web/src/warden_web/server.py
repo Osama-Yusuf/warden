@@ -399,9 +399,11 @@ def api_create_collection(body):
 
 
 def api_create_database(body):
-    """Create a database (SQL engines). Mongo/ES answer with a helpful note, since
-    Mongo makes a db implicitly and ES has a single cluster."""
-    return _mutate(body, "create_database", body.get("database", ""))
+    """Create a database. Mongo needs a first collection (a db only exists once it
+    holds one), so `collection` rides along for it; ES has a single cluster."""
+    coll = str(body.get("collection") or "").strip()
+    return _mutate(body, "create_database", body.get("database", ""),
+                   **({"collection": coll} if coll else {}))
 
 
 BROWSE_MAX_LIMIT = 200
