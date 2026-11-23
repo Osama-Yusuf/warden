@@ -778,3 +778,28 @@ def test_sql_create_database(engine):
         assert "error" in server.api_create_database({**b, "database": "bad; name"})
     finally:
         run(cfg, b["admin_user"], b["admin_pass"], drop)
+
+
+def test_ward_creates_mongo_database_after_asking_for_collection():
+    """Ward's draft for 'create database X' on Mongo has no collection; warden asks,
+    splices the answer in, and the run actually creates the database."""
+    from warden_web import assistant
+    from warden_core import mongo_native as mn
+    b = {**ENGINES["documentdb"](), "env": "local"}
+    if not server.api_connect(dict(b)).get("ok"):
+        pytest.skip("mongo not reachable")
+    db = "warden_it_warddb"
+    client = mn.get_client(b["custom_config"], b["admin_user"], b["admin_pass"])
+    client.drop_database(db)
+    try:
+        draft = {"summary": "x", "operations": [{"kind": "create_database", "database": db}]}
+        out = assistant.resume_draft({**b, "resume": {"kind": "none", "draft": draft}, "answer": "-"},
+                                     server.ROUTES)
+        assert "first collection" in out["question"]["question"], out
+        done = assistant.resume_draft({**b, "resume": out["resume"], "answer": "orders"}, server.ROUTES)
+        assert done.get("draft"), done
+        res = assistant.run_operations({**b, "operations": done["draft"]["operations"]}, server.ROUTES)
+        assert all(r.get("ok") for r in res["results"]), res
+        assert "orders" in client[db].list_collection_names()
+    finally:
+        client.drop_database(db)
