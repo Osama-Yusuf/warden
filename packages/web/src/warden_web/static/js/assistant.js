@@ -347,7 +347,7 @@ function aiOpLine(op) {
     case 'grant': return `grant ${a} on ${db} to ${u}`;
     case 'revoke': return `revoke ${a} on ${db} from ${u}`;
     case 'create_collection': return `create collection ${op.collection || '?'} in ${db}`;
-    case 'create_database': return `create database ${db}`;
+    case 'create_database': return `create database ${db}${op.collection ? ` with collection ${op.collection}` : ''}`;
     case 'insert_data': return `insert into ${op.collection || op.name || db}: ${JSON.stringify(op.document || {}).slice(0, 70)}`;
     case 'update_data': return `update ${op.collection || op.name || db} #${aiRowTarget(op)}: ${JSON.stringify(op.changes || {}).slice(0, 50)}`;
     case 'delete_data': return `delete from ${op.collection || op.name || db} #${aiRowTarget(op)}`;

@@ -114,7 +114,7 @@ VIRTUAL_TOOLS = [
                                       "insert_data", "update_data", "delete_data"]},
                     "username": {"type": "string"},
                     "database": {"type": "string", "description": "The target database (for create_database, the new name)."},
-                    "collection": {"type": "string", "description": "create_collection: the new name. Data ops: the collection/table/index to write."},
+                    "collection": {"type": "string", "description": "create_collection: the new name. create_database on MongoDB: the first collection. Data ops: the collection/table/index to write."},
                     "access": {"type": "string", "enum": ["read", "write", "admin"]},
                     "enable": {"type": "boolean", "description": "toggle_login: true to enable login, false to disable."},
                     "document": {"type": "object", "description": "insert_data: the row/document as field:value pairs."},
@@ -351,6 +351,30 @@ def _validate_draft_names(draft):
     return None
 
 
+def _validate_first_collection(draft, fam):
+    """Mongo has no empty databases, so create_database there needs a first
+    collection. The model rarely supplies one, so ask rather than fail at run."""
+    if fam != "documentdb":
+        return None
+    ops = draft.get("operations") or []
+    for i, op in enumerate(ops):
+        if op.get("kind") != "create_database" or str(op.get("collection", "")).strip():
+            continue
+        # Models often split "db X with collection Y" into two ops. Fold the
+        # create_collection into the create instead of asking for a name we have.
+        same = next((o for o in ops if o.get("kind") == "create_collection"
+                     and o.get("database") == op.get("database") and o.get("collection")), None)
+        if same:
+            op["collection"] = same["collection"]
+            ops.remove(same)
+    for i, op in enumerate(ops):
+        if op.get("kind") == "create_database" and not str(op.get("collection", "")).strip():
+            db = op.get("database") or "the new database"
+            return {"question": f"MongoDB creates {db} with its first collection. What should that collection be called?",
+                    "kind": "text", "_resume": {"kind": "first_collection", "op_index": i}}
+    return None
+
+
 def _disambiguate(draft, conn, fam, routes, real_dbs):
     """Run the draft guardrails (missing username, unknown database, unresolved row
     match). If one needs the user, return (question, resume) where resume carries
@@ -358,6 +382,7 @@ def _disambiguate(draft, conn, fam, routes, real_dbs):
     model. Otherwise (None, None) and the draft is ready (matches resolved in place
     as a side effect)."""
     for check in (_validate_draft_names(draft),
+                  _validate_first_collection(draft, fam),
                   _validate_draft_db(draft, real_dbs, fam),
                   _resolve_draft_matches(draft, conn, fam, routes)):
         if check:
@@ -380,6 +405,11 @@ def _apply_answer(draft, resume, answer):
         for op in draft.get("operations") or []:
             if op.get("database") == wrong:
                 op["database"] = answer
+    elif kind == "first_collection":
+        i = resume.get("op_index")
+        ops = draft.get("operations") or []
+        if isinstance(i, int) and 0 <= i < len(ops):
+            ops[i]["collection"] = answer
     elif kind == "match":
         i = resume.get("op_index")
         ops = draft.get("operations") or []
@@ -686,6 +716,7 @@ def _op_body(conn, op):
         b["collection"] = op.get("collection", "")
     elif kind == "create_database":
         b["database"] = op.get("database", "")   # the NEW database name
+        b["collection"] = op.get("collection", "")   # Mongo's first collection; SQL ignores it
     return b
 
 
@@ -784,6 +815,8 @@ def run_operations(body, routes):
             results.append({"kind": kind, "ok": False, "error": "unsupported operation"})
             continue
         target = op.get("username") or op.get("collection") or op.get("name") or op.get("database")
+        if kind == "create_database":
+            target = op.get("database") or target   # the new db, not its first collection
         if kind in ("grant", "revoke"):
             # An access level fans out to several privilege grants on SQL; roll
             # them into one result so the card reads as one line. A warning (e.g.

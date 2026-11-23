@@ -54,7 +54,7 @@ desktop: $(PY)
 
 test: $(PY)
 	$(PY) -m pytest -q
-	node --test 'tests/js/*.test.mjs'
+	node --test tests/js/
 
 # integration tests need the engines reachable (see tests/integration).
 # `make dev` era containers or `docker run` locally; unreachable engines skip.
@@ -64,6 +64,11 @@ test-integration: $(PY)
 build: check-uv
 	uv build --all-packages --out-dir dist
 	@ls -1 dist/*.whl
+
+# True when dist/warden.app is missing or any package file changed since the
+# last build (Info.plist is the last file build-desktop writes). Without this,
+# install-desktop and dmg happily ship an old bundle.
+STALE_APP = [ ! -f dist/warden.app/Contents/Info.plist ] || [ -n "$$(find packages -type f -newer dist/warden.app/Contents/Info.plist -not -path '*/__pycache__/*' | head -1)" ]
 
 build-desktop: $(PY)
 	uv pip install pyinstaller llama-cpp-python
@@ -86,7 +91,7 @@ build-desktop: $(PY)
 	@echo "Includes Ward's on-device models (llama.cpp bundled)."
 
 dmg:
-	@test -d dist/warden.app || $(MAKE) build-desktop
+	@if $(STALE_APP); then $(MAKE) build-desktop; fi
 	rm -f dist/warden.dmg
 	@STAGE=$$(mktemp -d /tmp/warden-dmg.XXXXXX); \
 	cp -R dist/warden.app $$STAGE/; \
@@ -100,7 +105,7 @@ dmg:
 	@echo "\nInstaller: dist/warden.dmg (open it, drag warden into Applications)"
 
 install-desktop:
-	@test -d dist/warden.app || $(MAKE) build-desktop
+	@if $(STALE_APP); then $(MAKE) build-desktop; fi
 	rm -rf /Applications/warden.app
 	cp -R dist/warden.app /Applications/
 	@echo "Installed: /Applications/warden.app"

@@ -276,7 +276,7 @@ def _routing_prompt(system, read_tools):
         " revoke, toggle_login, create_collection, create_database, insert_data, update_data, delete_data."
         " grant/revoke need a database and an access of read, write, or admin. toggle_login takes enable true"
         " or false. create_collection needs a database and a collection name. create_database puts the new"
-        " name in the database field. insert_data adds a document (put its fields in 'document', with the"
+        " name in the database field; on MongoDB also put its first collection in collection. insert_data adds a document (put its fields in 'document', with the"
         " database and collection). update_data and delete_data change or remove ONE document: give a 'match'"
         " like {\"name\": \"bob\"} to pick it and warden finds it (preferred), or an 'id' if you already know it."
         " Never include a password; generated.",

@@ -492,3 +492,21 @@ def test_strong_provider_gets_the_full_kit(monkeypatch):
     assistant.chat_turn(_body(), routes={})
     names = [t["name"] for t in fake.calls[0][2]]
     assert "ask_user" in names and "draft_operation" in names
+
+
+def test_mongo_create_database_asks_for_first_collection():
+    from warden_web import assistant
+    d = {"operations": [{"kind": "create_database", "database": "sales"}]}
+    # SQL engines don't need one; Mongo asks instead of failing at run time
+    assert assistant._validate_first_collection(d, "postgresql") is None
+    q = assistant._validate_first_collection(d, "documentdb")
+    assert q and q["kind"] == "text" and q["_resume"] == {"kind": "first_collection", "op_index": 0}
+    assistant._apply_answer(d, q["_resume"], "orders")
+    assert assistant._validate_first_collection(d, "documentdb") is None
+    # and the collection rides along to /api/create-database
+    assert assistant._op_body({}, d["operations"][0])["collection"] == "orders"
+    # a split "create db + create collection" draft folds into one create
+    d = {"operations": [{"kind": "create_database", "database": "w"},
+                        {"kind": "create_collection", "database": "w", "collection": "events"}]}
+    assert assistant._validate_first_collection(d, "documentdb") is None
+    assert d["operations"] == [{"kind": "create_database", "database": "w", "collection": "events"}]
